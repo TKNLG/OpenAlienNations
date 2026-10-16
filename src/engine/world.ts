@@ -854,6 +854,8 @@ export class World {
     this.byId.delete(e.id);
     this.unmarkBlocked(e);
     this.motion.vacate(e);
+    // attacks naming it keep its last cell, race and tier for their retarget (combat.md 3.6)
+    if (e.kind !== Kind.Nature) this.combat.targetGone(e);
   }
 
   rebuildBlocked(): void {
@@ -1066,8 +1068,10 @@ export class World {
         .filter((e): e is Entity => !!e && e.kind === Kind.Unit && e.owner === cmd.player && e.inside < 0 && e.id !== target.id);
       // an order naming a criminal is refused as a whole (`00450bb0` stops at it; combat.md 12.6)
       if (units.some(u => (u.oid & 0xffff) === T.Criminal)) return;
-      for (const u of units) u.ordered = true;
       this.logistics.order(units, target);
+      // every job the order made is a player order (`00450bb0`, combat.md 7.2); set after the jobs
+      // were made, since a new job clears the mark
+      for (const u of units) u.ordered = true;
       return;
     }
     if (cmd.type === 'unit') {

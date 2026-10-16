@@ -201,6 +201,9 @@ export class Logistics {
 
   /** give a unit a new job, cancelling the old one */
   assign(u: Entity, kind: number, delay: number, data: number[]): Job {
+    // a new job is not a player order; the order command marks the jobs it makes afterwards
+    // (combat.md 7.2 "What is a player order")
+    u.ordered = false;
     // the unit is on its way out of a building: the new job waits behind the leave job, blocked
     // for 5 ticks; a job already waiting there is cancelled (1.2 `00465650`)
     if (this.leaving(u)) {
@@ -2236,7 +2239,8 @@ export class Logistics {
       const m = this.w.size - 1;
       let goal: [number, number] = [t.x & m, t.y & m];
       search: for (let k = 0; k <= 32; k++) for (const [px, py] of ring(t.x, t.y, k)) if (!this.w.occupied(px, py)) { goal = [px & m, py & m]; break search; }
-      u.ordered = true;
+      // the go-home walk is not marked as a player order (`00451c40`; combat.md 7.2)
+      u.ordered = false;
       if (!this.goCell(u, goal[0], goal[1])) this.setAction(u, Action.Idle);
     }
   }

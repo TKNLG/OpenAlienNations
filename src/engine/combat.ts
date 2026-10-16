@@ -412,6 +412,33 @@ export class Combat {
     return t;
   }
 
+  /**
+   * A unit or building leaves the world (World.remove): every attack that still names it keeps
+   * what the original reads from the referenced dead object (3.6, 7.2): its last cell, race and
+   * tier. Only attacks that can retarget need it: top-level attacks (also suspended ones) and a
+   * guard's attack child. Dead objects do not move, so the cell is the cell of death.
+   */
+  targetGone(e: Entity): void {
+    if (e.kind === Kind.Nature) return;
+    const [x, y] = this.cell(e);
+    const race = this.race(e), tier = this.tier(e);
+    for (const j of this.w.sched.jobs()) {
+      if (j.cancelled) continue;
+      const base = j.kind === CJ.Attack ? 0 : j.kind === CJ.Guard && j.data[GD.Attacking] ? GD.Attack : -1;
+      if (base < 0 || j.data[base + A.Target] !== e.id) continue;
+      const d = j.data;
+      d[base + A.Plan] = GONE;
+      d[base + A.PX] = x; d[base + A.PY] = y; d[base + A.GX] = race; d[base + A.GY] = tier;
+    }
+  }
+
+  /** tier of the target of a running attack state; a target that has left the world keeps its tier (7.2) */
+  private targetTier(d: number[], base: number): number | undefined {
+    const t = this.w.get(d[base + A.Target]);
+    if (t) return this.tier(t);
+    return d[base + A.Plan] === GONE ? d[base + A.GY] : undefined;
+  }
+
   // ---------------------------------------------------------------- strike (4)
 
   /**
@@ -565,9 +592,10 @@ export class Combat {
     if (!this.weapon(x) || !this.mayAct(x, a)) return;
     const cur = x.job ? this.w.sched.get(x.job) : undefined;
     if (cur && cur.kind === CJ.Attack) {
-      const curT = this.w.get(cur.data[A.Target]);
       if (cur.data[A.Target] === a.id) return;
-      if (curT && this.tier(curT) <= this.tier(a)) return;
+      // the current target's tier, also when it has died meanwhile (the original reads the referenced object)
+      const curTier = this.targetTier(cur.data, 0);
+      if (curTier !== undefined && curTier <= this.tier(a)) return;
       if (cur.data[A.Player]) {
         const aj = a.job ? this.w.sched.get(a.job) : undefined;
         if (!(aj && aj.kind === CJ.Attack && aj.data[A.Target] === x.id)) return;
@@ -576,10 +604,18 @@ export class Combat {
     this.startAttack(x, a, true, false, 1, true);
   }
 
-  private isPlayerOrder(u: Entity): boolean {
+  /**
+   * The unit's current job is a player order (job +8, 7.2 "What is a player order"): an attack
+   * carries its own flag (cleared by a retarget); otherwise `ordered` marks a job made by the
+   * right-click order (one of the kinds it makes) or the walk of a move order (no job, walking).
+   * Every other job maker clears `ordered` (logistics.assign, guard, heal, arrest).
+   */
+  isPlayerOrder(u: Entity): boolean {
     const j = u.job ? this.w.sched.get(u.job) : undefined;
-    return !!j && j.kind === CJ.Attack && j.data[A.Player] === 1 ||
-      !!j && (j.kind === 0x16 || j.kind === 0x05 || j.kind === 0x3c || j.kind === 0x0c) && u.ordered;
+    if (j && j.kind === CJ.Attack) return j.data[A.Player] === 1;
+    if (!u.ordered) return false;
+    if (j) return ORDER_KINDS.has(j.kind);
+    return !!u.path;
   }
 
   /** flee job (7.3): data [attacker, homeX, homeY, phase]; its first run comes 3 ticks after the strike */
@@ -675,6 +711,7 @@ export class Combat {
   /** guard job data: [count, index, wx0, wy0 .. wx7, wy7, attacking, attack state...] */
   startGuard(u: Entity, points: [number, number][], delay: number): void {
     this.w.logistics.cancelJob(u);
+    u.ordered = false;   // the patrol button does not mark its guard job (7.2)
     const [x, y] = this.cell(u);
     const pts = [[x, y] as [number, number], ...points].slice(0, 8);
     const d = new Array(GD.Attack + A.Size).fill(0);
@@ -700,17 +737,25 @@ export class Combat {
       d[GD.Attacking] = 0;
       d[GD.Walking] = 0;
     }
+    // the walk child has finished: the next waypoint, cyclically, before the scan (8.1 step 1)
+    if (d[GD.Walking] && !u.path) { d[GD.Index] = (d[GD.Index] + 1) % Math.max(1, d[GD.Count]); d[GD.Walking] = 0; }
     // scan sight + 1 for enemies of nations at war or without contact, tier <= 1 (8.1)
     const [x, y] = this.cell(u);
     const t = this.choose(u, this.scan(x, y, (this.rule(u)?.radius ?? 10) + 1), -1, 1);
     if (t) {
+      // the walk child is dropped; the attack child is made now and runs first at the next run
       this.stopWalk(u);
+      d[GD.Walking] = 0;
       this.initAttack(d, GD.Attack, t, true, false);
       d[GD.Attacking] = 1;
       return 1;
     }
-    if (u.path) return 1;
-    if (d[GD.Walking]) { d[GD.Index] = (d[GD.Index] + 1) % Math.max(1, d[GD.Count]); d[GD.Walking] = 0; }
+    if (u.path) {
+      // the walk's own delay is the guard's: the next scan comes when the step under way is over (8.1)
+      const tick = this.w.tick, stepEnd = u.stepStart + u.stepTicks;
+      if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
+      return u.moveAt > tick ? u.moveAt - tick : 1;
+    }
     const i = d[GD.Index];
     const wx = d[GD.Points + 2 * i], wy = d[GD.Points + 2 * i + 1];
     if (x !== wx || y !== wy) {
@@ -963,6 +1008,7 @@ export class Combat {
     if (!criminal || !officer || officer.inside !== b.id) return false;
     // he stays the station's operator: the plain eject does not deactivate it (12.2, units-and-jobs.md 8.5)
     officer.job = this.w.sched.create(CJ.Arrest, officer.id, 1, [b.id, 0, ...new Array(A.Size).fill(0)]).id;
+    officer.ordered = false;
     this.w.logistics.leave(officer);   // the arrest job waits behind the leave job (units-and-jobs.md 4.10)
     return true;
   }
@@ -1002,6 +1048,7 @@ export class Combat {
   startArrest(officer: Entity, station: number): void {
     this.w.logistics.cancelJob(officer);
     officer.job = this.w.sched.create(CJ.Arrest, officer.id, 1, [station, 0, ...new Array(A.Size).fill(0)]).id;
+    officer.ordered = false;   // the order command marks it afterwards (7.2)
   }
 
   private runArrest(job: Job): number {
@@ -1083,6 +1130,7 @@ export class Combat {
     const d = [auto ? 1 : 0, 0, ...new Array(A.Size).fill(0)];
     if (patient) { this.initAttack(d, 2, patient, false, false); d[1] = 1; }
     priest.job = this.w.sched.create(CJ.Heal, priest.id, delay, d).id;
+    priest.ordered = false;   // the order command marks it afterwards (7.2)
   }
 
   private runHeal(job: Job): number {
@@ -1159,3 +1207,9 @@ export class Combat {
 const GD = { Count: 0, Index: 1, Points: 2, Walking: 18, Attacking: 19, Attack: 20 } as const;
 /** criminal job data slots */
 const CR = { Active: 0, Hp0: 1, Attack: 2 } as const;
+/**
+ * Jobs the right-click order makes (`00450bb0`, all marked as player orders): transport (a carried
+ * good delivered), builder, harvest, hunting ground, go-to / answer, arrest, heal, boarding a ship,
+ * fishing (combat.md 7.2)
+ */
+const ORDER_KINDS = new Set<number>([0x05, 0x0c, 0x16, 0x2b, 0x3c, CJ.Arrest, CJ.Heal, 0x07, 0x3a]);
