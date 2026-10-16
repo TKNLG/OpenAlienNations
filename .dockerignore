@@ -1,0 +1,15 @@
+# the image is built from package.json, build.mjs, src/ and hd/ only (see Dockerfile)
+.git
+.github
+node_modules
+dist
+build
+re
+ref
+out
+gamedata
+test
+tools
+docs
+types
+*.md

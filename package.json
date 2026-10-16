@@ -1,0 +1,14 @@
+{
+  "name": "an-rebuild",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser rebuild of Alien Nations / Die Voelker. Requires your own copy of the game data.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types --no-warnings \"test/**/*.test.ts\"",
+    "start": "node dist/server.mjs"
+  },
+  "devDependencies": {}
+}

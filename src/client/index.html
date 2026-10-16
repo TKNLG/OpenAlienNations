@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alien Nations</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0d0d14; color: #e8e2d0; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  /* mouse cursors (docs/ui/cursors.md): --cur-* are the game's own cursors, read from its
+     executable at start (cursors.ts); the keywords are the fallbacks. Arrow everywhere by default. */
+  body { cursor: var(--cur-arrow, default); }
+  #view { position: fixed; top: 0; left: 0; bottom: 0; right: var(--hud-w, 0px); width: calc(100% - var(--hud-w, 0px)); height: 100%; display: block; touch-action: none; cursor: var(--cur-arrow, default); }
+  #bar { position: fixed; top: 0; left: 0; right: var(--hud-w, 0px); display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+         padding: 8px 12px; background: linear-gradient(#000c, #0000); pointer-events: none; }
+  #bar > * { pointer-events: auto; }
+  #bar[hidden] { display: none; }
+  select { background: #2a2418; color: inherit; border: 1px solid #6b5a33; border-radius: 4px; padding: 3px 6px; font: inherit; }
+  #status { opacity: .85; flex: 1 1 280px; }
+  #fps { opacity: .6; font-variant-numeric: tabular-nums; }
+  #selbox { position: fixed; display: none; border: 1px solid #ffe98a; background: #ffe98a22; pointer-events: none; }
+  button { background: #3a3020; color: inherit; border: 1px solid #6b5a33; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: var(--cur-arrow, default); }
+  button:disabled { opacity: .5; }
+  .panel { position: fixed; top: 44px; right: calc(var(--hud-w, 0px) + 12px); width: min(340px, calc(100vw - 24px)); padding: 12px; background: #1a160fee;
+           border: 1px solid #6b5a33; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
+  .panel[hidden] { display: none; }
+  #savelist { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
+  .grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #savename { background: #2a2418; color: inherit; border: 1px solid #6b5a33; border-radius: 4px; padding: 3px 6px; font: inherit; flex: 1 1 auto; }
+  #pname { background: #2a2418; color: inherit; border: 1px solid #6b5a33; border-radius: 4px; padding: 3px 6px; font: inherit; width: 60%; }
+  .panel .row, #room { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #room { flex-direction: column; align-items: stretch; }
+  #rooms { display: flex; flex-direction: column; gap: 4px; }
+  .dim { opacity: .6; }
+  #hud { position: fixed; top: 0; right: 0; display: block; background: #000; }
+  #overlay { position: fixed; top: 0; left: 0; width: calc(100% - var(--hud-w, 0px)); height: 100%; pointer-events: none; }
+  #minimap { position: fixed; display: block; cursor: var(--cur-cross, crosshair); }
+  #briefing { top: 50%; left: calc((100% - var(--hud-w, 0px)) / 2); right: auto; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 24px)); max-height: 80vh; overflow: auto; }
+  #briefing h2 { margin: 0; font-size: 20px; }
+  .brief-text { white-space: pre-wrap; line-height: 1.5; }
+  #briefing ul { margin: 0; padding-left: 20px; }
+  #briefing li.lose { color: #ff9a8a; }
+  #help { position: fixed; bottom: 8px; left: 12px; opacity: 0; font-size: 12px; pointer-events: none; animation: helpfade 12s ease-out; }
+  @keyframes helpfade { 0%, 75% { opacity: .55; } 100% { opacity: 0; } }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="bar" hidden>
+  <select id="campaign" aria-label="Kampagne"></select>
+  <select id="mission" aria-label="Mission"></select>
+  <span id="status">Starte …</span>
+  <span id="fps"></span>
+  <select id="uiscale" aria-label="Größe der Bedienleiste" title="Größe der Bedienleiste">
+    <option value="0">UI: automatisch</option><option value="1">UI: 100 %</option><option value="1.25">UI: 125 %</option>
+    <option value="1.5">UI: 150 %</option><option value="2">UI: 200 %</option><option value="3">UI: 300 %</option>
+  </select>
+  <button id="musicbtn" title="Musik an/aus">♪</button>
+  <button id="savebtn">Spielstände</button>
+  <button id="mp">Mehrspieler</button>
+</div>
+<div id="saves" class="panel" hidden>
+  <div class="row"><input id="savename" maxlength="60" placeholder="Name des Spielstands"><button id="dosave">Speichern</button></div>
+  <div id="savelist"></div>
+  <label class="dim">Spielstand-Datei importieren: <input id="importfile" type="file" accept=".ansave"></label>
+</div>
+<div id="lobby" class="panel" hidden>
+  <label>Name <input id="pname" maxlength="24" placeholder="Spieler"></label>
+  <div class="row"><button id="create">Spiel mit dieser Mission eröffnen</button><button id="refresh">Aktualisieren</button></div>
+  <div id="room"></div>
+  <div id="rooms"></div>
+</div>
+<div id="selbox"></div>
+<div id="briefing" class="panel" hidden></div>
+<canvas id="overlay"></canvas>
+<canvas id="hud"></canvas>
+<canvas id="minimap" width="152" height="152"></canvas>
+<div id="help">Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad: zoomen</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

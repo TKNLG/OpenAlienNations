@@ -1,0 +1,172 @@
+# Release: push a tag "v<version>" (matching package.json) to build and publish
+#   - AlienNations-<version>-windows-x64.exe   single executable (Node SEA)
+#   - AlienNations-<version>-linux-x64.tar.gz  single executable (Node SEA)
+#   - ghcr.io/<owner>/aliennations:<version>   server image (Docker)
+# "Run workflow" (workflow_dispatch) on a branch builds everything as a dry run (downloadable
+# workflow artifacts, image built but not pushed); run it on a tag to publish that tag.
+#
+# The builds contain our code, the client and the HD UI pack (hd/) only. Never game data:
+# re/, ref/, out/, gamedata/ are not in the repository (.gitignore) and nothing reads them here.
+# See docs/release.md.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Node LTS used to build and embedded in the executables. Pin an exact version (e.g. 24.11.1)
+  # for byte-reproducible builds.
+  NODE_VERSION: '24'
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: version
+        name: Version (tag must match package.json)
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = "true" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+      - name: No game data in the repository
+        run: |
+          bad=$(git ls-files | grep -Ei '^(re|ref|out|gamedata)/|\.(gd|os|dvm|mdb|odb|idb|od|tdb|dvf|wdb|gdb)$' || true)
+          if [ -n "$bad" ]; then echo "::error::game files tracked:"; echo "$bad"; exit 1; fi
+      - name: Build
+        run: node build.mjs
+      - name: Type-check
+        run: npx --yes -p typescript@5.6.3 tsc -p .
+      - name: Tests (the data-driven ones skip without game data)
+        run: node --test --experimental-strip-types --no-warnings "test/**/*.test.ts"
+
+  binaries:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+          - os: ubuntu-latest
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build single executable
+        run: node tools/sea/build-sea.mjs --name AlienNations
+      - name: Smoke test
+        run: |
+          exe=build/sea/AlienNations
+          [ "$RUNNER_OS" = "Windows" ] && exe=build/sea/AlienNations.exe
+          out=$("$exe" --version)
+          echo "$out"
+          [ "$out" = "$VERSION" ]
+          "$exe" --help
+      - name: Package
+        run: |
+          mkdir -p release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp build/sea/AlienNations.exe "release/AlienNations-$VERSION-windows-x64.exe"
+          else
+            tar -C build/sea -czf "release/AlienNations-$VERSION-linux-x64.tar.gz" AlienNations
+          fi
+          ls -l release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AlienNations-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+
+  docker:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - id: image
+        name: Image name (registry names must be lower-case)
+        run: echo "name=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aliennations" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ env.PUBLISH }}
+            type=sha
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  release:
+    needs: [check, binaries]   # not docker: a registry problem must not block the downloads
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create release
+        run: |
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aliennations:$VERSION"
+          cat > notes.md <<EOF
+          **You need your own copy of Alien Nations** (GOG, or the CD / Gold Edition installed). These downloads contain no game files.
+
+          - **Windows:** download \`AlienNations-$VERSION-windows-x64.exe\` and run it. SmartScreen warns because the file is not signed: click *More info* -> *Run anyway*. Pick your game folder once; the game opens in your browser.
+          - **Linux:** \`tar xzf AlienNations-$VERSION-linux-x64.tar.gz && ./AlienNations\`
+          - **Server / NAS:** \`docker run -d -p 8080:8080 -v "/path/to/Alien Nations:/game:ro" $image\`
+
+          Multiplayer: friends open the network address printed in the console window (LAN, or a VPN such as Tailscale / ZeroTier / Hamachi).
+          EOF
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Alien Nations $VERSION" \
+            --notes-file notes.md \
+            --generate-notes

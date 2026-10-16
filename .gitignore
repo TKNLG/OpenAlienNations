@@ -1,0 +1,33 @@
+# never commit game data, analysis output or generated previews
+re/
+out/
+gamedata/
+dist/
+node_modules/
+*.gd
+*.os
+*.dvm
+*.mdb
+*.odb
+*.idb
+*.OD
+*.tdb
+*.dvf
+
+# reference material (manuals etc.), private
+ref/
+
+# machine-specific notes (install paths etc.), never committed
+local/
+
+# python caches
+__pycache__/
+*.pyc
+
+# the HD UI pack folders are named after their archives (dv.gd, addon.gd, ...), not game data
+!hd/ui/*.gd/
+
+# release builds (tools/sea/build-sea.mjs)
+build/
+tools/recorder/out/
+rec/

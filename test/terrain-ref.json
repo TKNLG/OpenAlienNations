@@ -1,0 +1,30 @@
+{
+ "Pimmons.mdb#0": {
+  "seed": 11584,
+  "bits": 7,
+  "cls": "219d1a90210dbe7fbca1d4a01431ad6144a61e41e70195f0c60312c5e6291bc6",
+  "tile": "96ddeb57b5197c3b4fcc880824d9981ec12a2c3b4422561d39d2f3bebf96210e",
+  "height": "1ea22eb8910cfe8598abf73c6260eb04c4300fe2f27298c879e86169e0d5da1f"
+ },
+ "Amazons.mdb#3": {
+  "seed": 21553,
+  "bits": 9,
+  "cls": "b74ec8d2dd6fb25049128656816f47ed325b57351c27d7ee97088c5558633152",
+  "tile": "804d6447ef29dc209c00cf4c2da6b0ce8104536c9c18ad6c9e26076aef2e7d6d",
+  "height": "1a6f67a0b5867ac10393b9c119867fd723d06e5eb4fffa0ed6e6053f30fe94d4"
+ },
+ "Sajikis.mdb#2": {
+  "seed": 32552,
+  "bits": 8,
+  "cls": "68c062d059a44fefcc68720d8b9e0306c7820072cd9189b4d4429c6079d16d37",
+  "tile": "d53fb3867e37cf4c855911a754860d3469c2e1033bdda162818bc3ed2bfa7da6",
+  "height": "ca40b804603e02fc3087166412b5b48634c941f034cbe8337655836352904d9f"
+ },
+ "Tutorials.mdb#4": {
+  "seed": 1,
+  "bits": 8,
+  "cls": "9a67bd690ac4c64e9c45a87ac64a56441808c3527d5b1882df1c76501441e2fe",
+  "tile": "ec18c86630dc4ddd1cf3b1f24287db16b6b6aea974959e3dc33a281f3890c7bf",
+  "height": "2a419bf037b250fbc7a614f4b08a6be6eba227d861828cbd7e1dce0237411c1f"
+ }
+}
