@@ -59,3 +59,7 @@ job fails if any such file is tracked). Players point the program at their own i
   deleted or left as it is.
 - The workflow needs Actions enabled and, for the image, "Read and write permissions" or the
   `packages: write` permission it requests (Settings -> Actions -> General -> Workflow permissions).
+
+**Without pushing a tag:** Actions → release → Run workflow on `main` with **publish** ticked.
+The workflow creates the tag `v<package.json version>` at that commit and publishes the release
+and the Docker image (useful where tag pushes are not possible).

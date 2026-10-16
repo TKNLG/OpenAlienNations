@@ -4,7 +4,8 @@
 #   - LICENSE.txt, NOTICE.txt                      license texts next to the downloads
 #   - ghcr.io/<owner>/openaliennations:<version>   server image (Docker, with LICENSE and NOTICE)
 # "Run workflow" (workflow_dispatch) on a branch builds everything as a dry run (downloadable
-# workflow artifacts, image built but not pushed); run it on a tag to publish that tag.
+# workflow artifacts, image built but not pushed); run it on a tag to publish that tag, or on
+# main with "publish" ticked to create the tag v<package.json version> and publish it.
 #
 # The builds contain our code, the client and the HD UI pack (hd/) only. Never game data:
 # re/, ref/, out/, gamedata/ are not in the repository (.gitignore) and nothing reads them here.
@@ -16,6 +17,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish: create the tag v<package.json version> at this commit and release it'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +30,7 @@ env:
   # Node LTS used to build and embedded in the executables. Pin an exact version (e.g. 24.11.1)
   # for byte-reproducible builds.
   NODE_VERSION: '24'
-  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish == true }}
 
 jobs:
   check:
@@ -41,7 +47,7 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ "$PUBLISH" = "true" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+          if [ "$PUBLISH" = "true" ] && [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
             exit 1
           fi
@@ -126,8 +132,7 @@ jobs:
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.check.outputs.version }},enable=${{ env.PUBLISH }}
             type=raw,value=latest,enable=${{ env.PUBLISH }}
             type=sha
       - uses: docker/build-push-action@v7
@@ -140,7 +145,7 @@ jobs:
 
   release:
     needs: [check, binaries]   # not docker: a registry problem must not block the downloads
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -179,8 +184,9 @@ jobs:
 
           License: GPL-3.0-or-later (\`LICENSE.txt\`); see \`NOTICE.txt\` for the game trademarks and the HD UI pack, which is not covered by the GPL.
           EOF
-          gh release create "$GITHUB_REF_NAME" release/* \
+          gh release create "v$VERSION" release/* \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "OpenAlienNations $VERSION" \
             --notes-file notes.md \
             --generate-notes
