@@ -162,6 +162,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: release
+          pattern: OpenAlienNations-*
           merge-multiple: true
       - name: License texts next to the downloads
         run: |
