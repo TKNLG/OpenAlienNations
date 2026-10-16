@@ -25,7 +25,7 @@ GL = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'
 
 # the scene: campaign, mission index, simulation ticks (100 ms each), camera offset from the
 # player's first town (cells), and where the 1280x360 crop sits in a 2400x1000 viewport
-SCENE = dict(campaign='pimmons', mission=4, ticks=1500, dx=0, dy=0, zoom=0.85, clip=(268, 290))
+SCENE = dict(campaign='pimmons', mission=4, ticks=1500, dx=0, dy=0, zoom=0.85, clip=(232, 290))
 
 
 def capture(browser, url: str, out: pathlib.Path) -> None:
