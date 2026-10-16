@@ -1048,7 +1048,8 @@ against our build in long island free-play runs, `integration-ai.md` 7d):
   important building and the town's outposts (with up to six members everything goes to the
   important building); tactic 1 attacks the hunters, police and soldiers in that disc first
   (three members per target), other units (civilians, priests, ships) only when none is there.
-  Units in towers or aboard ships are not found by the scan; ships (64..67) are class 1. So
+  Units inside a tower or aboard a ship cannot be targeted (`combat.md` 3.2); ships (64..67)
+  are class 1. So
   units of the victim near a landing point more than 40 cells from his town hall are attacked
   only when they or the raider's friends strike first. After a kill, the attack's retarget picks
   the next unit of the victim's race within 13 cells of the body (lowest class first, `combat.md`
@@ -1488,7 +1489,7 @@ profile only decides how often founding and attacks happen, and those reach the 
 | transport 67 | (1) want(67) includes the planner's **claim[67]**, initially 1 for every computer nation, so the first town with a shipyard trains one transport (priority 4) and the planner takes it over (group 61); (2) build[67] = u/2 when more than 3 ship requests are unserved; (3) A[67] = number of harbour trade partners (markets job, second pass), whose ships stay ungrouped and run trade routes | `004740c0`, `00472b30`, `00477060` |
 | settling other islands | the founding mission (1.12) takes the first valid site of the start-candidate list. Island maps list the candidates island by island, **largest island first** (`formats/addon.md` 10.2 step 2), so a nation that does not live on the largest island usually targets a site there: its founder asks the planner for a ship (job 0x3E), is carried over, and the mission **ends when he is aboard** (1.12 step b). He lands and stands idle in group 54; that town founds nothing more while he lives | `0046f340`, `00472630` |
 | sea trade | harbour trade routes to partner harbours on any island (markets job pass 2); partners need the base trade conditions (peace, 4.3), so nothing happens without diplomacy | `00477060` |
-| attacks across water | when units **join** the army (2.5 "Joining and moving": at creation and at every later think) they are grouped by island; one ship request per group not on the target's island (pickup = first member, destination = the target point); those members wait with job 0x3E; on board they are skipped (and not counted) when the army hands out attack jobs. Free warships 65/66 are candidates too and sail to the target. Same profiles and gates as on land (2.4) | `00470140`, `0046c050`, `0046cbd0`, `0046d9e0` |
+| attacks across water | when units **join** the army (2.5 "Joining and moving": at creation and at every later think) they are grouped by island; one ship request per group not on the target's island (pickup = first member, destination = the target point; refused once the planner holds more than 50 requests, which it never forgets, so a long game ends with no army crossing at all); those members wait with job 0x3E, accepted or not; landed units have no job and do not look for enemies; on board they are skipped (and not counted) when the army hands out attack jobs. Free warships 65/66 are candidates too and sail to the target. Same profiles and gates as on land (2.4) | `00470140`, `0046c050`, `0046cbd0`, `0046d9e0` |
 | defence against ships | nothing new: the military job and the intruder records are the base ones; outposts and armed units shoot ships in range, the warship gang member defends only through the help rule and patrol contacts | (no add-on code) |
 
 **Free play versus campaign.** The routines are the same. Differences come from data: campaign

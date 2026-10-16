@@ -491,9 +491,9 @@ was re-read in AN.exe and dvge.exe (spec 2.3..2.6 corrected, `addon.md` 8.4).
 - Across water (Gold `0046c050`): at each join the new land members are grouped by island, one
   transport request per group not on the target's island, members wait (job 0x3E). Nothing tests
   reachability. The naval planner's rules then decide what arrives: one ship per request, a ship
-  assigned when the request is made boards at most as many units as on its last trip (one after
-  a founder or a lone hunter, none after an empty trip), and requests of armies that have since
-  retreated are still served. Against a human whose defence near his town hall is more than
+  assigned when the request is made sends at most its counter's worth of units (corrected in
+  7e: the counter is cumulative, not "as on its last trip"), and requests of armies that have
+  since retreated are still served. Against a human whose defence near his town hall is more than
   twice the army's power, every army retreats at its first assault run and is formed again at
   the next think, so in the long run what reaches him is a trickle of single units put ashore
   near his town. That is the reported picture, and it is the original's.
@@ -528,6 +528,77 @@ Deviations of our army code found and fixed (rand() order changes):
 Not changed (original behaviour): the threshold, single-unit and empty ship trips, stale
 requests, retreats at the first assault run, no scanning on the way. Kept deviation: idle
 members far from the target walk in legs before they get an attack job (7b T).
+
+## 7e. Sixth audit (2026-10): one hunter per ship trip, and landed units ignoring the player
+
+Two reports from an add-on save: (1) the computer ferried **one** hunter per trip, trip after
+trip, although a transport takes 5; (2) in the original, landed units first went for the
+player's units nearby before the attack order sent them to the nearest tower, in ours they
+ignored his units. Both re-derived in dvge.exe at instruction level (`addon.md` 5.2, 5.3, 8.4;
+spec 2.5, 2.6, 9).
+
+**(1) What the original does.** The planner's per-ship counter is written only at registration
+and at the request service (100 = no limit), and by the boarding step (100 becomes 0, then + 1
+per unit sent). It is **cumulative**, not a copy of the last trip: a ship that last carried one
+unit and is assigned directly at a new request sends 1, then up to 2, 4, 8 units on later
+direct assignments; a ship assigned by the request service sends every waiting unit and the
+first five to arrive get in. A request asks for its island group's size (the units of that join
+on that island); requests never merge. So "one per trip" in the original comes from requests of
+one (each later think that adds one new hunter makes a request for one), from the counter after
+a founder trip, and from dead or stale list entries using up places. In addition, three rules
+were missing in ours:
+
+| | ours before | original (fixed now) |
+|---|---|---|
+| Z1 | the boarding step skipped list entries that were dead, aboard or inside, without counting them | every entry is sent and counted, no test of the unit (`0x472a42..0x472b03`); a dead entry uses a place and raises the counter. Ours skipped them, so the counter often fell to 0 after a service assignment (all entries of a stale request dead) and the ship then sailed empty on every later direct assignment |
+| Z2 | the 50-request refusal tested flag 2, the army passed 8, and served requests were dropped | the request record's flags default to 1 (field 0 is 8), the army keeps the default, the planner refuses flag-1 requests while it holds more than 50 requests, and it never drops a served request (only a founding cancel removes one). So after about 50 requests a nation's armies stop crossing the water: their members wait (job 0x3E) until the army ends. Founding requests have flags 0 |
+| Z3 | a unit sent to a transport walked to the ship where it lay | the go-to job's constructor re-aims a type-67 target: the ship's job is cancelled and it sails (0x3B, first run after 1 tick) toward the unit's island; the player's boarding order does the same, on any ship |
+| Z4 | the head of a human ship's door queue, farther than 4 from the ship, walked to a new shore cell and gave up after 20 tries | it waits at the door and asks again every 10 ticks, for as long as it takes (5.1); with Z3 the ship comes to it |
+| Z5 | the sail-to-coast job's fallback spiral stopped at radius 32 | no radius limit (`0x48baab..0x48bb8b`); needed by Z3 when the unit stands inland |
+
+Kept: the planner's request ids start at 1 (the original's at 0; 0 means "none" in ours). A dead
+list entry in ours has no position, so it does not re-aim the ship (the original's ship turns
+toward where the dead unit stood); a list entry inside a building is counted but not sent (how
+the original's go-to job takes it out of the building is not traced).
+
+**(2) What the original does.** Nothing at the landing: the ship ejects every passenger, the
+leave job puts each on the nearest free land within 5 cells and ends; the unit has no job (it had
+none aboard), and no landing, unloading or army code scans for enemies (`addon.md` 8.4
+"Unloading", `combat.md` 8.4 row "unit just put ashore"). A jobless unit reacts only to strikes
+(help rule within 12 cells, retaliation). The army's next run (at most 50 ticks) gives a member
+without a job an attack job wherever it stands: tactic 1 at the victim's hunters, police and
+soldiers within 40 cells of his **town hall** (three members per target), tactic 0 at the one
+important building (barracks, school, laboratory, large then small outposts, town hall) and then
+the outposts and those fighters (six per target). After a kill the retarget takes the next unit
+of the victim's race within 13 cells of the body. So "first the units nearby, then the tower" is
+the skirmish tactic (or a struck raider) followed by an assault run, when the landing point lies
+within 40 cells of the town hall; units of the player farther than 40 cells from his town hall
+are never chosen by the army. Ours does the same (verified in the harness below: landed members
+attack the victim's barracks, hunters and soldiers near his town hall, and retaliate when
+struck); the only difference left is the kept deviation T (a jobless member farther than 40 cells
+from the target point and outside its territory walks in 32-cell legs before it gets its attack
+job; the original gives the attack job at once). No change for (2).
+
+**Reproduction** (harness: island free play, all three races computer players, one race
+standing in for the human with profile 4, logging requests, boarding steps, trips and the next
+400 ticks of every landed unit). Seed 3, Mittel, to tick 140,000, the Pimmons' and Sajiki's
+planners:
+
+| | before | after (Z1..Z5) |
+|---|---|---|
+| transport requests with units (1 / 2 / 3 / 4 / 5+ units) | 41 / 17 / 7 / 19 / 243 | 50 / 20 / 20 / 10 / 21, plus 54 army requests refused (cap) |
+| boarding steps by units sent (0 / 1 / 2 / 3 / 4 / 5+) | 31 / 29 / 13 / 5 / 13 / 45 | 0 / 30 / 19 / 10 / 2 / 0 |
+| ship trips by passengers (0 / 1 / 2 / 3 / 4) | 79 / 30 / 6 / 3 / 3 | 27 / 25 / 5 / 0 / 1 |
+
+Seeds 1 and 2 look the same: every computer nation that owns transports reaches the cap
+(51..53 requests kept) and is refused afterwards. Most trips still carry 0 or 1 units, as the
+original's rules give: most requests are made for one new member, and the old requests' lists
+hold units that have died, were shipped by another request or have since been taken elsewhere
+(each of them uses up a place). The landed units (all seeds) stand jobless for up to 50 ticks;
+army members then attack the victim's barracks or his hunters and soldiers near his town hall,
+answer strikes, and after a kill take the next of his units nearby; free ones wait for the next
+army. Tests: `test/addon-gameplay.test.ts` (counter, dead entries, served requests kept, the
+ship coming to a boarding order), `test/ai-army.test.ts` (the 50-request cap).
 
 ## 8. Tests and cost
 

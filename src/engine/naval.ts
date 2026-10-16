@@ -300,10 +300,20 @@ export class Naval {
     return true;
   }
 
+  /**
+   * A go-to job at a transport ship (5.2): the job is made for the unit, and making it re-aims the
+   * ship (go-to constructor): the ship's current job is cancelled and it sails to the coast of the
+   * unit's island (0x3B toward the unit's cell, first run after 1 tick). Also for the player's
+   * order and on a foreign ship (quirk).
+   */
   startBoard(u: Entity, ship: Entity, delay: number): void {
     const d = new Array<number>(BO.Size).fill(0);
     d[BO.Ship] = ship.id;
     this.w.logistics.assign(u, NJ.Board, delay, d);
+    if (ship.alive && this.type(ship) === ShipType.Transport) {
+      const [ux, uy] = this.cellOf(u);
+      this.startSail(ship, ux, uy, 1);
+    }
   }
 
   private runBoard(job: Job): number {
@@ -328,17 +338,9 @@ export class Naval {
     if (ship.doorQueue[0] !== u.id) return 10;
     const [ux, uy] = this.cellOf(u);
     const computer = !!this.w.economy.players[ship.owner]?.computer;
-    if (!computer && this.dist(ux, uy, sx, sy) >= 4) {
-      // the ship moved away (or the shore cell was not reached): choose the shore cell again, at
-      // most 20 times (our addition; the original waits at the door)
-      const c = this.nearIsland(sx, sy, this.islandOf(u));
-      if (!c || c[0] !== d[BO.TX] || c[1] !== d[BO.TY] || ux !== c[0] || uy !== c[1]) {
-        if (++d[BO.Tries] > 20) { this.leaveQueue(ship, u); return this.finish(u); }
-        this.leaveQueue(ship, u);
-        d[BO.Phase] = 0;
-      }
-      return 10;
-    }
+    // a human player's ship farther away (it moved, or is still coming to the unit, 5.2): the head
+    // of the queue waits at the door and asks again after 10 ticks, for as long as it takes
+    if (!computer && this.dist(ux, uy, sx, sy) >= 4) return 10;
     ship.doorQueue.shift();
     this.embark(u, ship);
     return this.finish(u);
@@ -465,10 +467,11 @@ export class Naval {
     const near = this.nearIsland(sx, sy, d[SA.Island]);
     if (near) { d[SA.LX] = near[0]; d[SA.LY] = near[1]; d[SA.LandSet] = 1; return this.finish(ship); }
     if (++d[SA.Tries] > 15) return this.finish(ship);
-    // step 2: a sea cell next to the island (ring search 32), else the first usable cell near the given one
+    // step 2: a sea cell next to the island (ring search 32), else the first usable cell of a
+    // spiral around the given one, with no radius limit (5.4)
     const units = this.unitCells(ship);
     const c = this.siteSearch(sx, sy, 32, (x, y) => this.coastOk(x, y, d[SA.Island], units)) ??
-      this.spiral(d[SA.GX], d[SA.GY], 32, (x, y) => this.shipFree(x, y));
+      this.spiral(d[SA.GX], d[SA.GY], this.w.size >> 1, (x, y) => this.shipFree(x, y));
     if (!c) return this.finish(ship);
     d[SA.LX] = c[0]; d[SA.LY] = c[1]; d[SA.LandSet] = 1;
     if (!this.sailTo(ship, c[0], c[1])) return this.finish(ship);
@@ -696,14 +699,15 @@ export class Naval {
   planner(race: number): Planner | null { return this.planners[race] ?? null; }
 
   /**
-   * New transport request (`00472630`); returns its id, 0 when refused or empty. The idle ships
-   * are assigned at once (id order) until the units and goods are covered; such a ship keeps its
-   * counter (boarding step), so it boards at most as many units as on its last trip (8.4).
+   * New transport request (`00472630`); returns its id, 0 when refused or empty. Flag 1 (the army's
+   * default) is refused while the planner holds more than 50 requests; served requests are never
+   * forgotten, so they count too (8.4). The idle ships are assigned at once (id order) until the
+   * units and goods are covered; such a ship keeps its counter (boarding step, 8.4).
    */
   request(race: number, units: number, goods: number, px: number, py: number, dx: number, dy: number, flags = 0): number {
     const pl = this.planners[race];
     if (!pl || (units <= 0 && goods <= 0)) return 0;
-    if ((flags & 2) && pl.requests.length > 50) return 0;
+    if ((flags & 1) && pl.requests.length > 50) return 0;
     const r: PlannerRequest = { id: pl.nextReq++, state: 2, px: this.m(px), py: this.m(py), dx: this.m(dx), dy: this.m(dy), waiting: [], goods };
     pl.requests.push(r);
     let n = units, g = goods;
@@ -820,15 +824,17 @@ export class Naval {
     }
     if (unserved > 3) { pl.build[ShipType.Transport] = unserved >> 1; pl.claim[ShipType.Transport] = unserved - (unserved >> 1); }
     else if (pl.ships.length < unserved) pl.claim[ShipType.Transport] = 1;
-    // forget served requests no ship works for any more (keeps the state small)
-    pl.requests = pl.requests.filter(r => r.state < 3 || pl.ships.some(s => s.req === r.id));
+    // served requests stay (8.4): they count for the 50-request refusal; only a cancel removes one
     return 10;
   }
 
   /**
    * Boarding step (`00472940`): n = counter - passengers. Below 1 the ship leaves for the
-   * destination at once. Otherwise (a counter of 100 restarts at 0) up to n waiting units walk to
-   * the ship in list order, each raising the counter; an empty list serves the request.
+   * destination at once. Otherwise (a counter of 100 restarts at 0) the first n entries of the
+   * waiting list are sent to the ship in list order, each raising the counter, with no test of
+   * the unit: a dead one, one aboard or inside is counted as well (8.4); an empty list serves the
+   * request. A dead entry gets no job (ours keeps no object for it, so it does not re-aim the ship);
+   * nor does a unit inside a building (how the original's job takes it out is not traced).
    */
   private boardingStep(ship: Entity, s: PlannerShip, r: PlannerRequest | undefined): void {
     let n = s.counter - ship.passengers.length;
@@ -842,8 +848,9 @@ export class Naval {
     if (!r) return;
     while (n > 0 && r.waiting.length) {
       const u = this.w.get(r.waiting.shift()!);
-      if (!u || !u.alive || u.inside >= 0) continue;
-      this.startBoard(u, ship, 5);
+      const box = u && u.inside >= 0 ? this.w.get(u.inside) : undefined;
+      const inBuilding = !!box && !this.isShip(box);
+      if (u && u.alive && !inBuilding) this.startBoard(u, ship, 5);
       n--; s.counter++;
     }
     if (!r.waiting.length) r.state = 3;

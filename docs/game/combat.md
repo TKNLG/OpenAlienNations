@@ -979,6 +979,7 @@ naval planner and the ship jobs never create attacks.
 | unit on a work job (porter, builder, harvester, hunter on its round, operator) | nobody, unless the help rule reaches it | - | - | - | - | - |
 | unit walking a **move order**, or on any job of a right-click order | does not retaliate, does not flee (7.2 "player order") | - | - | - | - | - |
 | unit that has just finished a move or an attack | idle: as "idle unit" | - | - | - | - | - |
+| unit just put ashore by a ship (add-on; also left a building) | idle: as "idle unit". The leave job only places it (`addon.md` 5.3, 8.4 "Unloading"); a computer army member gets its attack job at the army's next run (`ai-diplomacy-trade.md` 2.5) | - | - | - | - | - |
 | "hold position" / stand ground | does not exist (8.2) | - | - | - | - | - |
 | friend of the same race struck (any unit or building of race V hit by another race) | every armed non-priest unit of V's race on the map within the circle, the victim itself included, through 7.2 | dx² + dy² < 144 around the victim | at every strike (the strike's fire step) | the attacker A (or the outpost it shoots from) | none (2.1 only: any other race) | - (fixed target A, subject to the tier and player-order tests of 7.2) |
 | priest near a wounded victim | heal job (7.1) | same circle | at every strike | the victim | own race or peace | - |

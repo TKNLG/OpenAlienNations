@@ -662,7 +662,8 @@ Each run without a child:
      `0044cb40`: not land, no unit/building/special/nature, and one of its 20 near cells on the
      target island. The search does not test 0x8000, so the cell may be coastal water;
    - if none is found: spiral outward from the given cell (+0x28) to the first cell that the
-     ship mask 0xA01E allows.
+     ship mask 0xA01E allows. The spiral has **no radius limit** (`0x48baab..0x48bb8b` loops
+     until a cell passes), so a given cell deep inland still yields the nearest usable sea cell.
 3. Store it as the landing cell, set +0x40, create a follow-path child (0x06) to it, and return 2.
 
 With a child, the child runs. When it ends: on failure the job fails. On success it returns 1, so

@@ -685,7 +685,8 @@ export class Ai {
       const g = groups.get(isl)!;
       if (isl === target) { for (const u of g) walkIn(u); continue; }
       const [px, py] = this.cell(g[0]);
-      const req = this.w.naval.request(ps.race, g.length, 0, px, py, t.x, t.y, 8);
+      // the request record's default flags (1): refused while the planner holds > 50 requests
+      const req = this.w.naval.request(ps.race, g.length, 0, px, py, t.x, t.y, 1);
       for (const u of g) {
         if (req) this.w.naval.addWaiting(ps.race, req, u);
         else this.w.logistics.assign(u, NJ.Wait, 5, []);

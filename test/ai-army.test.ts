@@ -146,6 +146,32 @@ test('add-on: units join by island; one ship request per group on another island
   }
 });
 
+test('add-on: army requests (flag 1) are refused once the planner holds more than 50 requests, served ones included; the members wait anyway; founding requests are not refused (addon.md 8.4)', { skip: skipGold }, () => {
+  const w = islandFreePlay(1);
+  w.step();
+  const [ra, rt] = [1, 0];
+  const home = w.economy.towns.find(t => t.alive && t.race === ra)!;
+  const tt = w.economy.towns.find(t => t.alive && t.race === rt)!;
+  const hi = w.islandAt(home.x, home.y);
+  const pl = w.naval.planner(ra)!;
+  // 51 requests, all served: the planner keeps every one of them
+  while (pl.requests.length < 51) w.naval.request(ra, 1, 0, home.x, home.y, tt.x, tt.y);
+  for (const r of pl.requests) r.state = 3;
+  w.naval.runJob(w.sched.get(pl.job)!);
+  assert.equal(pl.requests.length, 51, 'served requests are not forgotten');
+  // the army's join: its request is refused, the group waits all the same
+  const group = cells(w, home.x, home.y, 3, 20, 2, hi).map(([x, y]) => w.spawnUnit(ra, HUNTER, x, y, home.id));
+  const job = w.sched.create(AiJob.Army, ra, 1, [tt.id, tt.x, tt.y, 0]);
+  const ps = player(ra, 0);
+  Object.assign(ps, { army: job.id, armyTown: tt.id });
+  w.ai.players[ra] = ps;
+  internals(w).joinArmy(ps, group);
+  assert.equal(pl.requests.length, 51, 'the army request was refused');
+  assert.ok(group.every(u => jobKind(w, u) === NJ.Wait), 'its members wait for a ship that never comes');
+  assert.equal(w.naval.request(ra, 1, 0, home.x, home.y, tt.x, tt.y, 1), 0, 'flag 1: refused');
+  assert.ok(w.naval.request(ra, 1, 0, home.x, home.y, tt.x, tt.y, 0) > 0, 'flags 0 (founding): accepted');
+});
+
 test('add-on: a free warship is an army candidate and sails towards the target town when it joins (2.3, 2.5)', { skip: skipGold }, () => {
   const w = islandFreePlay(1);
   w.step();

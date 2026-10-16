@@ -450,6 +450,66 @@ test('naval planner: a computer transport ferries waiting units to another islan
   }
 });
 
+test('naval planner counter (8.4): every list entry is sent and counted, dead ones included; a ship assigned at a new request keeps its counter, which grows; served requests are kept', { skip }, () => {
+  const { world: w } = aoWorld('PimmonsAO.mdb', 5, { ai: true });
+  runUntil(w, 1000, () => w.tick >= 200 && (w.naval.planner(2)?.ships.length ?? 0) > 0);
+  const pl = w.naval.planner(2)!;
+  const s = pl.ships[0];
+  assert.equal(s.counter, 100, 'registered with 100');
+  const t = w.economy.towns.find(x => x.race === 2 && x.alive)!;
+  const home = w.islandAt(t.x, t.y);
+  const units = w.entities.filter(e => e.kind === 0 && e.town === t.id && !w.isShip(e) && e.inside < 0 && w.islandAt(...cell(e)) === home).slice(0, 8);
+  assert.equal(units.length, 8);
+  const dest: [number, number] = [135, 0];
+  // trip 1: the idle ship is assigned at the request (counter left at 100); one waiting unit dies
+  const r1 = w.naval.request(2, 3, 0, ...cell(units[0]), ...dest);
+  assert.equal(s.state, 2); assert.equal(s.req, r1);
+  for (const u of units.slice(0, 3)) w.naval.addWaiting(2, r1, u);
+  w.combat.die(units[0]);
+  runUntil(w, 3000, () => s.state === 3);
+  const req1 = pl.requests.find(r => r.id === r1)!;
+  assert.equal(s.counter, 3, 'all three entries sent and counted, the dead one too');
+  assert.equal(req1.waiting.length, 0);
+  assert.equal(req1.state, 3, 'served');
+  assert.ok(units.slice(1, 3).every(u => jobKind(w, u) === NJ.Board || u.inside === s.id), 'the living two walk to the ship');
+  runUntil(w, 6000, () => s.state === 1);
+  assert.ok(pl.requests.some(r => r.id === r1 && r.state === 3), 'a served request is never forgotten');
+  // trip 2: assigned at the request again: the counter (3) limits the units sent, then grows
+  const r2 = w.naval.request(2, 5, 0, ...cell(units[3]), ...dest);
+  assert.equal(s.req, r2);
+  for (const u of units.slice(3, 8)) w.naval.addWaiting(2, r2, u);
+  runUntil(w, 3000, () => s.state === 3);
+  assert.equal(s.counter, 6, '3 more sent: 3 + 3');
+  assert.equal(pl.requests.find(r => r.id === r2)!.waiting.length, 2, 'two wait for another ship');
+});
+
+test('boarding order on a transport (5.2): the ship comes to the unit (its job is replaced by a sail-to-coast job toward the unit\'s island)', { skip }, () => {
+  const { world: w, mission: m } = aoWorld('PimmonsAO.mdb', 1);
+  const h = m.humanRace;
+  w.combat.setRelation(1, 2, 3);
+  for (let i = 0; i < 40; i++) w.step();
+  const ship = w.entities.find(e => w.isShip(e) && e.owner === h && (e.oid & 0xffff) === 67)!;
+  const town = w.economy.towns.find(t => t.race === h)!;
+  const home = w.islandAt(town.x, town.y);
+  // the ship lies off another island
+  const far = shoreCell(w, ship, 7, [104, 68]);
+  w.schedule({ type: 'move', player: h, ids: [ship.id], x: far[0], y: far[1] });
+  w.step();
+  assert.ok(runUntil(w, 5000, () => !ship.path) >= 0);
+  assert.ok(!w.naval.nearIsland(...cell(ship), home), 'not next to the home island');
+  const units = w.entities.filter(e => e.kind === 0 && e.owner === h && e.inside < 0 && !w.isShip(e) && w.islandAt(...cell(e)) === home).slice(0, 2);
+  w.schedule({ type: 'order', player: h, ids: units.map(u => u.id), target: ship.id });
+  w.step(); w.step();
+  const j = ship.job ? w.sched.get(ship.job) : undefined;
+  assert.equal(j?.kind, NJ.Sail, 'the ship got a sail-to-coast job');
+  assert.equal(j!.data[0], home, 'toward the units\' island');
+  // the units walk to the land next to the ship's landing and wait at the door (a human player's
+  // ship: entry from closer than 4); the ship arrives and the head of the queue gets in
+  assert.ok(runUntil(w, 6000, () => ship.passengers.length >= 1) >= 0, 'boarded where the ship landed');
+  assert.ok(w.naval.nearIsland(...cell(ship), home), 'the ship came to the home island');
+  assert.ok(units.some(u => u.inside === ship.id));
+});
+
 test('computer players build a harbour and a shipyard and keep a fishing boat (20000 ticks)', { skip }, () => {
   // AmazonsAO 8: on mission 5 the harbour only comes once a wood-starved town has grown past 19
   // people, which the turn and planning delays of unit motion (units-and-jobs.md 4.1, 4.6) push
