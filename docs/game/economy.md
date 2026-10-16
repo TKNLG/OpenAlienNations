@@ -1190,6 +1190,10 @@ stones (109 blocks).
 Nothing else reads it: territory does not affect movement, combat (apart from the AI alert),
 tax, happiness or storage.
 
+The mine, town hall, harbour and shipyard exemption above is from the **territory** test only.
+The UI's visibility test (mask bit 0x80: the grown footprint must be in sight) applies to them
+like to every other building (`units-and-jobs.md` 6.1.1, `fog-of-war.md` 6).
+
 ### 11.8 Rebuild notes
 
 - Keep the ownership map (block grid of town ids), the records with their ordered circle lists
