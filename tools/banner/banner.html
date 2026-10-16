@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- README banner template, rendered by make_banner.py (headless Chromium).
+     Query: ?lang=en|de&bg=<background image URL>. The background is a screenshot of the remake;
+     the lettering uses the locally installed Inter Display, not the original game's fonts or logo. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Banner Display"; font-weight: 900; src: local("Inter Display Black"), local("InterDisplay-Black"); }
+  @font-face { font-family: "Banner Display"; font-weight: 800; src: local("Inter Display ExtraBold"), local("InterDisplay-ExtraBold"); }
+  @font-face { font-family: "Banner Text"; font-weight: 500; src: local("Inter Display Medium"), local("InterDisplay-Medium"), local("Inter Medium"); }
+  html, body { margin: 0; padding: 0; background: #10140c; }
+  #banner {
+    position: relative; width: 1280px; height: 360px; overflow: hidden;
+    background: #10140c center / cover no-repeat;
+  }
+  /* legibility: dark wash from the left, fading out before the town; a light vignette top and bottom */
+  #banner::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      linear-gradient(90deg, rgba(8, 10, 6, 0.84) 0%, rgba(8, 10, 6, 0.72) 28%, rgba(8, 10, 6, 0.32) 44%, rgba(8, 10, 6, 0) 56%),
+      linear-gradient(180deg, rgba(0, 0, 0, 0.22) 0%, rgba(0, 0, 0, 0) 22%, rgba(0, 0, 0, 0) 78%, rgba(0, 0, 0, 0.28) 100%);
+  }
+  #text { position: absolute; left: 56px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; }
+  h1 {
+    margin: 0; font: 900 68px/1 "Banner Display", sans-serif; letter-spacing: -0.035em; color: #fff;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+  }
+  h1 .accent { color: #ffd257; }
+  .rule { width: 72px; height: 4px; border-radius: 2px; background: #ffd257; margin: 22px 0 18px; }
+  p {
+    margin: 0; white-space: nowrap; font: 500 23px/1.35 "Banner Text", sans-serif; letter-spacing: -0.005em;
+    color: rgba(255, 255, 255, 0.93); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+  }
+</style>
+</head>
+<body>
+<div id="banner">
+  <div id="text">
+    <h1>Open<span class="accent">Alien</span>Nations</h1>
+    <div class="rule"></div>
+    <p id="tagline"></p>
+  </div>
+</div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const lines = {
+    en: ['Alien Nations in your browser —', 'open-source remake, bring your own game files'],
+    de: ['Die Völker im Browser –', 'Open-Source-Remake, mit deinen eigenen Spieldateien'],
+  }[q.get('lang') || 'en'];
+  const p = document.getElementById('tagline');
+  lines.forEach((l, i) => { if (i) p.appendChild(document.createElement('br')); p.appendChild(document.createTextNode(l)); });
+  document.documentElement.lang = q.get('lang') || 'en';
+  if (q.get('bg')) document.getElementById('banner').style.backgroundImage = `url("${q.get('bg')}")`;
+</script>
+</body>
+</html>
