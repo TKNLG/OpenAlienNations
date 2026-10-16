@@ -10,7 +10,6 @@ import { World, Kind, SUB, type Entity } from '../src/engine/world.ts';
 import type { Town } from '../src/engine/economy.ts';
 import type { ObjectRule } from '../src/formats/odb.ts';
 import { loadMission, DATA, loadAddonMission, HAS_GOLD } from './helpers/mission.ts';
-import { NO_OWNER } from '../src/engine/territory.ts';
 import { Vision } from '../src/client/vision.ts';
 import { footprintInSight, placementAllowed, ghostAllowed } from '../src/client/placement.ts';
 
@@ -41,7 +40,7 @@ function paint(v: Vision, w: World, r: ObjectRule, x: number, y: number, state: 
 /** first site outside the town's territory where the simulation's rule passes */
 function siteOutside(w: World, t: Town, r: ObjectRule): [number, number] | null {
   for (let y = 0; y < w.size; y++) for (let x = 0; x < w.size; x++) {
-    if (w.territory.ownerAt(x, y) !== NO_OWNER) continue;
+    if (w.territory.ownerAt(x, y) !== -1) continue;   // -1: no territory
     if (w.logistics.canPlaceSite(t, r, x, y)) return [x, y];
   }
   return null;

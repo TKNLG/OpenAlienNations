@@ -1737,6 +1737,13 @@ Consequences:
   changes; in add-on island games the mine ghost turns green over the sea and over every other
   island wherever the placement fails (in the fog too).
 
+*Our build (October 2026):* UI test in `src/client/placement.ts` (`placementAllowed` for the click,
+`ghostAllowed` for the ghost colour with the Gold mine quirk; the sight test reads the vision layer
+even under MAGICEYE), simulation test `Logistics.canPlaceSite`, territory in `Logistics.canPlace`;
+tests in `test/placement.test.ts`. The player report "mine, harbour and shipyard can be placed on
+explored but fogged ground" does not match the code above; the remembered freedom is the
+territory exemption (plus ships and active mines giving sight).
+
 After placement:
 
 1. A building object is created (`0045f0d0`):
