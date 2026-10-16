@@ -25,6 +25,7 @@ import { Music } from './audio.ts';
 import { fetchBytes } from './data.ts';
 import { Minimap } from './minimap.ts';
 import { Vision } from './vision.ts';
+import { footprintInSight, placementAllowed, ghostAllowed } from './placement.ts';
 import { showBriefing } from './briefing.ts';
 import { Looks, type Pick } from './looks.ts';
 import { Displays, isFish, offsetPixels, type DisplayRng } from './display.ts';
@@ -542,13 +543,9 @@ class Game implements HudHost {
   onMenu: () => void = () => {};
   get playerTowns() { return this.world?.economy.towns.filter(t => t.race === this.player && t.alive) ?? []; }
 
-  /** fog-of-war.md 6: placement needs the footprint grown by one cell to be in sight */
+  /** fog-of-war.md 6: placement needs the footprint grown by one cell to be in sight (MAGICEYE does not lift it) */
   private inSight(r: { sizeX: number; sizeY: number }, x: number, y: number): boolean {
-    const v = this.vision;
-    if (!v) return true;
-    const fx = Math.max(1, r.sizeX), fy = Math.max(1, r.sizeY);
-    for (let dy = -1; dy <= fy; dy++) for (let dx = -1; dx <= fx; dx++) if (!v.cellVisible(x - fx + 1 + dx, y - fy + 1 + dy)) return false;
-    return true;
+    return footprintInSight(this.vision, r, x, y);
   }
 
   /** place the building being placed at a screen point; true if the command was sent */
@@ -557,7 +554,7 @@ class Game implements HudHost {
     if (!w || !t || this.placing < 0) return false;
     const [x, y] = this.cellAt(sx, sy);
     const r = w.rules.get(((this.player << 16) | this.placing) >>> 0);
-    if (!r || !w.logistics.canPlace(t, r, x, y) || !this.inSight(r, x, y)) return false;
+    if (!r || !placementAllowed(w, t, r, x, y, this.vision)) return false;
     this.command({ type: 'build', player: this.player, town: t.id, building: this.placing, x, y });
     return true;
   }
@@ -795,7 +792,8 @@ class Game implements HudHost {
     const oid = ((this.player << 16) | (founding ? 40 : this.placing)) >>> 0;
     const r = w.rules.get(oid);
     const [x, y] = this.cellAt(this.mouse.x, this.mouse.y);
-    const ok = founding ? this.canFoundHere(x, y) : !!r && !!t && w.logistics.canPlace(t, r, x, y) && this.inSight(r, x, y);
+    // ghost colour: the click test, plus the Gold mine island quirk (units-and-jobs.md 6.1.1)
+    const ok = founding ? this.canFoundHere(x, y) : !!r && !!t && ghostAllowed(w, t, r, x, y, this.vision);
     const g = this.looks.ghost(oid, ok);
     if (!g) { void this.looks.ensureGhost(oid); return; }
     const cam = this.cam, tr = this.terrain!;

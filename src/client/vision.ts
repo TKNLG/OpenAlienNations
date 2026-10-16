@@ -108,6 +108,16 @@ export class Vision {
     return e.kind === KIND_BUILDING || (e.kind === KIND_NATURE && r?.cls !== CLS_ANIMAL);
   }
 
+  /**
+   * in sight for the rules (placement, fog-of-war.md 6): the viewer layer itself, also while the
+   * MAGICEYE cheat has fog drawing switched off (8: the counters keep running)
+   */
+  cellInSight(x: number, y: number): boolean {
+    const mask = this.size - 1;
+    return this.visible[((y & mask) << this.bits) | (x & mask)] === 1;
+  }
+
+  /** in sight for drawing: everything while MAGICEYE has fog switched off */
   cellVisible(x: number, y: number): boolean {
     if (this.off) return true;
     const mask = this.size - 1;

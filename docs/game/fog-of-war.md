@@ -485,8 +485,11 @@ entities occupying cell i, set `seen`. Remove: `if (--count[i] === 0) markDirty(
   `count[anchor] > 0` or (`seen` and `explored[anchor]`), and darkened ×0.5 when
   `count[anchor] === 0`. Hide border stones outside visible cells.
 - Picking: hit-test only what was drawn.
-- Placement preview: invalid unless every cell of the footprint grown by one has `count > 0`.
-  Keep the simulation's placement check fog-free.
+- Placement preview and click: invalid unless every cell of the footprint grown by one has
+  `count > 0`, for every building type (mine, town hall, harbour, shipyard included), and also
+  while MAGICEYE has fog switched off (the test reads the counters, not the fog bit). Keep the
+  simulation's placement check fog-free. In add-on island games, reproduce the Gold mine ghost
+  quirk of `units-and-jobs.md` 6.1.1 in the ghost colour only, never in the click.
 - Minimap: either reproduce 5.4 (separate 152 × 152 buffers with scaled discs, rebuilt by a
   periodic pass) or simply sample the cell layers per pixel. The second is simpler and more
   exact. It differs only by the original's slightly larger, coarser discs and its pass lag.
