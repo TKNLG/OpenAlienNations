@@ -385,7 +385,10 @@ Missing goods do not block placement (base rule). The shipyard also has a goods 
   town's market settings (town +0x54C in Gold = AN +0x4EC).
 - A foreign harbour at **peace** gives vision of radius 6, like a foreign market (`0043a750`,
   `0043a860`, relation side effect `0045e100`; `fog-of-war.md` 3).
-- The harbour has radius 6, like the market. Its use is as unknown as the market's.
+- **Vision** (`fog-of-war.md` 3.1): the own harbour sees radius 6 around its anchor (max corner)
+  from completion on, like the market; the **shipyard has radius 0 and never lifts fog** (its
+  completion explores nothing either). Building them outside the territory changes nothing about
+  vision. Checked at instruction level in `dvge.exe` (`0043a750`, completion `00466590`).
 
 ### 3.4 Shipyard: training ships (C)
 

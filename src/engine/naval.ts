@@ -566,6 +566,9 @@ export class Naval {
         // docked at the harbour: the transport child drops the catch into the town stock
         const h = this.w.get(d[FI.Harbour]);
         if (!h || !h.alive) return this.endFishing(boat);
+        // the transport child's first request at the door: "stores full" when the town has no room
+        // for the catch (may-enter test, side-panel.md 1.1.6 (a)); docking goes on
+        if (!h.doorQueue.includes(boat.id)) this.w.logistics.storesFullAtDoor(boat, h, true);
         if (!this.dock(boat, h)) return 10;
         this.dropCargo(boat, h);
         if (!this.fishSearch(boat, d)) return this.endFishing(boat);

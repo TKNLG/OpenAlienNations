@@ -6,7 +6,9 @@ have been traced in AN.exe. Section 11 lists what is still open.
 
 Sources: the decompiled AN.exe (`re/dump/decomp.c`). Several message handlers and the minimap
 object pass are missing from the dump, so they were read in the raw disassembly of
-`re/bin/AN.exe`. Addresses are cited as evidence. No code is reproduced: behaviour is described
+`re/bin/AN.exe`. Addresses are cited as evidence. The Gold Edition (`dvge.exe`) was checked at
+instruction level for every vision source (section 3.1); its rules are the same, with one change
+(market-like flag 0x20 instead of type 48). No code is reproduced: behaviour is described
 in our own words, tables and formulas.
 
 Legend: **C** = confirmed in code, **I** = inferred (data pattern, partial trace, naming),
@@ -35,10 +37,12 @@ Related documents:
   **dx² + dy² < r²** (strict) around the source cell, wrapped on the torus. Terrain height and
   line of sight play no part (C).
 - **Sources** (all of the local race): every unit standing on the map, with radius odb +0xB0
-  (scouts 15; founders, hunters and soldiers 10; other civilians 5; criminals 0); every **active**
-  building with a radius (town hall 25, large outpost 25, small outpost 15, watchtower 30, mine 8,
-  embassy 6, market 6). Foreign **embassies** add their radius once diplomatic contact exists, and
-  foreign **markets** add theirs while at peace (C).
+  (scouts 15; founders, hunters and soldiers 10; other civilians 5; criminals 0; add-on ships 8,
+  10 or 12); every **active** building with a radius (town hall 25, large outpost 25, small
+  outpost 15, watchtower 30, mine 8, embassy 6, market 6, add-on harbour 6). Buildings with radius
+  0 (houses, workshops, schools, the add-on **shipyard** ...) never see. Foreign **embassies** add
+  their radius once diplomatic contact exists, and foreign **markets** (Gold: market and harbour)
+  add theirs while at peace (C). Per-type table with the activation condition: section 3.1.
 - A building's **completion** also permanently explores its radius, without making it visible
   (C, `004602d0` -> message 0x3B -> `0044a4b0`).
 - **Rendering:** unexplored = black, explored but not visible = half light, visible = full light.
@@ -223,6 +227,71 @@ Notes:
   discs above. A relation of 0 means no contact. A missing relation record counts as "not 0"
   for the activation test (C, `004366b0`), but relations exist for every pair in practice (I).
 - Animals, nature and goods (group 6) never match the local race, so they have no vision.
+
+### 3.1 Which buildings see, and when (C; base and Gold)
+
+The building rule is generic: **no type list**. The activation handler adds a disc of the record's
++0xB0 for any own building (base `004366b0`, Gold `0043a750`: the own-race branch loads +0xB0 and
+calls the disc add with no other test, `0x43A76D`..`0x43A7F0`); deactivation removes the same
+disc (base `004367c0`, Gold `0043a860`). Completion explores the same radius once (base handler
+`0x457250`, Gold `0x45CF72`..`0x45CFB1`: own race, +0xB0, explore only). Radius 0 covers no cell
+(section 2), so whether a building sees is decided by its +0xB0 value alone, and when it sees by
+its **activation**. The add-on's `Addon.odb` and the Gold `dv.odb` carry the same radii as the
+base for types 37..61 (checked in the data files).
+
+Activation (`units-and-jobs.md` 6.5, 8.1; Gold completion `00466590`, test at `0x4667CD`): a
+completed building with operator +0xD8 = −1 is activated **at completion**. A building with an
+operator stays inactive until a unit of the operator type and of the building's race enters.
+Deactivation (operator sent out, `DEAKTIVIEREN`, a duty job broken under way, destruction) removes
+the disc. An operator out on his building's own duty job keeps the building active (8.5 there),
+so the disc stays.
+
+| type | building | radius (+0xB0) | operator (+0xD8) | own building sees | completion explores |
+|---|---|---|---|---|---|
+| 40 | town hall | 25 | founder (10) | while active: from the founding (founder inside) | 25 |
+| 52 / 53 | small / large outpost | 15 / 25 | none | from completion, with or without garrison | 15 / 25 |
+| 60 | watchtower | 30 | scout (24) | only while its scout is inside | 30 |
+| 50 | mine | 8 | miner / stonemason (27) | only while its miner is inside (active); not while waiting for the miner | 8 |
+| 42 | embassy | 6 | diplomat (13) | while active (diplomat inside or on an errand) | 6 |
+| 48 | market | 6 | none | from completion | 6 |
+| 62 | harbour (add-on) | 6 | none | from completion | 6 |
+| 63 | shipyard (add-on) | **0** | none | **never** (active from completion, but radius 0) | nothing |
+| all others (37..39, 41, 43..47, 49, 51, 54..59, 61) | | 0 | | never | nothing |
+
+Values are the same for all three races (Gold `dv.odb` and `Addon.odb` checked). Notes:
+
+- **Territory gives no vision.** The town area and the outposts' territory discs are separate
+  bookkeeping (`economy.md` 11); nothing in the territory messages touches the cell counter.
+  Building outside the territory (mine, harbour, shipyard, town hall) changes nothing about vision.
+- **Construction sites never see**, whatever the type: the object placement path adds unit vision
+  only for kind ≠ 1 (base `00448690`, Gold `0x44C7DE`..`0x44C811`), and a site is never active.
+  Its builders, while standing on the map, see with their own 5 cells.
+- **The shipyard lifts no fog** in the original. Once its builders leave, the area around it is
+  only explored (half light) unless a unit or ship is nearby. Ships leave the yard as units and
+  see from their own record radius. Porters waiting inside to be retyped see nothing.
+- **The harbour** sees 6 from completion on (no operator, so it is active at once).
+- **The mine** (also allowed outside the territory) sees 8 only while active. After completion it
+  explores its 8-disc once (half light), then stays dark until its miner enters.
+- **Measured from the anchor cell**, the footprint's maximum corner, with the strict disc
+  dx² + dy² < r² (section 2). The disc reaches r − 1 cells along the axes from that corner, so it is
+  lopsided around the footprint: for a 3 × 3 harbour (r 6) it reaches 5 cells past the footprint
+  on the +x / +y sides but only 3 past it on the −x / −y sides. A mine's r 8 covers 193 cells,
+  7 along the axes from its corner.
+- **Units inside** buildings (garrisons, operators, trainees, residents) and **passengers** inside
+  a transport ship see nothing (taken off the map, section 3).
+- **Ships** are units (kind 0): the same add and remove per step as any unit (Gold `0x44C811`,
+  remove `0x44CA47`), radius from `Addon.odb` (Amazons 8/8/12/12, Pimmons 8/10/12/12, Sajiki
+  8/8/10/12 for types 64..67).
+- **Foreign buildings:** only embassies (relation ≠ 0) and, in Gold, every building with record
+  flag 0x20 (market and harbour) at peace (relation 3): `0x43A7C0`..`0x43A7D9`. A foreign shipyard
+  or mine never gives vision.
+- **Fog switch and explored state are the same in Gold**: display flags at `0x4BCD10`, reset to
+  0x3A per map (`0x411AFD`), MAGICEYE toggles bit 0x08 (`0x443DF0`). Add-on maps (stored terrain,
+  island free play) store no fog state and start unexplored.
+
+*Our build (October 2026):* `Vision.update` (`src/client/vision.ts`) already followed this table
+(the shipyard's missing vision is the original's rule, not a bug). Changed to match 13: seen
+flags come only from new discs and from any footprint cell. Tests: `test/fog-buildings.test.ts`.
 
 ---
 
@@ -461,6 +530,16 @@ player's layer.
 {(dx, dy) : dx² + dy² < r²}. A stamp is `idx = ((y+dy) & (N-1)) * N + ((x+dx) & (N-1))` for each
 offset. Add: `if (count[i]++ === 0 || !explored[i]) markDirty(i); explored[i] = 1;` then for static
 entities occupying cell i, set `seen`. Remove: `if (--count[i] === 0) markDirty(i)`.
+
+**Seen is set by adds, not by being visible** (C, base `0044a250`, Gold `0x44F514`..`0x44F558`):
+every cell of an added disc that holds a static object's index marks that object seen. A
+building holds its index on **every footprint cell**, so a disc that touches any footprint cell
+marks the building. A source that stays put (a building, a unit standing still) adds only once:
+a static object created later inside its disc is not seen until some new add covers it. A rebuild
+that recomputes visibility per tick should therefore mark seen only from discs that are new this
+tick (a source that appeared, or whose centre or radius changed), not from the whole visible layer.
+After loading a save, the stored seen flags stand; the sources present at load are not new adds
+(I: the counters are saved with the cells, 1.5, so a re-add at load would double them).
 
 **When to stamp:**
 

@@ -834,8 +834,12 @@ Repairs (builders, money) are outside this document.
 
 - **Capacity (C):** one number per town, the same for every good: town +0x54 = sum of odb +0x120
   of the town's active buildings with the "store" flag. Town hall 25, warehouse 25 (market has the
-  flag but 0). So capacity = 25 x (1 + warehouses) (handbook p. 29). Added in `0045fa40`,
-  removed in `0045ff30`.
+  flag but 0). So capacity = 25 x (1 + warehouses) (handbook p. 29), **per good**: a town with a
+  hall and five warehouses holds 150 of each of the nine goods. Added in `0045fa40` (flag 0x1 and
+  +0x120 not 0; Gold `00465d00`: flag 0x10), removed in `0045ff30` (same test; Gold `004661f0`:
+  flag 0x10). Warehouse construction sites add nothing. The raw-material page shows this number
+  (T130 "Lagerkapazität: %d / Typ"). Every room test uses it per good: room(g) =
+  max(0, capacity − stock[g]) (`00460ba0`), "full" = room(g) < 1.
 - **What counts as town stock (C):** the nine counters at town +0x88..+0xA8. Goods inside
   producers (mine, armoury, luxury works: own capacity 10 per good, odb.md) are not town stock
   until a porter delivers them. All store buildings of a town share the one stock (handbook p. 41).
@@ -868,13 +872,26 @@ Repairs (builders, money) are outside this document.
   with the ring off); `Economy.setCropRing`, `convertNow`; command `convert` with 0..100 or
   `CONVERT_NOW` (255); test `test/economy.test.ts`.*
 - **Removing goods (C, `0046e910`):** stock = max(0, stock - amount).
-- **Losing a store (C, `0045ff30`):** capacity drops by 25 and every stock is scaled by
-  W / (W + 1), W = the town's warehouse count at that moment. Since the destroyed store is
-  presumably still counted (I), this is "stock x new capacity / old capacity", e.g. losing one
-  of two warehouses keeps 2/3 of everything; losing the only warehouse keeps 1/2.
-- **Full stores (C):** mentor#17 "Your stores are full!" is said when a unit with a load asks to
-  enter and there is no room (`00460a10`), and when a porter delivering finds no room (`0047c400`).
-  It is queued with an interval of 2 D = 120 s (side-panel.md 1.1.3).
+- **Losing a store (C, `0045ff30`, 0x45FFC9..0x46001A):** only for a building whose capacity
+  test above holds (so **not** for a market: +0x120 = 0 skips the whole block): capacity drops by
+  its +0x120 and every stock is scaled by W / (W + 1), truncated, W = the count of the town's
+  warehouse type list (town +0x2A8) at that moment. That list holds every warehouse of the town
+  from placement (construction sites too) until phase 2 of its death (`combat.md` 10.3 step 3),
+  and deactivation is phase 1, so the dying warehouse is **still counted**: losing one of two
+  warehouses keeps 2/3 of everything, losing the only warehouse keeps 1/2. Unfinished warehouse
+  sites raise W (they keep more). The town hall uses the same formula, but its loss destroys the
+  town.
+- **Full stores (C):** mentor#17 "Your stores are full!" is said when a unit carrying goods on a
+  transport job first asks to enter a building that has no room for **that good** (a store: town
+  stock[g] ≥ capacity; another building: local stock[g] ≥ its +0x120; entry is still allowed,
+  `00460a10`), and when a porter puts a leftover load down at its source with no room (that unit
+  is lost, `0047c400`). It is tested **before** goods are added and never after a delivery, so a
+  clamped or crop-converted delivery says nothing. Queued, interval 2 D = 120 s. Exact rule:
+  side-panel.md 1.1.6.
+- **Goods refused when full:** nothing refuses a delivery; the stock is clamped and the excess is
+  lost (`0046e820`). The places that look at the room first: the dispatcher skips a harvest
+  request while room(g) < 1 (`units-and-jobs.md` 5.3), and the porter at a source puts down only
+  with room (5.5). Production output stays in the producer until a porter takes it.
 
 ---
 
@@ -970,7 +987,7 @@ once the houses wait for births.
    found; possibly animation only. A visit does not satisfy or close a need (a need building closes
    its need when it becomes active, 5.3) and no need code releases a visitor; the release paths and
    timings are in `units-and-jobs.md` 5.7.
-8. Other storage messages (mentor#17 is traced, side-panel.md 1.1.3).
+8. *(Resolved: mentor#17 is the only storage message, side-panel.md 1.1.6.)*
 9. Town +0x48 (second counter), +0xAC/+0xB0, the market table at +0x4EC, and town +0x5C.
 10. The trade and diplomacy money flows (`0047d4d0`) and the market price model.
 11. What the AI planning jobs (+0x18/+0x1C/+0x20) do; AI towns skip happiness entirely.

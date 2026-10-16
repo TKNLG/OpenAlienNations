@@ -495,7 +495,7 @@ Who may enter (`00460a10`), same race:
 |---|---|
 | construction site (state 1) | **only** builders (unit type 11) and units whose **current** job (+0x30) is a transport (type 5); everyone else is refused. This is the first test for a site, so a site of a house or a town hall uses it, not the residence rules below (C, instruction level `00460a41`..`00460a5f`) |
 | training building (class 5) | everybody |
-| any building | units on a builder job; units on a transport job (if they carry goods and there is no room, advisor mentor#17 "stores full" fires, but entry is still allowed); the building's operator type, while the building is not active or when this unit is the current operator |
+| any building | units on a builder job; units with a transport job (0x05) anywhere in their job chain (if they carry goods and the building has no room for that good, advisor mentor#17 "stores full" fires, but entry is still allowed; room = town capacity − town stock for a store, +0x120 − local stock otherwise; `side-panel.md` 1.1.6); the building's operator type, while the building is not active or when this unit is the current operator |
 | visit building (flag 0x8) | porters |
 | police station (54) | criminals |
 | outpost (class 6) | ranged units (class 2: types 29, 32, 33, 36 of every race) while occupants < +0xDC. The capacity is tested only at the unit's first request, so units already queued all get in (`combat.md` 9.1) |
@@ -1404,7 +1404,9 @@ goods move inside the building's "unit entered" handler (`00460ed0` calls `0047c
    or local free space (+0x120 − local stock) otherwise.
    - At a non-store, the good is also appended to the building's output list and a priority-1
      request is filed.
-   - With no room, the advisor says mentor#17 "stores full".
+   - With no room, the advisor says mentor#17 "stores full" (to the porter's nation).
+   - Either way the carried amount drops by 1 (not below 0, `47c538`): with no room that unit
+     is lost. So the pickup in step 2 starts from the reduced amount.
 2. Then pick up **1 unit**: the requested good +0x30 if the source stock has it, otherwise the
    output good +0x34. The stock is decremented, unit+0x38 = good and unit+0x3C += 1.
 

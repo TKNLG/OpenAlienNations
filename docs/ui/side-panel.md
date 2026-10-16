@@ -136,7 +136,7 @@ hears them only if it is human.
 | 14 | Du hast keine freien Träger! | the dispatcher finds no free porter (the town has none, or all are busy) | Q | 2 D | | `0046fa10` (2 places) |
 | 15 | Forschung abgeschlossen. | a human town's research project completes | Q | 0 | | `0046f490` |
 | 16 | Du investierst nichts in Forschung! | the research command is executed while the town's research share is 0 or its stored research spending is below 1 | no | 0 | | `00450910` |
-| 17 | Deine Lager sind voll! | a unit with a load asks to enter and there is no room (`00460a10`), or a porter delivering finds no room (`0047c400`) | Q | 2 D | | |
+| 17 | Deine Lager sind voll! | two places, both before any goods are added (exact rule in 1.1.6): (a) the **may-enter test** at a unit's first request at a door, for a unit carrying goods on a transport job when the building has no room for **that one good**: a store (town hall, warehouse, market, harbour) when the **town's** stock of the good is at or above the town capacity, any other completed building when its local stock of the good is at or above its record +0x120 (10 for the producers). Entry is still allowed. (b) a porter putting a leftover load down at the **source** of a transport finds no room; that unit is lost. Never said after a delivery, so a partial or converted delivery (crops turned into food) never says it | Q | 2 D | | `00460a10`, `0047c400` |
 | 18 | Dir geht das Geld aus! | after any change of the nation's money (settlement, income, spending) the money is below 6 | Q | 2 D | | `0045d780`, `0045dab0`, `0045db60` |
 | 19 | … freut sich über eine neue Stadt! | a founder reaches his site and the town exists | Q | 0 | | `00479410` |
 | 20 / 22 | Eine Stadt / Ein Rathaus wird angegriffen! | an impact hits a **building** that is alive with HP > 0. Line 22 for the town hall (type 40), otherwise 20. These are two separate slots | Q | 2 D | | `00481c40` |
@@ -253,6 +253,58 @@ temple, watchtower and weapon factory (61).
   off it appears as text only.
 - Computer players have no client, so they never hear it. In multiplayer each client says it for
   its own selection only. It never reaches the simulation.
+
+#### 1.1.6 Line 17 "Deine Lager sind voll!" (C, `00460a10`, `0047c400`; Gold `00466cd0`, `00487190`, identical)
+
+Only these two places pass line 17 to the filter (1.1.1); both use the queue flag, interval 2 D
+(120 s) and the building's cell. Nothing arms it, and line 17 arms nothing. Checked at
+instruction level: AN.exe 0x460A41..0x460B36 and 0x47C44F..0x47C549, Gold 0x466D30..0x466E04.
+
+**Capacity used.** One number per town and the same for every good, town +0x54 (`economy.md` 7):
+the sum of +0x120 of the town's **active** store buildings (town hall 25, each warehouse 25, so
+25 x (1 + warehouses)). "Full" is tested **per good**: the room for good g is
+capacity − stock[g] of the town that owns the building, and the line needs room < 1, i.e.
+stock[g] ≥ capacity. Other goods being full does not matter. The page "Rohstofflager" shows the
+same number (T130 "Lagerkapazität: %d / Typ").
+
+**(a) The may-enter test** (`00460a10`, 4.4 of `units-and-jobs.md`). It runs at a unit's first
+request at a building door. The line is reached only when all of these hold, in this order:
+
+1. the unit's record race equals the building's record race (another race goes to the
+   trade/errand branch, which never says it);
+2. the building is not a construction site (state 1 returns before);
+3. the building is not a training building (class 5 admits everybody before; Gold also refuses
+   ships there first);
+4. the unit's **current** job is not a builder job (0x0C);
+5. the unit's job chain holds a **transport job** (0x05), and the unit carries something
+   (carried amount +0x3C > 0, good +0x38);
+6. there is no room for that good:
+   - store building (record flag 0x1): town capacity − town stock[g], clamped at 0, is < 1;
+   - any other building: record +0x120 − the building's local stock[g] ≤ 0.
+
+Then line 17 goes to the **building's** nation, and the unit is **still admitted** (the test
+returns "may enter"). Who carries goods on a transport job: porters on a dispatcher or player
+delivery, porters bringing a producer's output back to a store, and the free deliveries of
+woodcutters, stonemasons, hunters, harvesting porters (`units-and-jobs.md` 5.6) and fishing
+boats docking at a harbour (Gold, `addon.md` 6.2). A porter delivering inputs to a producer
+whose local stock of that input is already at 10 hears it too. Deliveries to a construction site
+never say it.
+
+**(b) The porter at the source** (`0047c400`, `units-and-jobs.md` 5.5 "At the source" step 1):
+a porter that still carries something when it reaches the source of its transport puts 1 unit
+down. Room is the town capacity rule above for a completed store, otherwise the local rule. With
+no room line 17 goes to the **porter's** nation. In both cases the carried amount drops by 1
+(not below 0): with no room that unit is simply lost.
+
+**Not said:** at the destination step (the goods are dropped there, the town stock is clamped
+and any excess is lost without a line, `economy.md` 7), after a crop delivery that was converted
+to food, for goods added by production, trade, a new town's start goods or cheats, or when the
+dispatcher skips a harvest because the town has no room. Computer nations have no filter, so
+they never hear it (1.1.1).
+
+**What follows:** with several warehouses the line comes only when the carried good has reached
+25 x (1 + warehouses). A town showing "150 / Typ" says it only for a delivery of a good whose
+stock is 150; a full stock of one good does not make deliveries of the others say it.
 
 ## 2. Panel background and sprites
 

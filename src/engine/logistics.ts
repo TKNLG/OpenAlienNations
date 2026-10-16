@@ -346,11 +346,32 @@ export class Logistics {
   /** start walking to a cell (public form of the jobs' walk, used by the add-on jobs) */
   walkToCell(u: Entity, x: number, y: number): boolean { return this.goCell(u, x, y); }
 
-  /** goods dropped into a building (a harbour: the town stock, clamped; addon.md 3.3) */
+  /**
+   * goods dropped into a building (a harbour: the town stock, clamped; addon.md 3.3). No advisor
+   * line here: "stores full" is a door test before the drop (`storesFullAtDoor`)
+   */
   deliver(b: Entity, good: number, n: number): number {
-    const stored = this.put(b, good, n);
-    if (this.isStore(b) && stored < n) this.w.notify(b.owner, M.StoresFull, true, ADVISOR_REPEAT_MS);
-    return stored;
+    return this.put(b, good, n);
+  }
+
+  /**
+   * Mentor#17 "Deine Lager sind voll!" from the may-enter test (side-panel.md 1.1.6 (a)): at a
+   * unit's first request at a door. Same race, a completed building that is not a training
+   * building, a unit whose current job is not a builder job but that delivers goods (a transport;
+   * our harvest and hunting deliveries and a fishing boat's drop stand for the original's
+   * transport child) and carries something, and no room for **that** good: the town's
+   * capacity − stock for a store, the local +0x120 − local stock otherwise. Entry is not refused.
+   */
+  storesFullAtDoor(u: Entity, b: Entity, delivering?: boolean): void {
+    if (u.carryAmount <= 0 || u.carryGood < 0 || b.kind !== Kind.Building || !b.complete) return;
+    if ((u.oid >>> 16) !== (b.oid >>> 16)) return;
+    const r = this.rule(b);
+    if (!r || r.cls === 5) return;
+    if (delivering === undefined) {
+      const k = this.mainJob(u)?.kind;
+      if (k !== LJ.Transport && k !== LJ.Harvest && k !== LJ.Hunt) return;
+    } else if (!delivering) return;
+    if (this.room(b, u.carryGood) < 1) this.w.notify(b.owner, M.StoresFull, true, ADVISOR_REPEAT_MS);
   }
 
   /**
@@ -471,6 +492,8 @@ export class Logistics {
         // a news seller asking at any building but a news stand is "done" at once, before the
         // queue and the may-enter test: he never enters (request result 3, 4.4 item 2, 8.6)
         if (this.type(u) === U.NewsSeller && this.type(b) !== NEWS_STAND && b.kind === Kind.Building) { this.abortEnter(u); return ENTER_DONE; }
+        // "stores full" is part of the may-enter test, before any goods move (side-panel.md 1.1.6)
+        this.storesFullAtDoor(u, b);
         // the may-enter test runs only at the first request: a unit already queued is never
         // tested again (combat.md 9.1, capacity quirk)
         if (!this.mayEnter(u, b)) { this.abortEnter(u); return -1; }
@@ -961,22 +984,23 @@ export class Logistics {
   }
 
   private atSource(u: Entity, src: Entity, d: number[]): void {
-    // put down anything carried (1 unit) if there is room
+    // put down anything carried (1 unit) if there is room; with no room mentor#17 and that unit is
+    // lost: the amount drops by 1 either way (5.5 "At the source" step 1, side-panel.md 1.1.6 (b))
     if (u.carryAmount > 0) {
       if (this.room(src, u.carryGood) > 0) {
         this.put(src, u.carryGood, 1);
         if (!this.isStore(src)) { src.outputs.push(u.carryGood); const t = this.town(src); if (t) this.requestTransport(t, List.Construction, src.id); }
-        u.carryAmount--;
-        if (!u.carryAmount) u.carryGood = NONE;
       } else this.w.notify(u.owner, M.StoresFull, true, ADVISOR_REPEAT_MS);
+      u.carryAmount--;
+      if (!u.carryAmount) u.carryGood = NONE;
     }
     // pick up 1 unit: the requested good, otherwise the output to collect
     // (the good to fetch stays set until it is dropped at the destination; an output is cleared when taken)
     let g = NONE, out = false;
     if (d[TR.Fetch] >= 0 && this.stockOf(src, d[TR.Fetch]) > 0) g = d[TR.Fetch];
     else if (d[TR.Output] >= 0 && this.stockOf(src, d[TR.Output]) > 0) { g = d[TR.Output]; out = true; }
-    // the pickup happens whatever is still carried (a load the store had no room for): the good
-    // becomes the picked one and the amount goes up by 1 (5.5 "At the source" step 2, quirk)
+    // the pickup happens whatever is still carried (a load left over): the good becomes the
+    // picked one and the amount goes up by 1 (5.5 "At the source" step 2, quirk)
     if (g >= 0) {
       this.take(src, g, 1);
       u.carryGood = g; u.carryAmount++;
@@ -987,9 +1011,10 @@ export class Logistics {
   /** returns true when the job was turned round (an output taken back to a store) */
   private atDestination(u: Entity, b: Entity, d: number[]): boolean {
     if (u.carryAmount > 0) {
-      const stored = this.put(b, u.carryGood, u.carryAmount);
-      if (this.isStore(b) && stored < u.carryAmount) this.w.notify(u.owner, M.StoresFull, true, ADVISOR_REPEAT_MS);
-      u.carryAmount = 0; u.carryGood = NONE;   // the town stock clamps; the excess is lost (economy.md 7)
+      // the town stock clamps; the excess is lost without a line (economy.md 7: "stores full" is
+      // the door test, side-panel.md 1.1.6)
+      this.put(b, u.carryGood, u.carryAmount);
+      u.carryAmount = 0; u.carryGood = NONE;
     }
     // the goods are dropped: nothing is owed to the requester any more (5.5)
     d[TR.Fetch] = NONE;
@@ -1676,8 +1701,8 @@ export class Logistics {
     const e = this.enter(u, s);
     if (e) return e;
     if (u.carryAmount > 0) {
-      const stored = this.put(s, u.carryGood, u.carryAmount);
-      if (stored < u.carryAmount) this.w.notify(u.owner, M.StoresFull, true, ADVISOR_REPEAT_MS);
+      // clamped, the excess is lost; "stores full" was the door test (side-panel.md 1.1.6)
+      this.put(s, u.carryGood, u.carryAmount);
       u.carryAmount = 0; u.carryGood = NONE;
     }
     d[HV.Phase] = 4;

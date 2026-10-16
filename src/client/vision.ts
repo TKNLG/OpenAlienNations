@@ -4,6 +4,12 @@
 // and stays out of the lockstep state and the hash. Instead of the original's event-driven
 // reference counts we rebuild the "visible" layer from the world after every simulation tick
 // (same discs, same sources, same result); "explored" and the per-object "seen" flags accumulate.
+//
+// Sources (3, 3.1): own units on the map (record radius; ships too, passengers and units inside
+// buildings not), own **active** buildings with their record radius (0 = none: houses, workshops,
+// the add-on shipyard...), foreign embassies with contact and foreign market-like buildings at
+// peace. Territory and construction sites give none. "Seen" comes only from discs that are new
+// this tick, on any footprint cell (13: the original marks seen on adds, not on being visible).
 
 import type { World, Entity } from '../engine/world.ts';
 import type { ObjectRule } from '../formats/odb.ts';
@@ -31,6 +37,13 @@ export class Vision {
   private completedExplored = new Set<number>();
   private discs = new Map<number, Int32Array>();
   private lastTick = -1;
+  /** source id -> its disc (centre and radius, packed) at the last update: a change is an "add" */
+  private prevDisc = new Map<number, number>();
+  /** per cell: the update generation whose new discs covered it (marks "seen", 13) */
+  private fresh: Uint32Array;
+  private gen = 0;
+  /** after loading a save the present sources are not new adds (stored seen flags stand, 13) */
+  private primed = true;
   /** MAGICEYE cheat: fog switched off for this display (8) */
   off = false;
   /** bumps whenever `shade` changed (renderers re-upload) */
@@ -41,6 +54,7 @@ export class Vision {
     this.visible = new Uint8Array(size * size);
     this.explored = new Uint8Array(size * size);
     this.shade = new Uint8Array(size * size);
+    this.fresh = new Uint32Array(size * size);
   }
 
   /** offsets (dx, dy) with dx^2 + dy^2 < r^2, packed as pairs (2) */
@@ -55,14 +69,24 @@ export class Vision {
     return d;
   }
 
-  private stamp(cx: number, cy: number, r: number, see: boolean): void {
+  private stamp(cx: number, cy: number, r: number, see: boolean, fresh = false): void {
     if (r <= 0) return;
-    const d = this.disc(r), mask = this.size - 1, bits = this.bits;
+    const d = this.disc(r), mask = this.size - 1, bits = this.bits, gen = this.gen;
     for (let k = 0; k < d.length; k += 2) {
       const i = (((cy + d[k + 1]) & mask) << bits) | ((cx + d[k]) & mask);
       if (see) this.visible[i] = 1;
+      if (fresh) this.fresh[i] = gen;
       this.explored[i] = 1;
     }
+  }
+
+  /** a vision disc of source `id` this update; it is an "add" (marks seen) when new or moved */
+  private see(id: number, cx: number, cy: number, r: number, cur: Map<number, number>): boolean {
+    const key = (r * 1024 + (cy & 1023)) * 1024 + (cx & 1023);
+    cur.set(id, key);
+    const added = this.primed && this.prevDisc.get(id) !== key;
+    this.stamp(cx, cy, r, true, added);
+    return added;
   }
 
   /** rebuild after the world advanced; cheap enough to run once per simulation tick */
@@ -70,34 +94,52 @@ export class Vision {
     if (!force && w.tick === this.lastTick) return;
     this.lastTick = w.tick;
     this.visible.fill(0);
+    this.gen = (this.gen + 1) >>> 0 || 1;
+    const cur = new Map<number, number>();
+    let added = false;
     const rel = (o: number) => w.diplomacy.relation(player, o);
     for (const e of w.entities) {
       if (!e.alive && e.kind === KIND_UNIT) continue;
       const race = e.oid >>> 16;
       const r = w.rules.get(e.oid);
+      // radius 0 covers no cell (2): criminals, most buildings, the add-on shipyard (3.1)
       if (!r || r.radius <= 0) continue;
       const cx = Math.floor(e.x / SUB), cy = Math.floor(e.y / SUB);
       if (e.kind === KIND_UNIT) {
         // units inside a building or a ship (passengers, addon.md 5.1) see nothing; ships see their record radius
-        if (race === player && e.inside < 0) this.stamp(cx, cy, r.radius, true);
+        if (race === player && e.inside < 0) added = this.see(e.id, cx, cy, r.radius, cur) || added;
       } else if (e.kind === KIND_BUILDING) {
         if (race === player) {
+          // completion explores the radius once, without sight (3.1); sites never see
           if (e.complete && !this.completedExplored.has(e.id)) { this.completedExplored.add(e.id); this.stamp(cx, cy, r.radius, false); }
-          if (e.active) this.stamp(cx, cy, r.radius, true);
+          if (e.active) added = this.see(e.id, cx, cy, r.radius, cur) || added;
         } else if (e.active && race <= 2) {
           // a foreign market-like building (market, add-on harbour: flag 0x20, addon.md 3.3) at peace
           const type = e.oid & 0xffff, s = rel(race);
           const marketLike = type === MARKET || (r.flags & FLAG_MARKET_LIKE) !== 0;
-          if ((type === EMBASSY && s !== 0) || (marketLike && s === 3)) this.stamp(cx, cy, r.radius, true);
+          if ((type === EMBASSY && s !== 0) || (marketLike && s === 3)) added = this.see(e.id, cx, cy, r.radius, cur) || added;
         }
       }
     }
-    // static objects under a vision disc become "seen" (they stay drawn, dimmed, in explored fog)
-    const mask = this.size - 1;
-    for (const e of w.entities) {
-      if (!this.isStatic(e, w.rules.get(e.oid))) continue;
-      const i = ((Math.floor(e.y / SUB) & mask) << this.bits) | (Math.floor(e.x / SUB) & mask);
-      if (this.visible[i]) this.seen.add(e.id);
+    this.prevDisc = cur;
+    this.primed = true;
+    // static objects with any cell under a new disc become "seen" (13): they stay drawn, dimmed,
+    // in explored fog. A building holds every footprint cell (x - sizeX + 1 .. x, y - sizeY + 1 .. y)
+    if (added) {
+      const mask = this.size - 1, gen = this.gen, fresh = this.fresh;
+      for (const e of w.entities) {
+        if (this.seen.has(e.id)) continue;
+        const r = w.rules.get(e.oid);
+        if (!this.isStatic(e, r)) continue;
+        const x = Math.floor(e.x / SUB), y = Math.floor(e.y / SUB);
+        const fx = e.kind === KIND_BUILDING ? Math.max(1, r?.sizeX ?? 1) : 1;
+        const fy = e.kind === KIND_BUILDING ? Math.max(1, r?.sizeY ?? 1) : 1;
+        let hit = false;
+        for (let dy = 0; dy < fy && !hit; dy++) for (let dx = 0; dx < fx; dx++) {
+          if (fresh[(((y - dy) & mask) << this.bits) | ((x - dx) & mask)] === gen) { hit = true; break; }
+        }
+        if (hit) this.seen.add(e.id);
+      }
     }
     const sh = this.shade, vis = this.visible, ex = this.explored;
     for (let i = 0; i < sh.length; i++) sh[i] = vis[i] ? 255 : ex[i] ? 128 : 0;
@@ -159,5 +201,8 @@ export class Vision {
     }
     if (seen) for (const id of seen) this.seen.add(id);
     this.lastTick = -1;
+    // the sources standing at load are not new adds: only later adds mark more objects seen (13)
+    this.prevDisc.clear();
+    this.primed = false;
   }
 }

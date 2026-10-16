@@ -317,9 +317,11 @@ export class Economy {
     b.active = false;
     if (!t || !r) return;
     t.overheads -= r.money;
-    if (this.addsCapacity(r)) {
+    // losing a store (economy.md 7): GOG tests the store flag and +0x120 not 0, so a market (0)
+    // scales nothing; W = every warehouse in the town's type list, i.e. sites and the dying one too
+    if (this.addsCapacity(r) && (this.host.addon || r.amount !== 0)) {
       t.capacity -= r.amount;
-      const w = this.count(t, T.Warehouse);
+      const w = this.count(t, T.Warehouse, false);
       for (let g = 0; g < GOODS; g++) t.stock[g] = Math.trunc((t.stock[g] * w) / (w + 1));
     }
     if (this.isNeedBuilding(r)) this.needDeactivated(t, b, r);

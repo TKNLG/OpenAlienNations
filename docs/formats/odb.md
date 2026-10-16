@@ -269,8 +269,9 @@ Harvest rule (`004635f0`): a porter (9) may take bushes (class 9), its own race'
   the Sajiki small one 3, more than their capacity.
 - **Radius** (+0xB0): town hall 25 = town area (`0045dc10`; the AI spaces towns 2 x radius apart,
   `0046c1a0`). Outposts 15/25 broadcast a territory message with it (`004602d0`). The territory
-  disc has radius (R - 2) div 2 in 2 x 2 blocks: `docs/game/economy.md` 11. Watchtower 30,
-  embassy and market 6, mine 8: their use is through the same radius scans (I).
+  disc has radius (R - 2) div 2 in 2 x 2 blocks: `docs/game/economy.md` 11. Every building's
+  +0xB0 is also its **vision radius** while active (watchtower 30, embassy, market and add-on
+  harbour 6, mine 8; 0 = no vision): `docs/game/fog-of-war.md` 3.1.
 - **Needs** (+0x128, +0x12C, +0x130): see section 6.
 - **Special types handled in code**:
   - 40 town hall: completion creates a builder and 2 porters and sets the start stock from a
@@ -347,7 +348,8 @@ Harvest rule (`004635f0`): a porter (9) may take bushes (class 9), its own race'
 - +0x114 (1 on every unit): no reader found. Likely a population or headcount weight that the
   final game no longer reads.
 - Class values -1 and 4 on buildings: no reader that distinguishes them was found.
-- +0xB0 on watchtower, mine, embassy and market: the exact consumer of each is not identified.
+- +0xB0 on watchtower, mine, embassy and market: read as the vision radius (`fog-of-war.md` 3.1);
+  no other consumer identified.
 - +0xDC = 1 on the laboratory: no reader for non-outposts.
 - Unit +0xB8 values, goods +0x120/+0xD8, nature +0xD8/+0xE8: no reader.
 - Real-time length of a tick: see the scheduler, not part of this file.
