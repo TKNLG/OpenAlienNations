@@ -415,9 +415,12 @@ Map sizes and the scaled radii (r × s, (r + 1) × s):
   footprint grown by one cell must be **currently visible** for the preview to be valid. The
   simulation's own check (`00451780`) uses the mask without 0x80 and accepts any cell (C). The
   click runs the same test with the same stored mask again and sends no build command when it
-  fails (C, `0x440C73`; Gold `0x440254`). This holds for **every** building type, the mine, the
+  fails (C, `0x440C73`; Gold `0x444CF7`). This holds for **every** building type, the mine, the
   town hall and the add-on harbour and shipyard included: explored-but-fogged cells are refused
-  like unexplored ones. The special status of those four types is the territory exemption
+  like unexplored ones. **Founding a town** is no exception: the founder's `GRUENDEN` button is a
+  build button for type 40 and uses the same placement start, the same stored mask with 0x80
+  and the same click test; only the command sent differs (0x13 instead of 0x17). Nothing is
+  re-tested when the founder later walks to the site (`units-and-jobs.md` 6.1.1, 11.1). The special status of those four types is the territory exemption
   (`economy.md` 11.7), not a fog exemption (`units-and-jobs.md` 6.1.1, with the Gold mine
   preview quirk).
 - **Death effects** play only for drawn objects (combat.md 6), so deaths in the fog are silent
@@ -565,7 +568,8 @@ After loading a save, the stored seen flags stand; the sources present at load a
   `count[anchor] === 0`. Hide border stones outside visible cells.
 - Picking: hit-test only what was drawn.
 - Placement preview and click: invalid unless every cell of the footprint grown by one has
-  `count > 0`, for every building type (mine, town hall, harbour, shipyard included), and also
+  `count > 0`, for every building type (mine, town hall, harbour, shipyard included; the founder's
+  town hall uses this same test), and also
   while MAGICEYE has fog switched off (the test reads the counters, not the fog bit). Keep the
   simulation's placement check fog-free. In add-on island games, reproduce the Gold mine ghost
   quirk of `units-and-jobs.md` 6.1.1 in the ghost colour only, never in the click.

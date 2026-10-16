@@ -1718,8 +1718,8 @@ The same area scan (`00447cd0`, Gold `0044bdb0`) runs in three places with diffe
 
 | caller | mask | visibility | territory | evidence |
 |---|---|---|---|---|
-| **UI preview** (ghost colour, every cursor move) | type mask **+ 0x80** | every cell of the footprint grown by one must be **currently in sight** (viewer counter > 0) | 0x800 corner test (types with 0x800 in their mask), 0x1000 for the town hall | mask set once at placement start: `0x441E4B` call, `or al,0x80` at `0x441E57` (Gold `0x445ED7`); test `00441e80` (Gold `00445f00`) |
-| **UI click** (the only sender of the build command, message 0x17) | the same stored mask (+0x80) | same | same | `004404a0`: `call 0x447cd0` at `0x440C73`, any non-zero result jumps over the command (`jne 0x440E25`); Gold `0x440254` region (returns at once on non-zero) |
+| **UI preview** (ghost colour, every cursor move) | type mask **+ 0x80** | every cell of the footprint grown by one must be **currently in sight** (viewer counter > 0) | 0x800 corner test (types with 0x800 in their mask), 0x1000 for the town hall | mask set once at placement start: `0x441E4B` call, `or al,0x80` at `0x441E57` (Gold `0x445ED7`); test `00441e80` call at `0x441F4B` (Gold `00445f00`, call at `0x445FCB`) |
+| **UI click** (the only sender of the build command 0x17 and of the found-town command 0x13) | the same stored mask (+0x80) | same | same | `004404a0`: `call 0x447cd0` at `0x440C73`, any non-zero result jumps over the command (`jne 0x440E25`); Gold `00444520`: `call 0x44bdb0` at `0x444CF7`, `jne 0x444EA9` |
 | **simulation** (command execution, also on every network peer) | type mask, **no 0x80** | **none** | **none** | `0x45196F`..`0x451984`: per-cell flags OR-ed, then `test` with the `0045f0a0` mask; Gold `0x4573FD`..`0x45740E` |
 | **computer player** site search | type mask + 0x100 (not mine / outposts), no 0x80 | none (computer players are omniscient) | 0x800 / 0x1000 as for the UI | `0046c39c`, `0046c4b6`; `ai-diplomacy-trade.md` 1.5 |
 
@@ -1749,10 +1749,54 @@ Consequences:
   changes; in add-on island games the mine ghost turns green over the sea and over every other
   island wherever the placement fails (in the fog too).
 
+**Founding uses the same path (C, re-checked at instruction level, base and Gold).** A town
+hall is placed only through the founder's `GRUENDEN` button, and that button is not a separate
+mode: it is an object of the **same button class** as the build-page buttons (vtable `0x4A5F5C`,
+Gold `0x4B2BB4`), created on the founder's info page (`0x4183AC`..`0x4183BC`, Gold
+`0x41BA37`..`0x41BA47`; only when the selected unit's type is 10) with race = the local race and
+type = **40**. Its click method (`00415620`, Gold `00418bb0`) is the **only caller** of the
+placement-start routine (`00441c40`, Gold `00445cc0`), for build buttons and the founder alike.
+That routine has no type test before `or al,0x80`; the stored mask (view +0x64) is written
+nowhere else (`0x441E59` is the only store). The preview and the click treat type 40 differently
+in exactly two points, both unrelated to fog:
+
+- the town argument of the area scan is −1 instead of the current town (`0x440C3E`, preview
+  `0x441F0C`; Gold `0x444CC2`), so the 0x800 own-territory test cannot apply (the town-hall mask
+  has no 0x800 anyway; the 0x1000 "outside every territory" test does apply);
+- a valid click sends **0x13 "found town"** (`0x440CF5`..`0x440D24`, Gold `0x444D79`..`0x444D9C`)
+  instead of 0x17 "build" (11.1).
+
+There is no other sender of 0x13 (the only other use of its message class, `0x45373C`, is the
+network-receive factory), no founder cursor state, no hotkey, and no "found when the founder
+arrives" variant: the found-town job (11.3) walks to a site that already exists and tests
+nothing about it. The simulation's re-check of 0x13 (`004509d0`, mask 0x7E) has no fog or
+territory test (11.2). Result for founding:
+
+| site state (grown footprint, local player's view) | `GRUENDEN` ghost | click |
+|---|---|---|
+| every cell in sight (counter > 0), terrain fine, outside every territory | green | found-town command sent |
+| one or more cells explored but not in sight | red | nothing happens, mode stays |
+| one or more cells unexplored | red | nothing happens, mode stays |
+| in sight but touching any territory (0x1000) | red | nothing |
+
+So the town hall needs current sight **exactly like a house**; it is not placeable in
+explored-but-fogged land. The rule is checked only at the click; once the command is sent, the
+founder may walk out of sight of the site (or the site may fall back into fog) without effect.
+In practice the sight usually comes from the founder himself: his disc has radius 10
+(dx² + dy² < 100), so with no other source the grown footprint (town hall 2×3, 3×2 or 4×4, plus
+one cell) must lie within about 9 cells of him. Other sources that put land outside every
+territory in sight: scouts (15), watchtowers (30, more than the town hall's territory radius 25),
+outposts, soldiers and hunters (10), add-on ships (8..12), foreign embassies and markets
+(`fog-of-war.md` 3.1). A player who remembers founding "in the fog" most likely sent the founder
+and clicked once his own disc had reached the spot; an enhanced option could relax the rule for
+type 40 (not original).
+
 *Our build (October 2026):* UI test in `src/client/placement.ts` (`placementAllowed` for the click,
-`ghostAllowed` for the ghost colour with the Gold mine quirk; the sight test reads the vision layer
-even under MAGICEYE), simulation test `Logistics.canPlaceSite`, territory in `Logistics.canPlace`;
-tests in `test/placement.test.ts`. The player report "mine, harbour and shipyard can be placed on
+`ghostAllowed` for the ghost colour with the Gold mine quirk, `foundingAllowed` for the founder's
+town hall, used for both its ghost and its click; the sight test reads the vision layer even under
+MAGICEYE), simulation tests `Logistics.canPlaceSite` and `Logistics.canFound(..., false)` (no fog,
+no territory), territory in `Logistics.canPlace`; tests in `test/placement.test.ts` and
+`test/founding.test.ts`. The player report "mine, harbour and shipyard can be placed on
 explored but fogged ground" does not match the code above; the remembered freedom is the
 territory exemption (plus ships and active mines giving sight).
 
@@ -3525,7 +3569,11 @@ only here and in the training page (T202). The simulation itself never checks it
 
 **Placement mode** (`00441c40`). Clicking the button enters the normal building-placement mode
 (see `docs/ui/side-panel.md` 5.3) for the race's town-hall record (type 40). The preview mask is
-the town-hall mask 0x107E plus 0x80, i.e. 0x10FE.
+the town-hall mask 0x107E plus 0x80, i.e. 0x10FE. The button is a build-page button object with
+type 40 and goes through the very same start routine as every building; there is no separate
+founder mode, cursor state or mask (re-checked at instruction level, base and Gold: 6.1.1
+"Founding uses the same path"). The ghost is the town-hall picture under the cursor, green when
+the click test below passes and red otherwise, so it is red over explored-but-fogged land.
 
 **Click test** (`00447cd0`, called from the world-view click handler `004404a0`). (X, Y) is the
 cursor cell, which is the max corner of the footprint, as in 6.1. The click is valid when none of
@@ -3537,7 +3585,9 @@ these flags is found:
   - 0x08, a special object;
   - 0x10, a nature object;
   - 0x20, the terrain-byte class (6.1);
-  - 0x80, the cell is not currently visible (`docs/game/fog-of-war.md` 6).
+  - 0x80, the cell is not currently visible: the local player's viewer counter of the cell is 0
+    (`docs/game/fog-of-war.md` 6). Explored-but-fogged and unexplored cells both fail; there is
+    no exemption for the town hall or the founder.
 - 0x40 (too steep): on the ring of cells at distance 2, the highest and lowest heights differ by
   more than 64.
 - 0x1000 (**territory**): the town-border map is looked up at four points, (X+1, Y+1),

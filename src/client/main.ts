@@ -25,7 +25,7 @@ import { Music } from './audio.ts';
 import { fetchBytes } from './data.ts';
 import { Minimap } from './minimap.ts';
 import { Vision } from './vision.ts';
-import { footprintInSight, placementAllowed, ghostAllowed } from './placement.ts';
+import { placementAllowed, ghostAllowed, foundingAllowed } from './placement.ts';
 import { showBriefing } from './briefing.ts';
 import { Looks, type Pick } from './looks.ts';
 import { Displays, isFish, offsetPixels, type DisplayRng } from './display.ts';
@@ -543,11 +543,6 @@ class Game implements HudHost {
   onMenu: () => void = () => {};
   get playerTowns() { return this.world?.economy.towns.filter(t => t.race === this.player && t.alive) ?? []; }
 
-  /** fog-of-war.md 6: placement needs the footprint grown by one cell to be in sight (MAGICEYE does not lift it) */
-  private inSight(r: { sizeX: number; sizeY: number }, x: number, y: number): boolean {
-    return footprintInSight(this.vision, r, x, y);
-  }
-
   /** place the building being placed at a screen point; true if the command was sent */
   private placeAt(sx: number, sy: number): boolean {
     const w = this.world, t = this.activeTown();
@@ -735,11 +730,10 @@ class Game implements HudHost {
     this.recomputeCursor();   // hidden over the world view (5.4)
   }
 
-  /** 11.1 click test: free area, flat enough, outside every town area, in sight */
+  /** 11.1 click test: free area, flat enough, outside every town area, in sight (fog-of-war.md 6; MAGICEYE does not lift it) */
   private canFoundHere(x: number, y: number): boolean {
     const w = this.world;
-    const r = w?.rules.get(((this.player << 16) | 40) >>> 0);
-    return !!w && !!r && w.logistics.canFound(this.player, x, y, true) && this.inSight(r, x, y);
+    return !!w && foundingAllowed(w, this.player, x, y, this.vision);
   }
 
   /**

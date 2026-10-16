@@ -4,8 +4,10 @@
 // The UI tests the type's mask plus the visibility bit: every cell of the footprint grown by one
 // cell must be in sight of the local player, for every building type (mine, town hall, add-on
 // harbour and shipyard included; their special status is the territory exemption, which lives in
-// `Logistics.canPlace`). Fog is per machine and not simulation state, so this test exists only
-// here; the simulation re-checks the command without fog or territory (`canPlaceSite`).
+// `Logistics.canPlace`). The founder's town hall (`GRUENDEN`) is a build button for type 40 in the
+// original and gets the same sight test (`foundingAllowed`). Fog is per machine and not simulation
+// state, so this test exists only here; the simulation re-checks the build and found-town commands
+// without fog or territory (`canPlaceSite`, `canFound(..., false)`).
 
 import type { World } from '../engine/world.ts';
 import type { Town } from '../engine/economy.ts';
@@ -13,6 +15,7 @@ import type { ObjectRule } from '../formats/odb.ts';
 import type { Vision } from './vision.ts';
 
 const MINE = 50;
+const TOWN_HALL = 40;
 
 /**
  * Visibility part of the UI test: the footprint (max corner x, y) grown by one cell on every side
@@ -29,6 +32,17 @@ export function footprintInSight(v: Vision | null | undefined, r: { sizeX: numbe
 /** the UI's click test for a building (not the town hall of a founding): placement rule, territory, in sight */
 export function placementAllowed(w: World, t: Town, r: ObjectRule, x: number, y: number, v: Vision | null | undefined): boolean {
   return w.logistics.canPlace(t, r, x, y) && footprintInSight(v, r, x, y);
+}
+
+/**
+ * The UI's click test (and ghost colour) for the founder's `GRUENDEN` town hall (units-and-jobs.md
+ * 11.1, 6.1.1 "Founding uses the same path"): the town-hall rule (free area, slope, outside every
+ * territory) plus the same sight test as every building. The founder has no fog exemption:
+ * explored-but-fogged and unexplored cells are refused alike.
+ */
+export function foundingAllowed(w: World, race: number, x: number, y: number, v: Vision | null | undefined): boolean {
+  const r = w.rules.get(((race << 16) | TOWN_HALL) >>> 0);
+  return !!r && w.logistics.canFound(race, x, y, true) && footprintInSight(v, r, x, y);
 }
 
 /**
