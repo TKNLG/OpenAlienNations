@@ -46,3 +46,11 @@ their own copy. They are optional: switch them off in the game under
 Settings -> Graphics -> "HD-Grafik", or leave them out entirely by deleting the hd/ folder
 (source checkout or own builds) or by starting the server with --hd pointing at an empty
 folder.
+
+Banner images (folder docs/images/) - NOT covered by the GPL
+------------------------------------------------------------
+
+The banner images in docs/images/ are screenshots of OpenAlienNations running with the
+artwork of the original game. They show that artwork, so, like hd/, they are NOT covered by
+the GNU General Public License, and the copyright of the original rights holders applies to
+them. They are used only to illustrate the project.

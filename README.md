@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/banner-en.png" alt="OpenAlienNations"></p>
+
 **English** · [Deutsch](README.de.md)
 
 # OpenAlienNations
@@ -241,5 +243,7 @@ differences from the original as [issues](../../issues), send fixes as pull requ
 - The **HD interface pack** in `hd/` is upscaled from the original game's interface artwork, so
   it is **not** covered by the GPL; the original rights holders' copyright applies. It is
   included only so that owners of the game can use it, and it can be switched off or removed.
+- The banner images in `docs/images/` show the remake running with the original game's artwork,
+  so like `hd/` they are **not** covered by the GPL.
 
 Details: [NOTICE](NOTICE).

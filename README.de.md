@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/banner-de.png" alt="OpenAlienNations"></p>
+
 [English](README.md) · **Deutsch**
 
 # OpenAlienNations
@@ -252,5 +254,7 @@ Original bitte als [Issue](../../issues) melden, Korrekturen als Pull Request sc
   hochskaliert und fällt daher **nicht** unter die GPL; es gilt das Urheberrecht der
   ursprünglichen Rechteinhaber. Es liegt nur bei, damit Besitzer des Spiels es nutzen können,
   und lässt sich abschalten oder entfernen.
+- Die Bannerbilder in `docs/images/` zeigen den Nachbau mit den Grafiken des Originalspiels und
+  fallen daher wie `hd/` **nicht** unter die GPL.
 
 Einzelheiten (englisch): [NOTICE](NOTICE).
