@@ -1,6 +1,6 @@
 {
   "name": "openaliennations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "OpenAlienNations: open-source browser remake of Alien Nations / Die Voelker. Requires your own copy of the game.",
   "license": "GPL-3.0-or-later",
