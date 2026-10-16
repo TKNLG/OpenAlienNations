@@ -880,7 +880,8 @@ Repairs (builders, money) are outside this document.
   and deactivation is phase 1, so the dying warehouse is **still counted**: losing one of two
   warehouses keeps 2/3 of everything, losing the only warehouse keeps 1/2. Unfinished warehouse
   sites raise W (they keep more). The town hall uses the same formula, but its loss destroys the
-  town.
+  town. *Our build (fixed October 2026) counted only the other active warehouses (losing the only
+  warehouse emptied every stock) and scaled on a market's loss too.*
 - **Full stores (C):** mentor#17 "Your stores are full!" is said when a unit carrying goods on a
   transport job first asks to enter a building that has no room for **that good** (a store: town
   stock[g] ≥ capacity; another building: local stock[g] ≥ its +0x120; entry is still allowed,

@@ -306,6 +306,12 @@ they never hear it (1.1.1).
 25 x (1 + warehouses). A town showing "150 / Typ" says it only for a delivery of a good whose
 stock is 150; a full stock of one good does not make deliveries of the others say it.
 
+*Our build (fixed October 2026): the line was said after each drop when fewer units were stored
+than carried. With the crop ring on (economy.md 7) a delivered crop is converted to food and the
+crop stock does not grow, so every farm delivery said "stores full" with plenty of room; partial
+hunter loads did the same. Now `Logistics.storesFullAtDoor` is the may-enter test (a) and the
+source put-down (b) loses the unit; test `test/stores-full.test.ts`.*
+
 ## 2. Panel background and sprites
 
 - Background: `INTERFACE1024` (192x768), blitted opaque (its alpha is 0 everywhere; ignore
