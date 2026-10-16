@@ -736,6 +736,12 @@ export class Combat {
       if (r > 0) return r;
       d[GD.Attacking] = 0;
       d[GD.Walking] = 0;
+    } else if (u.path) {
+      // the walk child's delay is the guard's: no run, and so no scan, inside a step or a wait of
+      // the walk; the scan comes once per step, when the step is over (8.1)
+      const tick = this.w.tick, stepEnd = u.stepStart + u.stepTicks;
+      if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
+      if (u.moveAt > tick) return u.moveAt - tick;
     }
     // the walk child has finished: the next waypoint, cyclically, before the scan (8.1 step 1)
     if (d[GD.Walking] && !u.path) { d[GD.Index] = (d[GD.Index] + 1) % Math.max(1, d[GD.Count]); d[GD.Walking] = 0; }
@@ -750,12 +756,8 @@ export class Combat {
       d[GD.Attacking] = 1;
       return 1;
     }
-    if (u.path) {
-      // the walk's own delay is the guard's: the next scan comes when the step under way is over (8.1)
-      const tick = this.w.tick, stepEnd = u.stepStart + u.stepTicks;
-      if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
-      return u.moveAt > tick ? u.moveAt - tick : 1;
-    }
+    // the next step starts at this tick's motion run; the next run comes when it has been played
+    if (u.path) return 1;
     const i = d[GD.Index];
     const wx = d[GD.Points + 2 * i], wy = d[GD.Points + 2 * i + 1];
     if (x !== wx || y !== wy) {

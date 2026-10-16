@@ -25,8 +25,11 @@ const LJ_FOUND = 0x0e;
 export { AiJob, isAiJob, Grp, U, B, ring } from './ai-defs.ts';
 
 const SUBCELL = 256;
-const ATTACK_JOB = 0x08;
 const isSoldier = (t: number) => t >= U.Archer && t <= U.LastSoldier;
+/** army candidate types in collection order (2.3 step 3); the add-on adds the warships 65, 66 */
+const CANDIDATES = [U.Hunter, 29, 30, 31, 32, 33, 34, 35, 36];
+const LIGHT_WARSHIP = 65, HEAVY_WARSHIP = 66;
+const CANDIDATES_AO = [...CANDIDATES, LIGHT_WARSHIP, HEAVY_WARSHIP];
 
 /** the six strategy profiles (1.2): weights in 1/1000 */
 interface Profile {
@@ -340,8 +343,9 @@ export class Ai {
       if (pr !== 3 && pr !== 5) this.scouts(ps, t, s);
       if (pr === 4) continue;
       this.troopWants(ps, t, s, prof);
-      // army candidates (2.3 step 3, `00468b10`): free group-0 hunters first, then soldiers 29..36
-      for (const ty of [U.Hunter, 29, 30, 31, 32, 33, 34, 35, 36]) {
+      // army candidates (2.3 step 3, `00468b10`): free group-0 hunters first, then soldiers 29..36;
+      // add-on mode: then the free light and heavy warships (`00470140`)
+      for (const ty of this.w.addon ? CANDIDATES_AO : CANDIDATES) {
         for (const e of this.w.entities) {
           if (e.kind === KIND_UNIT && e.town === t.id && (e.oid & 0xffff) === ty && (e.oid >>> 16) === t.race && this.free(e)) candidates.push(e);
         }
@@ -645,52 +649,55 @@ export class Ai {
     this.joinArmy(ps, members);
   }
 
-  /** candidates join the army; those farther than 20 cells from the target walk there (`00465ad0`) */
+  /**
+   * Candidates join the army (`00465ad0`; Gold `0046c050`, spec 2.5 "Joining and moving"): group
+   * 53; a member farther than 20 cells from the target point walks there on its own. Add-on mode:
+   * joining warships sail to the nearest ship cell of the target town; the land units are grouped
+   * by island, the group on the target's island walks as in the base game, every other group makes
+   * one transport request (pickup = its first member, destination = the target point) and its
+   * members wait for the ship (job 0x3E), whatever the request's result.
+   */
   private joinArmy(ps: AiPlayer, cands: Entity[]): void {
     const t = this.w.economy.town(ps.armyTown);
     if (!t) return;
+    const joined: Entity[] = [];
     for (const u of cands) {
       if (u.group !== Grp.None) continue;
       u.group = Grp.Army;
       ps.armyMembers.push(u.id);
-      if (this.distTo(u, t.x, t.y) > 20) { this.w.logistics.cancelJob(u); this.walkToward(u, t.x, t.y); }
+      joined.push(u);
     }
     ps.armyMembers.sort((a, b) => a - b);
-  }
-
-  /** the unit runs an attack job */
-  private attacking(u: Entity): boolean {
-    const j = u.job ? this.w.sched.get(u.job) : undefined;
-    return !!j && !j.cancelled && j.kind === ATTACK_JOB;
-  }
-
-  /** a unit waits for, walks to, or leaves a ship of the naval planner */
-  private ferried(u: Entity): boolean {
-    if (!this.w.addon) return false;
-    const j = u.job ? this.w.sched.get(u.job) : undefined;
-    return !!j && !j.cancelled && (j.kind === NJ.Wait || j.kind === NJ.Board || j.kind === NJ.LeaveShip);
-  }
-
-  /** army members on another island than the target are grouped by island, one ship request per group (addon.md 8.4 "Army") */
-  private armyFerry(ps: AiPlayer, members: Entity[], x: number, y: number): void {
-    const target = this.w.islandAt(x, y);
-    if (target === 0) return;
+    const walkIn = (u: Entity) => {
+      if (this.distTo(u, t.x, t.y) > 20) { this.w.logistics.cancelJob(u); this.walkToward(u, t.x, t.y); }
+    };
+    if (!this.w.addon) { for (const u of joined) walkIn(u); return; }
     const groups = new Map<number, Entity[]>();
-    for (const u of members) {
-      if (u.inside >= 0 || this.ferried(u)) continue;
+    for (const u of joined) {
+      if (this.w.isShip(u)) { this.sailToTown(u, t); continue; }
       const isl = this.w.islandAt(...this.cell(u));
-      if (isl === 0 || isl === target) continue;
-      const g = groups.get(isl) ?? [];
-      g.push(u);
-      groups.set(isl, g);
+      const g = groups.get(isl);
+      if (g) g.push(u); else groups.set(isl, [u]);
     }
+    if (!this.w.naval.planner(ps.race)) return;
+    const target = this.w.islandAt(t.x, t.y);
     for (const isl of [...groups.keys()].sort((a, b) => a - b)) {
       const g = groups.get(isl)!;
+      if (isl === target) { for (const u of g) walkIn(u); continue; }
       const [px, py] = this.cell(g[0]);
-      const req = this.w.naval.request(ps.race, g.length, 0, px, py, x, y);
-      if (!req) continue;
-      for (const u of g) this.w.naval.addWaiting(ps.race, req, u);
+      const req = this.w.naval.request(ps.race, g.length, 0, px, py, t.x, t.y, 8);
+      for (const u of g) {
+        if (req) this.w.naval.addWaiting(ps.race, req, u);
+        else this.w.logistics.assign(u, NJ.Wait, 5, []);
+      }
     }
+  }
+
+  /** a joining warship sails to the first cell of a spiral around the target town that a ship may use (`0046c050`) */
+  private sailToTown(u: Entity, t: Town): void {
+    this.w.logistics.cancelJob(u);
+    const c = this.w.naval.spiral(t.x, t.y, this.w.size >> 1, (px, py) => this.w.shipBlocked[(this.mask(py) << this.w.bits) | this.mask(px)] === 0);
+    if (c) this.walk(u, c[0], c[1], 30000);
   }
 
   /** every surviving member is released and walks home; the player's army slot is cleared (`004657c0`) */
@@ -720,7 +727,6 @@ export class Ai {
     ps.armyMembers = members.map(u => u.id);
     if (!members.length) return this.endArmy(ps);
     const [x, y] = [d[1], d[2]];
-    if (this.w.addon) this.armyFerry(ps, members, x, y);
     const R = 40;
     // candidates: alive objects of a race 0..2; with a target town (always, here) only those of
     // the target town's race, without a relation test (2.5 step 3)
@@ -770,18 +776,22 @@ export class Ai {
       reassign = cc => b === 0 && cc > 0;
     }
     if (!targets.length) return this.endArmy(ps);   // success
-    // members on board or waiting for a ship are left alone (addon.md 8.4 "Strategy"); members
-    // without an attack job that are far away (outside the circle and the target town's
-    // territory) are left walking, idle ones walk on in legs (deviation T)
+    // members without an attack job (2.5 step 6): one with another job (walking, waiting for or
+    // walking to a ship) is taken only within 40 cells of the target point or inside the target
+    // town's territory, otherwise left alone; an idle one is taken wherever it stands, except
+    // that ours first walks it in legs while it is that far (deviation T); a warship is always
+    // taken. Members aboard a transport are skipped and not counted (Gold); members inside
+    // another building are skipped too (ours).
     const far = (u: Entity): boolean => {
       const [ux, uy] = this.cell(u);
-      if (this.dist(ux, uy, x, y) > R && this.w.territory.ownerAt(ux, uy) !== tt.id) {
-        if (!u.path && !this.attacking(u)) { this.w.logistics.cancelJob(u); this.walkToward(u, x, y); }
-        return true;
-      }
-      return false;
+      if (this.dist(ux, uy, x, y) < R || this.w.territory.ownerAt(ux, uy) === tt.id) return false;
+      const j = u.job ? this.w.sched.get(u.job) : undefined;
+      if ((j && !j.cancelled) || u.path) return true;
+      if (this.w.isShip(u)) return false;
+      this.walkToward(u, x, y);
+      return true;
     };
-    assignArmy(this, members.filter(u => u.inside < 0 && !this.ferried(u)), targets, perTarget, reassign, far);
+    assignArmy(this, members.filter(u => u.inside < 0), targets, perTarget, reassign, far);
     d[3] = this.rand() & 1;
     return 50;
   }

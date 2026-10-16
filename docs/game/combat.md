@@ -1010,6 +1010,22 @@ Notes:
   strike the help rule pulls in every armed unit within 12 cells of each victim, and the retarget
   keeps each fighter on the enemy race after every kill.
 
+*Our build (fixed October 2026; `test/engagement.test.ts`):*
+- *The retarget after a kill did nothing: a dead target is removed from our world at once, so the
+  scan had no centre and no race, the attack ended and the killer stood idle until a friend within
+  12 cells was struck again (the "auto-battle stops" and "wrong target order" seen in group
+  fights). Now `World.remove` calls `Combat.targetGone`, which writes the dead object's cell, race
+  and tier into every top-level attack and guard attack that still names it (the plan slots, with
+  the plan state "gone"; no snapshot change); the next run retargets from them (3.6), and the
+  retaliation test of 7.2 reads the stored tier.*
+- *Player orders: a move order's walk now counts as a player order (no retaliation, no flight
+  while walking), as do the arrest and heal jobs of a right-click order; the go-home walk and the
+  patrol button's guard job do not. `Entity.ordered` is cleared by every job maker
+  (`logistics.assign`, guard, heal, arrest) and set by the order command after its jobs exist, so
+  a dispatcher job given after an old order is no longer taken for one.*
+- *The guard job scanned every tick while walking; it now runs (and scans) once per run of its
+  walk, at the end of each step or wait, and advances the waypoint before the scan.*
+
 ---
 
 ## 9. Outposts and garrisons (0x1C, 0x1B)
