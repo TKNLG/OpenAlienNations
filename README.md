@@ -1,6 +1,6 @@
-<p align="center"><img src="docs/images/banner-en.png" alt="OpenAlienNations"></p>
+<p align="center">🇬🇧 <b>English</b> &nbsp;|&nbsp; 🇩🇪 <a href="README.de.md">Deutsch</a></p>
 
-**English** · [Deutsch](README.de.md)
+<p align="center"><img src="docs/images/banner-en.png" alt="OpenAlienNations"></p>
 
 # OpenAlienNations
 
