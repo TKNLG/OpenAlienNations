@@ -1,6 +1,6 @@
 // Builds the single-executable release (Node SEA) for the platform it runs on:
 //
-//   node tools/sea/build-sea.mjs [--name AlienNations]   -> build/sea/AlienNations[.exe]
+//   node tools/sea/build-sea.mjs [--name OpenAlienNations]   -> build/sea/OpenAlienNations[.exe]
 //
 // 1. node build.mjs (dist/)
 // 2. bundle dist/server/main.js into one CommonJS file with esbuild (SEA needs a single script)
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
-const name = args.includes('--name') ? args[args.indexOf('--name') + 1] : 'AlienNations';
+const name = args.includes('--name') ? args[args.indexOf('--name') + 1] : 'OpenAlienNations';
 const out = join(root, 'build', 'sea');
 const win = process.platform === 'win32';
 const ESBUILD = process.env.ESBUILD || 'npx --yes esbuild@0.28.2';
@@ -78,4 +78,4 @@ sh(`${POSTJECT} ${q(exe)} NODE_SEA_BLOB ${q(blob)} --sentinel-fuse ${FUSE}`
    + (process.platform === 'darwin' ? ' --macho-segment-name NODE_SEA' : ''));
 
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
-console.log(`built ${relative(root, exe)} (an-rebuild ${version}, node ${process.version}, ${(statSync(exe).size / 1048576).toFixed(1)} MB)`);
+console.log(`built ${relative(root, exe)} (OpenAlienNations ${version}, node ${process.version}, ${(statSync(exe).size / 1048576).toFixed(1)} MB)`);

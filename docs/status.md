@@ -7,7 +7,7 @@ the rules and toolchain.
 
 | What | Where | In git? |
 |---|---|---|
-| Source, tests, docs, HD UI pack | this repo (GitHub `TKNLG/AlienNations`, branch `main`) | yes |
+| Source, tests, docs, HD UI pack | this repo (GitHub `TKNLG/OpenAlienNations`, branch `main`; GPL-3.0-or-later, see `LICENSE` / `NOTICE`) | yes |
 | Original game, base (GOG) | any install, e.g. `C:\GOG Games\Alien Nations` (`Bin\music` = soundtrack; `Data` = `AN_DATA`) | no |
 | Original game, Gold Edition (add-on) | any install; its `data` folder = `AN_GOLD`, the install itself works as `--game` | no |
 | Reverse-engineering output | `re/` in the repo folder (see §2) | **never** (git-ignored) |
@@ -55,7 +55,7 @@ addresses they were derived from, so any claim can be re-checked.
 
 ## 4. Current state
 
-Test suite green (335 tests with the game data set; data-driven tests skip without it); release
+Test suite green (336 tests with the game data set; data-driven tests skip without it); release
 workflow verified by dry runs (Windows .exe, Linux binary, Docker image build); the .exe and the
 Linux binary were tested on Windows and Linux. Not yet released (no tag).
 
@@ -63,6 +63,38 @@ Recently fixed and confirmed in play-testing: minimap, saves (http origins, add-
 terrain), side panel looks/hover, hunting, projectiles, territory/border stones, doors, advisor
 behaviour, training/retraining, residences/leisure, operators on duty (police, embassy, farm,
 news round), construction site panel + pause, AI deviations A–T, transport/walking engine.
+
+### Feature overview (moved here from the README)
+
+Architecture: a zero-dependency Node **server** (serves the client and the operator's game files
+from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket), a browser
+**client** (WebGL2 renderer, UI, input, audio) and the deterministic **engine** shared by both
+(runs headless in Node for tests and replays). Details: `docs/architecture/`.
+
+| area | state |
+|---|---|
+| sprites `.gd` | decoded (all frames, alpha); TS reader with lazy range loading |
+| terrain `.os`, fonts `.dvf`, text `.tdb` | decoded |
+| maps `.dvm`, missions `.mdb` | decoded; terrain is **generated from a seed**, generator rebuilt bit-exact and validated against all 35 maps |
+| objects `dv.OD` | decoded: object id -> anchor, bounds, sprite per animation slot |
+| rules `dv.odb`, research `DV.idb`, weapons `dv.wdb` | fully decoded |
+| projection | isometric heightfield, 64x44 px cells; documented |
+| ground blending, shoreline tiles | **done** (bilinear corner blending, 14 shoreline tiles, animated water) |
+| simulation core | deterministic ticks, commands, A* on the wrapping map, step timing from dv.odb, footprints, group moves, snapshots |
+| multiplayer | lobby + lockstep relay over WebSocket (zero-dependency server), desync detection; tested with 2 real clients |
+| savegames | IndexedDB + export/import (.ansave, gzip) |
+| economy | nations, towns, rounds (tax, upkeep, research), food and luxury consumption, needs, happiness, births, criminals, decay, storage, mission goals (docs/game/economy.md) |
+| units and jobs | job scheduler like the original; porters and dispatcher, door queues, construction sites and builders, production, gathering, farms, operators (docs/game/units-and-jobs.md) |
+| combat | attack/strike/impact pipeline, damage, hit chance, ranks and experience, line of fire, help radius and retaliation, flee, patrols, outposts, two-phase building collapse with rubble, town destruction, criminals, police arrests, priests (docs/game/combat.md) |
+| UI | menus in the original 800x600 art (campaign progress, briefing, free play, settings, load/save, multiplayer lobby); race-specific side panel with all pages from the original layout (scales to any window), minimap, advisor messages with voice, sound effects, combat effects |
+| diplomacy, trade | relations, embassies and diplomats with offers, markets and merchant trade routes (docs/game/ai-diplomacy-trade.md 3, 4) |
+| computer opponents (AI) | profiles, town planner, gathering, training, research, defence, armies, scouts, founding, diplomacy and trade decisions (docs/game/ai-diplomacy-trade.md) |
+| fog of war | explored / in sight per player, terrain, sprites, minimap, placement; MAGICEYE (docs/game/fog-of-war.md) |
+| free play / random maps | world populator: nature clusters, point lists, start positions (docs/formats/world-populate.md); founding towns with the city founder |
+| Gold Edition add-on (islands, ships) | add-on data, island maps and generator, AO campaigns and menus; harbours, shipyards, fishing, transport and war ships in the engine (docs/game/addon.md); ship UI in the side panel still to do |
+| HD UI pack | menus and side panels upscaled 4x (Real-ESRGAN animevideov3, icons xBR x4 + unsharp), shipped in `hd/`, toggle "HD-Grafik" in the graphics settings (tools/hdpack) |
+| enhanced options | optional comfort options that differ from the original, all off by default (= vanilla): selection rings, smooth movement, cursor hints, advisor queue; Einstellungen -> "Erweitert" (docs/roadmap.md) |
+| building foundations, worn paths | buildings level and pave their ground permanently; busy routes become paths that speed units up (docs/game/units-and-jobs.md 6.6, 4.5) |
 
 ## 5. Open items
 

@@ -1,167 +1,245 @@
-# Alien Nations rebuild (an-rebuild)
+**English** · [Deutsch](README.de.md)
 
-A from-scratch reimplementation of *Alien Nations / Die Völker* (Neo / JoWooD, 1999-2000)
-that runs in the browser, self-hosted on your own server, with multiplayer. It plays with the
-data files from your own copy of the game (GOG). **This project never contains or distributes
-game files.**
+# OpenAlienNations
+
+OpenAlienNations is an open-source remake of the 1999 strategy game **Alien Nations** (German:
+**Die Völker**) that runs in your web browser. It plays the campaigns, tutorials and free play of
+the original, the island campaigns and ships of the **Gold Edition add-on**, and **multiplayer**
+with friends in the browser, optionally with a sharper **HD interface**.
+
+It is **not** the game itself and contains **no game files**: it uses the files of your own
+installed copy of Alien Nations.
+
+**Status:** very close to the original, including its quirks. If something plays differently
+from the original game, please [open an issue](../../issues).
+
+## What you need
+
+- **Alien Nations installed** on your computer: the GOG version, or the original CD /
+  Gold Edition.
+- **Windows** or **Linux** (64-bit x86). Or anything that runs **Docker** (server / NAS).
+- A **modern web browser** (Chrome, Edge, Firefox, Safari).
+
+## Base game and Gold Edition add-on
+
+OpenAlienNations works with the **base game alone** and with the **Gold Edition** (base game +
+add-on). You always point it at **one game folder**: the folder that contains the `Data` folder
+(with the file `dv.gd` in it) and the `Bin` folder. Upper/lower case of folder and file names
+does not matter (`Data` or `data`, `Bin` or `bin`).
+
+| What you have | What to choose as the game folder | What you get |
+|---|---|---|
+| GOG version (e.g. `C:\GOG Games\Alien Nations`) | that folder | base game with music. The GOG version does not include the add-on. |
+| CD version (base game) | the install folder | base game; music see below |
+| Gold Edition (base game + add-on on one CD) | the Gold Edition install folder | base game **and** add-on; music see below |
+
+**When do the add-on menus appear?** When the game folder's `Data` folder contains the add-on
+files (`Addon.odb`, `Addon.gd`, `Addon.od`, `Addon.tdb`, `addon.wdb`, the `...AO.mdb` /
+`...AO.dvm` mission and map files). A Gold Edition install has all of them. Then the
+single-player menu shows the add-on campaigns ("Addon Kampagnen") and the free-play and
+multiplayer settings get an "Addon:" switch for the island world. Without these files the menus
+look like the base game and everything else works normally.
+
+Base game and add-on must be in the **same** folder: use the Gold Edition install folder
+itself. Copying only the add-on files into a GOG folder is not supported, because the Gold
+Edition also has its own versions of some base files (for example the menu art).
+
+**Music.** The game looks for the soundtrack in this order:
+
+1. `Bin/music/Track02.ogg` … `Track11.ogg` in the game folder. The GOG version has these.
+2. The folder given with `--music <folder>` (or the environment variable `AN_MUSIC`). Files in it
+   are recognised by their track number, for example `Track02.ogg`, `track2.flac` or
+   `02 - Title.mp3`; formats `.ogg`, `.mp3`, `.flac` or `.wav`. Tracks 2 to 11 are used.
+3. The Windows `.exe` and the Linux download also find the `Bin/music` folder of another
+   Alien Nations install on the same computer by themselves (for example a GOG install next
+   to a Gold Edition), and remember it.
+
+The CD and Gold Edition played their music straight from the CD (audio tracks), so their
+install folder has no music files. Either have the GOG version installed as well, or rip the
+CD's audio tracks 2–11 into a folder and pass it with `--music`. Without music the game runs
+normally, just without background music.
 
 ## Download and play
 
-You need Alien Nations installed on your computer: the GOG version, or the CD / Gold Edition.
-Get the newest download from the [Releases](../../releases) page.
+Get the newest version from the [Releases](../../releases) page.
 
-**Windows**
+### Windows
 
-1. Download `AlienNations-<version>-windows-x64.exe` and double-click it. The file is not
-   signed, so Windows SmartScreen warns about an "unrecognized app": click **More info**, then
-   **Run anyway**.
-2. The first time, it asks for your game folder: the folder that contains `Data` and `Bin`
-   (for example `C:\GOG Games\Alien Nations`). An install it finds is already pre-selected. The
-   choice is remembered in `%APPDATA%\AlienNations\config.json`.
-3. Your browser opens the game. A console window shows the addresses; keep it open while you
-   play, close it to stop. If Windows Firewall asks, allow access on private networks for
-   multiplayer (singleplayer works either way).
+1. Download `OpenAlienNations-<version>-windows-x64.exe` and double-click it.
+2. The file is not signed, so Windows SmartScreen may warn about an "unrecognized app". Click
+   **More info**, then **Run anyway**.
+3. The first time, it asks for your game folder. If it found an install, that one is already
+   selected; otherwise pick the folder that contains `Data` and `Bin`.
+4. Your browser opens with the game. A console window shows the addresses. **Keep that window
+   open while you play**; closing it stops the game server.
+5. If Windows Firewall asks: allow access on private networks if you want to play with others
+   (singleplayer works either way).
 
-**Linux (x64)**
-
-```
-tar xzf AlienNations-<version>-linux-x64.tar.gz
-./AlienNations
-```
-
-It asks for your game folder once (a dialog with zenity or kdialog, otherwise in the terminal;
-a Wine/Lutris install works, e.g. `~/.wine/drive_c/GOG Games/Alien Nations`), remembers it in
-`~/.config/aliennations/config.json` and opens the browser.
-
-**Multiplayer:** whoever hosts runs the game as above. The console lists the addresses friends
-can open, e.g. `http://192.168.1.20:8080/`: on the same network directly, over the internet via
-a VPN such as Tailscale, ZeroTier or Hamachi (use the VPN address), or by forwarding the TCP port
-on your router.
-
-**Good to know:** `--setup` chooses the game folder again; `--port 9000` picks a port (without
-it, a busy 8080 moves on to 8081 ...); `--no-browser` does not open the browser; `--help` lists
-everything. The console and the dialogs speak German on a German system and English otherwise;
-`--lang de` or `--lang en` (or the environment variable `AN_LANG`) chooses. The soundtrack is taken from the game's `Bin/music` (GOG) or from another GOG install
-found on the computer; for a CD install give a folder with the tracks via `--music <folder>`.
-
-**Server / NAS:** the Docker image `ghcr.io/tknlg/aliennations` runs the server without any
-launcher behaviour, see [Docker / Unraid](#docker--unraid) below.
-
-Started 2026-10-14. It succeeds an earlier ddraw-proxy patch project (`an-patch`), whose
-measurements carry over.
-
-## Ground rules
-
-1. **No game data in the repo or in releases.** Each deployer copies the `Data/` folder (plus
-   `Bin/music`) from their own install onto their server.
-2. **Clean-room split.** `re/` (Ghidra project, decompiler dumps) is the *analysis* side. Its
-   only product is the specs in `docs/`, written in plain language. The engine and client
-   (`engine/`, `client/`, `server/`, once they exist) are written **from `docs/` only**, never
-   by translating decompiler output. `re/` is never published.
-3. **Determinism from day one.** The simulation runs in lockstep on every client: integer and
-   fixed-point maths only, a seeded PRNG, no `Math.random`, no float in sim state, and no
-   iteration over unordered maps.
-
-## Target architecture
-
-- **server** (Docker container on a NAS): serves the client, serves the deployer's game
-  files from a mounted folder, hosts lobbies, and relays lockstep commands over WebSocket.
-- **client** (browser): WebGL/Canvas renderer, UI, input, audio (WAV/OGG are native).
-- **engine** (shared, runs in the browser): deterministic simulation. The same code can run
-  headless in Node for replays and desync checks.
-- Language: TypeScript end to end, **zero runtime and build dependencies** (Node's built-in
-  type stripping; the browser loads native ES modules).
-
-No GPU is needed anywhere: it is 2D sprite rendering.
-
-## Layout
+### Linux (x64)
 
 ```
-docs/formats/   file format specs (the clean-room boundary)
-tools/          python format readers / exporters used for verification
-re/             Ghidra project, AN.exe copy, decompiler dumps  (analysis only, never published)
-out/            generated previews (contains game art -- never published)
+tar xzf OpenAlienNations-<version>-linux-x64.tar.gz
+./OpenAlienNations
 ```
 
-## Status
+The first time it asks for your game folder, with a dialog (zenity or kdialog) or in the
+terminal. A Wine or Lutris install works too, e.g. `~/.wine/drive_c/GOG Games/Alien Nations`.
+Then your browser opens with the game.
 
-| area | state |
-|---|---|
-| sprites `.gd` | decoded (all frames, alpha); TS reader with lazy range loading |
-| terrain `.os`, fonts `.dvf`, text `.tdb` | decoded |
-| maps `.dvm`, missions `.mdb` | decoded; terrain is **generated from a seed**, generator rebuilt bit-exact and validated against all 35 maps |
-| objects `dv.OD` | decoded: object id -> anchor, bounds, sprite per animation slot |
-| rules `dv.odb`, research `DV.idb`, weapons `dv.wdb` | fully decoded |
-| projection | isometric heightfield, 64x44 px cells; documented |
-| **browser map viewer** | **working**: any campaign mission, terrain + objects, scroll/zoom, wrap-around |
-| ground blending, shoreline tiles | **done** (bilinear corner blending, 14 shoreline tiles, animated water) |
-| simulation core | deterministic ticks, commands, A* on the wrapping map, step timing from dv.odb, footprints, group moves, snapshots |
-| multiplayer | lobby + lockstep relay over WebSocket (zero-dependency server), desync detection; tested with 2 real clients |
-| savegames | IndexedDB + export/import (.ansave, gzip) |
-| economy | nations, towns, rounds (tax, upkeep, research), food and luxury consumption, needs, happiness, births, criminals, decay, storage, mission goals (docs/game/economy.md) |
-| units and jobs | job scheduler like the original; porters and dispatcher, door queues, construction sites and builders, production, gathering, farms, operators (docs/game/units-and-jobs.md) |
-| combat | attack/strike/impact pipeline, damage, hit chance, ranks and experience, line of fire, help radius and retaliation, flee, patrols, outposts, two-phase building collapse with rubble, town destruction, criminals, police arrests, priests (docs/game/combat.md) |
-| UI | menus in the original 800x600 art (campaign progress, briefing, free play, settings, load/save, multiplayer lobby); race-specific side panel with all pages from the original layout (scales to any window), minimap, advisor messages with voice, sound effects, combat effects |
-| diplomacy, trade | relations, embassies and diplomats with offers, markets and merchant trade routes (docs/game/ai-diplomacy-trade.md 3, 4) |
-| computer opponents (AI) | profiles, town planner, gathering, training, research, defence, armies, scouts, founding, diplomacy and trade decisions (docs/game/ai-diplomacy-trade.md) |
-| fog of war | explored / in sight per player, terrain, sprites, minimap, placement; MAGICEYE (docs/game/fog-of-war.md) |
-| free play / random maps | world populator: nature clusters, point lists, start positions (docs/formats/world-populate.md); founding towns with the city founder |
-| Gold Edition add-on (islands, ships) | add-on data, island maps and generator, AO campaigns and menus; harbours, shipyards, fishing, transport and war ships in the engine (docs/game/addon.md); ship UI in the side panel still to do |
-| HD UI pack | menus and side panels upscaled 4x (Real-ESRGAN animevideov3, icons xBR x4 + unsharp), shipped in `hd/`, toggle "HD-Grafik" in the graphics settings (tools/hdpack) |
-| enhanced options | optional comfort options that differ from the original, all off by default (= vanilla): selection rings, smooth movement, cursor hints, advisor queue; Einstellungen -> "Erweitert" (docs/roadmap.md) |
-| building foundations, worn paths | buildings level and pave their ground permanently; busy routes become paths that speed units up (docs/game/units-and-jobs.md 6.6, 4.5) |
+### Changing the game folder
 
-## Running it
+Your choice is saved, so the next start goes straight to the game:
 
-Requirements: Node.js 22 or newer. Nothing else, no internet.
+- Windows: `%APPDATA%\OpenAlienNations\config.json`
+- Linux: `~/.config/openaliennations/config.json`
+- macOS: `~/Library/Application Support/OpenAlienNations/config.json`
+
+To choose again, start it once with `--setup`, for example `OpenAlienNations.exe --setup` from
+a command prompt, or `./OpenAlienNations --setup`. (Older builds saved the choice in an
+`AlienNations` folder; it is taken over automatically.)
+
+## Playing with friends (multiplayer)
+
+1. One player is the **host** and starts OpenAlienNations as above.
+2. The console window lists the addresses for friends, for example `http://192.168.1.20:8080/`.
+3. Friends open that address in their browser. They load everything, including the game files,
+   from the host, so they **need nothing but a browser**.
+4. In the game, the host opens a room in the multiplayer menu and the others join it.
+
+How friends reach the host:
+
+- **Same network (LAN / Wi-Fi):** use the address shown.
+- **Over the internet with a VPN** such as Tailscale, ZeroTier or Hamachi: everyone joins the same
+  VPN, then use the host's VPN address (the console lists it as well).
+- **Port forwarding:** forward the TCP port (default 8080) on the host's router to the host's
+  computer, then friends use the host's public IP address.
+
+As with the original game, every player is expected to own a copy of Alien Nations.
+
+## Options
+
+All options work with the Windows `.exe`, the Linux binary and `node dist/server.mjs`. Most can
+also be set with an environment variable.
+
+| Option | Environment variable | What it does |
+|---|---|---|
+| `--game <folder>` | `AN_GAME` | your Alien Nations folder (the one containing `Data` and `Bin`); skips the folder question |
+| `--music <folder>` | `AN_MUSIC` | soundtrack folder, used when the game folder has no `Bin/music` (see above) |
+| `--hd <folder>` | `AN_HD` | use the HD interface pack from this folder instead of the built-in one |
+| `--port <n>` | `AN_PORT` | network port (default 8080). Without it, the next free port is used if 8080 is busy; with it, that exact port must be free |
+| `--host <address>` | `AN_HOST` | address to listen on. Default `0.0.0.0` = this computer and your network; `127.0.0.1` = only this computer |
+| `--setup` or `--reset` | | choose the game folder again |
+| `--no-browser` | | do not open the browser automatically |
+| `--open` | | open the browser (a plain `node dist/server.mjs` run does not by default) |
+| `--lang de` / `--lang en` | `AN_LANG` | language of the console and dialogs (default: the system language) |
+| `--version` | | print the version |
+| `--help` | | list all options |
+
+The browser opens automatically for the `.exe` and the Linux binary, unless you give
+`--no-browser` or `--host`, or there is no desktop (for example over SSH).
+
+## In-game settings worth knowing
+
+- **HD interface:** Settings (Einstellungen) → Graphics (Grafik) → **HD-Grafik** switches the
+  upscaled menus and side panels on or off.
+- **Enhanced options:** Settings → **Erweitert** has optional comfort features that differ from
+  the original (selection rings, smoother movement, cursor hints, advisor queue). All are off by
+  default; off means exactly the original behaviour.
+
+(The menus use the game's own texts from your copy; the few menus added by OpenAlienNations are
+labelled in German, like the original German release.)
+
+## Server / NAS (Docker)
+
+A ready-made image is published for amd64 and arm64. Mount your game folder read-only at `/game`:
 
 ```
-node build.mjs                                   # builds dist/ (no dependencies)
-node dist/server.mjs --game "C:\GOG Games\Alien Nations"
-# open http://localhost:8080/
+docker run -d --name openaliennations -p 8080:8080 \
+  -v "/path/to/Alien Nations:/game:ro" \
+  ghcr.io/tknlg/openaliennations
 ```
 
-`--game` points at your installed game (the folder that contains `Data` and `Bin`). The server
-only reads it. Options: `--port 8080`, `--host 0.0.0.0` (env: `AN_GAME`, `AN_PORT`, `AN_HOST`);
-`--help` lists all. An explicit `--port` / `AN_PORT` must be free; without one, the next free port
-after 8080 is used. The console prints the local URL and the LAN / VPN URLs for other players,
-in German or English after the system language (`LANG` etc.; `--lang de|en` or `AN_LANG`
-chooses; a Docker container without `LANG` speaks English unless given `-e AN_LANG=de`).
+Then open `http://<server address>:8080/`. With a soundtrack in another folder, add
+`-v "/path/to/music:/music:ro" -e AN_MUSIC=/music`. For German console texts add
+`-e AN_LANG=de`.
 
-The release executables (`node tools/sea/build-sea.mjs`, Node single executable application)
-are this same server with the client and `hd/` embedded, plus launcher behaviour: without
-`--game` / `AN_GAME` they use the saved game folder or ask for it (`--setup` / `--reset` asks
-again; `node dist/server.mjs --setup` does the same), and they open the browser unless
-`--no-browser` is given, `--host` was set (a server setup) or there is no desktop (Linux without
-`DISPLAY` / `WAYLAND_DISPLAY`). `--open` opens the browser from a plain node run too.
-Maintainers: [docs/release.md](docs/release.md).
+Docker Compose:
 
-Music: the GOG version has the soundtrack in `Bin/music`. A Gold Edition install played its music
-from the CD, so give the server a soundtrack folder: `--music "C:\GOG Games\Alien Nations\Bin\music"`
-(env `AN_MUSIC`), or any folder with the tracks 2..11 as `.ogg`, `.mp3`, `.flac` or `.wav`
-(e.g. ripped from the CD; names like `Track02.ogg` or `02 - ....mp3`).
+```yaml
+services:
+  openaliennations:
+    image: ghcr.io/tknlg/openaliennations
+    ports:
+      - "8080:8080"
+    volumes:
+      - "/path/to/Alien Nations:/game:ro"
+      # - "/path/to/music:/music:ro"
+    # environment:
+    #   AN_MUSIC: /music
+    restart: unless-stopped
+```
 
-HD UI: the server serves the upscaled menu and panel art from the repository's `hd/` folder
-(override with `--hd <dir>`, env `AN_HD`). Players can switch it off in the graphics settings.
-Rebuild it from an install with `python3 tools/hdpack/build_hdpack.py --game <Data> [--game <Gold data>]`.
+Unraid: add a container with this image, map port 8080 and a read-only path from your
+Alien Nations folder to `/game`. To build the image yourself: `docker build -t openaliennations .`
 
-### Docker / Unraid
+## Saves
 
-Released images: `docker run -d -p 8080:8080 -v "/path/to/Alien Nations:/game:ro" ghcr.io/tknlg/aliennations`
-(amd64 and arm64). Or build it yourself: `docker build -t an-rebuild .` (self-contained, no
-`node build.mjs` needed first), then run it with your game folder mounted read-only at `/game`
-and port 8080 published (details in the `Dockerfile`). The image contains only the built server,
-the client and the HD UI pack, never game data.
+Saved games are stored **in your browser** (IndexedDB), separately for each browser and each
+address. `http://localhost:8080/` and `http://192.168.1.20:8080/` (or another port) count as
+different addresses with their own saves, and clearing the browser's site data deletes them.
 
-Development: `npm test` (set `AN_DATA` to the game's Data folder and `AN_GOLD` to the Gold
-Edition's data folder for the data-driven tests; they skip otherwise), type-check with
-TypeScript 5.6 (`tsc -p .`).
+To keep a backup or move saves to another browser or computer: in the **Spiel laden** (load
+game) menu, use **Exportieren** to download a save as an `.ansave` file and **Importieren** to
+load one back.
 
-## Tools
+## Troubleshooting
 
-- Ghidra 12.1.4 headless, project `re/ghidra-proj/AN.gpr` (AN.exe from GOG,
-  md5 `c2d2562e6b678bf241fe6cd0e3ec2e3b`); `re/` is private and git-ignored, see
-  [docs/status.md](docs/status.md) §2 for how to regenerate it.
-- `tools/ghidra/DumpAll.java` exports `re/dump/decomp.c`, `strings.txt`, `imports.txt`;
-  `tools/ghidra/RecFields.java` lists `dv.odb` record field accesses.
-- `tools/gd.py list|sheet|png`, `tools/os_sheet.py`, `tools/dvf_sheet.py`.
+- **"Port 8080 is already in use":** another program (or a second OpenAlienNations) uses it.
+  Without `--port` the next free port is taken automatically; with `--port`, choose another
+  one, e.g. `--port 9000`.
+- **Firewall question on Windows:** allow private networks for multiplayer; singleplayer works
+  without.
+- **No music:** see [Music](#base-game-and-gold-edition-add-on) above; start with
+  `--music <folder>`.
+- **Add-on menus missing:** the chosen game folder must be the Gold Edition install, with the
+  `Addon.*` files in its `Data` folder. Start with `--setup` to choose another folder.
+- **"Not an Alien Nations folder":** pick the folder that contains `Data` (with `dv.gd`) and
+  `Bin`, not a folder inside it.
+- **Saves are gone:** check that you opened the same address and port as before (see
+  [Saves](#saves)).
+- **SmartScreen warning:** the download is not signed; click **More info** → **Run anyway**.
+
+## For developers
+
+Requirements: Node.js 22 or newer; no other dependencies.
+
+```
+node build.mjs                                           # build into dist/
+node dist/server.mjs --game "/path/to/Alien Nations"     # run, then open http://localhost:8080/
+npx -p typescript@5.6.3 tsc -p .                         # type check
+npm test                                                 # tests
+```
+
+The data-driven tests need `AN_DATA=<game>/Data` and `AN_GOLD=<Gold Edition>/data`; they are
+skipped without them. Release builds: [docs/release.md](docs/release.md).
+
+**Clean-room rule:** the original program is analysed only to write plain-language
+specifications in [`docs/`](docs/); the code is written only from those docs, never from
+decompiled code. Analysis material (`re/`) and game files are never published.
+
+Start with [CLAUDE.md](CLAUDE.md) (rules and toolchain) and [docs/status.md](docs/status.md)
+(project state, open items, feature overview). Contributions are welcome: report bugs and
+differences from the original as [issues](../../issues), send fixes as pull requests.
+
+## License and legal
+
+- The code and documentation of OpenAlienNations are licensed under the
+  **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)).
+- The project contains **no game files**. You need your own original copy of the game.
+- "Alien Nations" and "Die Völker" are trademarks of their respective owners. OpenAlienNations
+  is an independent fan project and is not affiliated with or endorsed by them.
+- The **HD interface pack** in `hd/` is upscaled from the original game's interface artwork, so
+  it is **not** covered by the GPL; the original rights holders' copyright applies. It is
+  included only so that owners of the game can use it, and it can be switched off or removed.
+
+Details: [NOTICE](NOTICE).

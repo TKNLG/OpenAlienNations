@@ -1,0 +1,48 @@
+OpenAlienNations
+================
+
+An open-source remake of the 1999 strategy game "Alien Nations" (German: "Die Völker")
+and its add-on (Gold Edition), playable in a web browser.
+
+License
+-------
+
+The source code and the documentation of OpenAlienNations are free software: you can
+redistribute them and/or modify them under the terms of the GNU General Public License as
+published by the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See the file LICENSE for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU General Public License for more details.
+
+No game files
+-------------
+
+OpenAlienNations contains no files of the original game: no graphics, sounds, music, maps,
+texts or programs. To play, you need your own original copy of Alien Nations / Die Völker
+(for example the GOG version, or the CD / Gold Edition). The program reads the game files
+from your own installation.
+
+Trademarks, no affiliation
+--------------------------
+
+"Alien Nations" and "Die Völker" are trademarks of their respective owners. They are used
+here only to describe which game this project works with. OpenAlienNations is an
+independent fan project. It is not affiliated with, endorsed by or supported by the
+developers, publishers or rights holders of the original game.
+
+HD interface pack (folder hd/) - NOT covered by the GPL
+-------------------------------------------------------
+
+The folder hd/ (and the copy of it built into the release downloads and the Docker image)
+contains an "HD" version of the game's menus and interface panels. These images were made
+by upscaling the interface artwork of the original game and its add-on. They are derived
+from that artwork, so they are NOT covered by the GNU General Public License, and the
+copyright of the original rights holders applies to them.
+
+They are included only so that owners of the original game can use them together with
+their own copy. They are optional: switch them off in the game under
+Settings -> Graphics -> "HD-Grafik", or leave them out entirely by deleting the hd/ folder
+(source checkout or own builds) or by starting the server with --hd pointing at an empty
+folder.

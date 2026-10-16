@@ -1,8 +1,13 @@
 {
-  "name": "an-rebuild",
+  "name": "openaliennations",
   "version": "0.1.0",
   "private": true,
-  "description": "Browser rebuild of Alien Nations / Die Voelker. Requires your own copy of the game data.",
+  "description": "OpenAlienNations: open-source browser remake of Alien Nations / Die Voelker. Requires your own copy of the game.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TKNLG/OpenAlienNations.git"
+  },
   "type": "module",
   "scripts": {
     "build": "node build.mjs",

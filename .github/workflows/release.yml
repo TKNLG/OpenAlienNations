@@ -1,7 +1,8 @@
 # Release: push a tag "v<version>" (matching package.json) to build and publish
-#   - AlienNations-<version>-windows-x64.exe   single executable (Node SEA)
-#   - AlienNations-<version>-linux-x64.tar.gz  single executable (Node SEA)
-#   - ghcr.io/<owner>/aliennations:<version>   server image (Docker)
+#   - OpenAlienNations-<version>-windows-x64.exe   single executable (Node SEA)
+#   - OpenAlienNations-<version>-linux-x64.tar.gz  single executable (Node SEA) + LICENSE, NOTICE
+#   - LICENSE.txt, NOTICE.txt                      license texts next to the downloads
+#   - ghcr.io/<owner>/openaliennations:<version>   server image (Docker, with LICENSE and NOTICE)
 # "Run workflow" (workflow_dispatch) on a branch builds everything as a dry run (downloadable
 # workflow artifacts, image built but not pushed); run it on a tag to publish that tag.
 #
@@ -77,11 +78,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Build single executable
-        run: node tools/sea/build-sea.mjs --name AlienNations
+        run: node tools/sea/build-sea.mjs --name OpenAlienNations
       - name: Smoke test
         run: |
-          exe=build/sea/AlienNations
-          [ "$RUNNER_OS" = "Windows" ] && exe=build/sea/AlienNations.exe
+          exe=build/sea/OpenAlienNations
+          [ "$RUNNER_OS" = "Windows" ] && exe=build/sea/OpenAlienNations.exe
           out=$("$exe" --version)
           echo "$out"
           [ "$out" = "$VERSION" ]
@@ -90,14 +91,15 @@ jobs:
         run: |
           mkdir -p release
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp build/sea/AlienNations.exe "release/AlienNations-$VERSION-windows-x64.exe"
+            cp build/sea/OpenAlienNations.exe "release/OpenAlienNations-$VERSION-windows-x64.exe"
           else
-            tar -C build/sea -czf "release/AlienNations-$VERSION-linux-x64.tar.gz" AlienNations
+            cp LICENSE NOTICE build/sea/
+            tar -C build/sea -czf "release/OpenAlienNations-$VERSION-linux-x64.tar.gz" OpenAlienNations LICENSE NOTICE
           fi
           ls -l release
       - uses: actions/upload-artifact@v7
         with:
-          name: AlienNations-${{ matrix.target }}
+          name: OpenAlienNations-${{ matrix.target }}
           path: release/*
           if-no-files-found: error
 
@@ -111,7 +113,7 @@ jobs:
       - uses: actions/checkout@v7
       - id: image
         name: Image name (registry names must be lower-case)
-        run: echo "name=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aliennations" >> "$GITHUB_OUTPUT"
+        run: echo "name=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/openaliennations" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         if: env.PUBLISH == 'true'
@@ -146,27 +148,39 @@ jobs:
       VERSION: ${{ needs.check.outputs.version }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            LICENSE
+            NOTICE
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true
+      - name: License texts next to the downloads
+        run: |
+          cp LICENSE release/LICENSE.txt
+          cp NOTICE release/NOTICE.txt
       - name: Checksums
         working-directory: release
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Create release
         run: |
-          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/aliennations:$VERSION"
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/openaliennations:$VERSION"
           cat > notes.md <<EOF
           **You need your own copy of Alien Nations** (GOG, or the CD / Gold Edition installed). These downloads contain no game files.
 
-          - **Windows:** download \`AlienNations-$VERSION-windows-x64.exe\` and run it. SmartScreen warns because the file is not signed: click *More info* -> *Run anyway*. Pick your game folder once; the game opens in your browser.
-          - **Linux:** \`tar xzf AlienNations-$VERSION-linux-x64.tar.gz && ./AlienNations\`
+          - **Windows:** download \`OpenAlienNations-$VERSION-windows-x64.exe\` and run it. SmartScreen warns because the file is not signed: click *More info* -> *Run anyway*. Pick your game folder once; the game opens in your browser.
+          - **Linux:** \`tar xzf OpenAlienNations-$VERSION-linux-x64.tar.gz && ./OpenAlienNations\`
           - **Server / NAS:** \`docker run -d -p 8080:8080 -v "/path/to/Alien Nations:/game:ro" $image\`
 
           Multiplayer: friends open the network address printed in the console window (LAN, or a VPN such as Tailscale / ZeroTier / Hamachi).
+
+          License: GPL-3.0-or-later (\`LICENSE.txt\`); see \`NOTICE.txt\` for the game trademarks and the HD UI pack, which is not covered by the GPL.
           EOF
           gh release create "$GITHUB_REF_NAME" release/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Alien Nations $VERSION" \
+            --title "OpenAlienNations $VERSION" \
             --notes-file notes.md \
             --generate-notes

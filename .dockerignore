@@ -1,4 +1,4 @@
-# the image is built from package.json, build.mjs, src/ and hd/ only (see Dockerfile)
+# the image is built from package.json, build.mjs, src/, hd/, LICENSE and NOTICE only (see Dockerfile)
 .git
 .github
 node_modules

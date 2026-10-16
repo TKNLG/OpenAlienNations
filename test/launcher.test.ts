@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findGameRoot, findMusic, configPath, loadConfig, saveConfig, WINDOWS_DIALOG_SCRIPT, windowsDialogEnv, encodePowerShell, parseWindowsDialogOutput } from '../src/server/launcher.ts';
+import { findGameRoot, findMusic, configPath, legacyConfigPath, migrateConfig, loadConfig, saveConfig, WINDOWS_DIALOG_SCRIPT, windowsDialogEnv, encodePowerShell, parseWindowsDialogOutput } from '../src/server/launcher.ts';
 import { STRINGS } from '../src/server/i18n.ts';
 
 function fakeInstall(root: string, opt: { data?: string; music?: boolean } = {}): string {
@@ -45,9 +45,14 @@ test('findMusic prefers the game\'s own Bin/music, else another install\'s', {},
 });
 
 test('config file location per platform, save and load', {}, () => {
-  assert.equal(configPath({ APPDATA: 'C:\\Users\\x\\AppData\\Roaming' }, 'win32'), join('C:\\Users\\x\\AppData\\Roaming', 'AlienNations', 'config.json'));
-  assert.equal(configPath({ HOME: '/home/x', XDG_CONFIG_HOME: '/cfg' }, 'linux'), join('/cfg', 'aliennations', 'config.json'));
-  assert.equal(configPath({ HOME: '/home/x' }, 'linux'), join('/home/x', '.config', 'aliennations', 'config.json'));
+  assert.equal(configPath({ APPDATA: 'C:\\Users\\x\\AppData\\Roaming' }, 'win32'), join('C:\\Users\\x\\AppData\\Roaming', 'OpenAlienNations', 'config.json'));
+  assert.equal(configPath({ HOME: '/home/x', XDG_CONFIG_HOME: '/cfg' }, 'linux'), join('/cfg', 'openaliennations', 'config.json'));
+  assert.equal(configPath({ HOME: '/home/x' }, 'linux'), join('/home/x', '.config', 'openaliennations', 'config.json'));
+  assert.equal(configPath({ HOME: '/home/x' }, 'darwin'), join('/home/x', 'Library', 'Application Support', 'OpenAlienNations', 'config.json'));
+  // builds from before the rename
+  assert.equal(legacyConfigPath({ APPDATA: 'C:\\Users\\x\\AppData\\Roaming' }, 'win32'), join('C:\\Users\\x\\AppData\\Roaming', 'AlienNations', 'config.json'));
+  assert.equal(legacyConfigPath({ HOME: '/home/x' }, 'linux'), join('/home/x', '.config', 'aliennations', 'config.json'));
+  assert.equal(legacyConfigPath({ HOME: '/home/x' }, 'darwin'), join('/home/x', 'Library', 'Application Support', 'AlienNations', 'config.json'));
   const tmp = mkdtempSync(join(tmpdir(), 'an-launcher-'));
   try {
     const file = join(tmp, 'sub', 'config.json');
@@ -55,6 +60,35 @@ test('config file location per platform, save and load', {}, () => {
     saveConfig({ game: '/games/an', music: '/games/an/Bin/music' }, file);
     assert.deepEqual(loadConfig(file), { game: '/games/an', music: '/games/an/Bin/music' });
     writeFileSync(file, 'not json');
+    assert.deepEqual(loadConfig(file), {});
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('the config of builds from before the rename is copied over once', {}, () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'an-launcher-'));
+  try {
+    const env = { HOME: tmp, XDG_CONFIG_HOME: join(tmp, 'cfg'), APPDATA: join(tmp, 'appdata') };
+    for (const platform of ['linux', 'win32', 'darwin']) {
+      const file = configPath(env, platform), legacy = legacyConfigPath(env, platform);
+      assert.ok(file !== legacy);
+      // nothing saved anywhere: nothing to do
+      assert.equal(migrateConfig(file, legacy), false);
+      assert.deepEqual(loadConfig(file), {});
+      // only the old config: copied, the old file stays
+      saveConfig({ game: '/games/an', music: '/games/an/Bin/music' }, legacy);
+      assert.equal(migrateConfig(file, legacy), true);
+      assert.deepEqual(loadConfig(file), { game: '/games/an', music: '/games/an/Bin/music' });
+      assert.deepEqual(loadConfig(legacy), { game: '/games/an', music: '/games/an/Bin/music' });
+      // the new config exists: never overwritten by the old one
+      saveConfig({ game: '/games/gold' }, file);
+      assert.equal(migrateConfig(file, legacy), false);
+      assert.equal(loadConfig(file).game, '/games/gold');
+    }
+    // an unreadable old config is not copied
+    const file = join(tmp, 'new', 'config.json'), legacy = join(tmp, 'old', 'config.json');
+    mkdirSync(join(tmp, 'old'));
+    writeFileSync(legacy, 'not json');
+    assert.equal(migrateConfig(file, legacy), false);
     assert.deepEqual(loadConfig(file), {});
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });

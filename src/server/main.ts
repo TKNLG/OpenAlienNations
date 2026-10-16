@@ -1,4 +1,4 @@
-// an-rebuild server: serves the browser client and the operator's own game files.
+// OpenAlienNations server: serves the browser client and the operator's own game files.
 // Fully offline, no dependencies. Usage:
 //
 //   node dist/server.mjs --game "/path/to/Alien Nations" [--music <folder>] [--hd <folder>] [--port 8080] [--host 0.0.0.0]
@@ -194,8 +194,8 @@ async function main(): Promise<void> {
   if (bad !== null) console.warn(tr().badLang(bad));
   const opt = parseArgs(argv);
   const launcher = embedded !== null || opt.setup;
-  if (embedded) process.title = 'Alien Nations';
-  if (launcher) console.log(`Alien Nations (an-rebuild ${VERSION})\n`);
+  if (embedded) process.title = 'OpenAlienNations';
+  if (launcher) console.log(`OpenAlienNations ${VERSION}\n`);
 
   if (launcher && !opt.gameGiven) {
     const chosen = await resolveGameFolder(opt.setup);

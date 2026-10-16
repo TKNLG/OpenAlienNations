@@ -4,9 +4,11 @@
 // browser. No dependencies: the dialogs are PowerShell / zenity / kdialog child processes.
 // Texts in German or English (i18n.ts).
 //
-// Config file: %APPDATA%\AlienNations\config.json (Windows),
-// $XDG_CONFIG_HOME/aliennations/config.json or ~/.config/aliennations/config.json (Linux),
-// ~/Library/Application Support/AlienNations/config.json (macOS).
+// Config file: %APPDATA%\OpenAlienNations\config.json (Windows),
+// $XDG_CONFIG_HOME/openaliennations/config.json or ~/.config/openaliennations/config.json (Linux),
+// ~/Library/Application Support/OpenAlienNations/config.json (macOS). Builds from before the
+// rename used the folder AlienNations / aliennations; its config is copied over once
+// (migrateConfig) when the new one does not exist yet.
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -21,11 +23,30 @@ const WIN = process.platform === 'win32';
 
 // ---- config file ---------------------------------------------------------------------------
 
-export function configPath(env: Record<string, string | undefined> = process.env, platform = process.platform): string {
+/** the per-user config file; `folder` is the app folder name (lower-cased on Linux) */
+function configFile(env: Record<string, string | undefined>, platform: string, folder: string): string {
   const home = env.HOME || env.USERPROFILE || homedir();
-  if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), 'AlienNations', 'config.json');
-  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'AlienNations', 'config.json');
-  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'aliennations', 'config.json');
+  if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), folder, 'config.json');
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', folder, 'config.json');
+  return join(env.XDG_CONFIG_HOME || join(home, '.config'), folder.toLowerCase(), 'config.json');
+}
+
+export function configPath(env: Record<string, string | undefined> = process.env, platform = process.platform): string {
+  return configFile(env, platform, 'OpenAlienNations');
+}
+
+/** where builds from before the rename to OpenAlienNations kept the config */
+export function legacyConfigPath(env: Record<string, string | undefined> = process.env, platform = process.platform): string {
+  return configFile(env, platform, 'AlienNations');
+}
+
+/** Copy the old config (legacyConfigPath) to the new place once, when only the old one exists.
+ *  The old file is left as it is. Returns true when it copied. */
+export function migrateConfig(file = configPath(), legacy = legacyConfigPath()): boolean {
+  if (existsSync(file) || !existsSync(legacy)) return false;
+  const cfg = loadConfig(legacy);
+  if (!cfg.game) return false;
+  try { saveConfig(cfg, file); return true; } catch { return false; }
 }
 
 export function loadConfig(file = configPath()): LauncherConfig {
@@ -173,7 +194,7 @@ export const WINDOWS_DIALOG_SCRIPT = [
   '[System.Windows.Forms.Application]::EnableVisualStyles()',
   '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }',
   "$icon = if ($env:AN_DLG_ERROR -eq '1') { 'Warning' } else { 'Information' }",
-  "$r = [System.Windows.Forms.MessageBox]::Show($owner, $env:AN_DLG_TEXT, 'Alien Nations', 'OKCancel', $icon)",
+  "$r = [System.Windows.Forms.MessageBox]::Show($owner, $env:AN_DLG_TEXT, 'OpenAlienNations', 'OKCancel', $icon)",
   "if ($r -ne 'OK') { 'CANCEL'; exit }",
   '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
   '$d.Description = $env:AN_DLG_TITLE',
@@ -214,7 +235,7 @@ const markup = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').rep
 
 const askZenity: Ask = async p => {
   const s = tr();
-  const r1 = spawnSync('zenity', ['--question', '--title=Alien Nations', `--text=${markup(p.text)}`, '--width=460',
+  const r1 = spawnSync('zenity', ['--question', '--title=OpenAlienNations', `--text=${markup(p.text)}`, '--width=460',
                                   `--ok-label=${s.chooseButton}`, `--cancel-label=${s.quitButton}`],
                        { encoding: 'utf8' });
   if (r1.error || (r1.status !== 0 && r1.status !== 1)) return 'unavailable';
@@ -227,7 +248,7 @@ const askZenity: Ask = async p => {
 
 const askKdialog: Ask = async p => {
   const s = tr();
-  const r1 = spawnSync('kdialog', ['--title', 'Alien Nations', '--yes-label', s.chooseButton, '--no-label', s.quitButton, '--yesno', p.text],
+  const r1 = spawnSync('kdialog', ['--title', 'OpenAlienNations', '--yes-label', s.chooseButton, '--no-label', s.quitButton, '--yesno', p.text],
                        { encoding: 'utf8' });
   if (r1.error || (r1.status !== 0 && r1.status !== 1)) return 'unavailable';
   if (r1.status === 1) return null;
@@ -294,6 +315,7 @@ export async function chooseGameFolder(detected: string): Promise<string | null>
 /** The game (and soundtrack) folder for a packaged run: the saved one, else ask and save. */
 export async function resolveGameFolder(reset: boolean): Promise<LauncherConfig & { game: string } | null> {
   const file = configPath();
+  if (!reset) migrateConfig(file);
   const cfg = reset ? {} : loadConfig(file);
   if (cfg.game) {
     const root = findGameRoot(cfg.game);

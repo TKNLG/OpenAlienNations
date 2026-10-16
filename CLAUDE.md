@@ -1,4 +1,4 @@
-# CLAUDE.md: working on the Alien Nations rebuild
+# CLAUDE.md: working on OpenAlienNations
 
 Read this first, then `docs/status.md` (project state, open items, reverse-engineering workflow,
 things already tried). If `local/NOTES.md` exists (git-ignored, machine-specific notes such as
@@ -6,9 +6,10 @@ where the game installs are), read it too.
 
 ## What this is
 
-A from-scratch, clean-room rebuild of *Alien Nations / Die Völker* (1999) plus the Gold Edition
-add-on, running in the browser, served by a small zero-dependency Node server that reads the
-player's own game files. Deterministic lockstep simulation (singleplayer, multiplayer, computer
+**OpenAlienNations** (GitHub `TKNLG/OpenAlienNations`, GPL-3.0-or-later; `NOTICE` covers the
+trademarks and the HD pack): a from-scratch, clean-room rebuild of *Alien Nations / Die Völker*
+(1999) plus the Gold Edition add-on, running in the browser, served by a small zero-dependency
+Node server that reads the player's own game files. Deterministic lockstep simulation (singleplayer, multiplayer, computer
 players), IndexedDB saves, HD UI pack, packaged as a Windows .exe / Linux binary / Docker image.
 
 **Goal:** the default ("vanilla") mode reproduces the original exactly, quirks included. Comfort
@@ -28,7 +29,8 @@ copy it and note it.
    `gamedata/`, `rec/`, decompiles. The repo excludes them (`.gitignore`; the release workflow
    also checks). The manual/handbook may only be paraphrased.
    **Exception (project decision):** the upscaled HD UI pack `hd/` ships with the server and
-   releases, with an on/off switch.
+   releases, with an on/off switch. It is derived from the original art, so it is not GPL
+   (stated in `NOTICE`).
 3. **The game folder may be modified freely.** Anything destructive outside it: investigate
    read-only, present a plan with exact commands, wait for a go-ahead.
 4. **Commit and push regularly** to `origin main`; leave the working tree clean at the end of a

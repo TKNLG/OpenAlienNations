@@ -95,7 +95,7 @@ export function intlLocale(): string | undefined {
 
 const en = {
   // --help
-  usage: (config: string) => `usage: AlienNations [options]          (or: node dist/server.mjs [options])
+  usage: (config: string) => `usage: OpenAlienNations [options]          (or: node dist/server.mjs [options])
 
   --game <folder>    your Alien Nations install, the folder containing Data and Bin (env AN_GAME)
   --music <folder>   soundtrack folder if the game folder has none, e.g. <GOG install>/Bin/music (env AN_MUSIC)
@@ -114,8 +114,8 @@ const en = {
   badLang: (v: string) => `! unknown language "${v}", use de or en`,
 
   // choosing the game folder
-  intro: 'Welcome to Alien Nations!\n\n'
-    + 'This rebuild plays the game in your web browser. It needs the data files of your own copy of '
+  intro: 'Welcome to OpenAlienNations!\n\n'
+    + 'This open-source remake plays Alien Nations in your web browser. It needs the data files of your own copy of '
     + 'Alien Nations (GOG, or the CD / Gold Edition installed on this computer).\n\n'
     + 'Please choose the folder the game is installed in: the one that contains the folders "Data" and "Bin"'
     + (WIN ? ' (for example C:\\GOG Games\\Alien Nations).' : '.'),
@@ -142,10 +142,10 @@ const en = {
     + '  or start with --game <folder>. The server keeps running and re-checks on request.',
   gameData: (dir: string, n: number) => `game data: ${dir} (${n} files)`,
   portNext: (port: number) => `port ${port} is in use, trying ${port + 1}`,
-  portBusy: (port: number) => `! Port ${port} is already in use (is Alien Nations already running?). `
+  portBusy: (port: number) => `! Port ${port} is already in use (is OpenAlienNations already running?). `
     + 'Close the other program or start with --port <another port>.',
   listenFailed: (where: string, err: string) => `! Cannot listen on ${where}: ${err}`,
-  listening: (version: string, where: string) => `an-rebuild ${version} listening on ${where}`,
+  listening: (version: string, where: string) => `OpenAlienNations ${version} listening on ${where}`,
   playHere: 'Play on this computer:',
   listeningOn: 'Listening on:',
   friends: 'Friends on your network or VPN (Tailscale, ZeroTier, Hamachi) join at:',
@@ -160,7 +160,7 @@ const en = {
 export type Strings = typeof en;
 
 const de: Strings = {
-  usage: (config: string) => `Aufruf: AlienNations [Optionen]          (oder: node dist/server.mjs [Optionen])
+  usage: (config: string) => `Aufruf: OpenAlienNations [Optionen]          (oder: node dist/server.mjs [Optionen])
 
   --game <Ordner>    deine Alien-Nations-Installation, der Ordner mit Data und Bin (env AN_GAME)
   --music <Ordner>   Soundtrack-Ordner, falls der Spielordner keinen hat, z. B. <GOG-Installation>/Bin/music (env AN_MUSIC)
@@ -178,8 +178,8 @@ const de: Strings = {
   badPort: '! Ungültiger Port, verwende 8080',
   badLang: (v: string) => `! Unbekannte Sprache „${v}“, möglich sind de und en`,
 
-  intro: 'Willkommen bei Alien Nations!\n\n'
-    + 'Dieser Nachbau spielt das Spiel in deinem Webbrowser. Dafür braucht er die Spieldateien deiner '
+  intro: 'Willkommen bei OpenAlienNations!\n\n'
+    + 'Dieser Open-Source-Nachbau spielt Alien Nations (Die Völker) in deinem Webbrowser. Dafür braucht er die Spieldateien deiner '
     + 'eigenen Alien-Nations-Version (GOG oder die auf diesem Computer installierte CD- / Gold-Edition).\n\n'
     + 'Bitte wähle den Ordner, in dem das Spiel installiert ist: den mit den Ordnern „Data“ und „Bin“'
     + (WIN ? ' (zum Beispiel C:\\GOG Games\\Alien Nations).' : '.'),
@@ -205,10 +205,10 @@ const de: Strings = {
     + '  oder starte mit --game <Ordner>. Der Server läuft weiter und prüft bei jeder Anfrage erneut.',
   gameData: (dir: string, n: number) => `Spieldaten: ${dir} (${n} Dateien)`,
   portNext: (port: number) => `Port ${port} ist belegt, versuche ${port + 1}`,
-  portBusy: (port: number) => `! Port ${port} ist schon belegt (läuft Alien Nations bereits?). `
+  portBusy: (port: number) => `! Port ${port} ist schon belegt (läuft OpenAlienNations bereits?). `
     + 'Schließe das andere Programm oder starte mit --port <anderer Port>.',
   listenFailed: (where: string, err: string) => `! ${where} lässt sich nicht öffnen: ${err}`,
-  listening: (version: string, where: string) => `an-rebuild ${version} läuft auf ${where}`,
+  listening: (version: string, where: string) => `OpenAlienNations ${version} läuft auf ${where}`,
   playHere: 'Auf diesem Computer spielen:',
   listeningOn: 'Erreichbar unter:',
   friends: 'Freunde im selben Netzwerk oder VPN (Tailscale, ZeroTier, Hamachi) spielen mit über:',

@@ -1,4 +1,4 @@
-// WebSocket connection to the an-rebuild server (lobby + lockstep relay).
+// WebSocket connection to the OpenAlienNations server (lobby + lockstep relay).
 
 import type { ClientMsg, ServerMsg } from '../net/protocol.ts';
 

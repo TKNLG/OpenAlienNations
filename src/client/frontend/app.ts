@@ -140,7 +140,7 @@ export class FrontEndApp {
       big(R(230, 350, 565, 389), 67, () => void this.loadList('main')),
       big(R(230, 390, 565, 429), 68, () => this.settingsMenu('main')),
       big(R(230, 450, 565, 490), 247, () => this.quit()),
-      new Label(R(600, 580, 790, 595), `an-rebuild ${this.version}`, 'dv7pts2', C.white, 'R', false, 'B'),
+      new Label(R(600, 580, 790, 595), `OpenAlienNations ${this.version}`, 'dv7pts2', C.white, 'R', false, 'B'),
     ]);
   }
 
