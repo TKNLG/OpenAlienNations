@@ -695,21 +695,25 @@ export class Naval {
 
   planner(race: number): Planner | null { return this.planners[race] ?? null; }
 
-  /** new transport request (`00472630`); returns its id, 0 when refused */
+  /**
+   * New transport request (`00472630`); returns its id, 0 when refused or empty. The idle ships
+   * are assigned at once (id order) until the units and goods are covered; such a ship keeps its
+   * counter (boarding step), so it boards at most as many units as on its last trip (8.4).
+   */
   request(race: number, units: number, goods: number, px: number, py: number, dx: number, dy: number, flags = 0): number {
     const pl = this.planners[race];
-    if (!pl) return 0;
+    if (!pl || (units <= 0 && goods <= 0)) return 0;
     if ((flags & 2) && pl.requests.length > 50) return 0;
-    const r: PlannerRequest = { id: pl.nextReq++, state: 0, px: this.m(px), py: this.m(py), dx: this.m(dx), dy: this.m(dy), waiting: [], goods };
+    const r: PlannerRequest = { id: pl.nextReq++, state: 2, px: this.m(px), py: this.m(py), dx: this.m(dx), dy: this.m(dy), waiting: [], goods };
     pl.requests.push(r);
     let n = units, g = goods;
     for (const s of pl.ships) {
       if (n <= 0 && g <= 0) break;
       const ship = this.w.get(s.id);
       if (s.state !== 1 || !ship || !ship.alive) continue;
-      s.state = 2; s.req = r.id; s.timer = 0;
+      n = Math.max(0, n - this.capacity(ship)); g = Math.max(0, g - 5);
+      s.state = 2; s.req = r.id;
       this.startSail(ship, r.px, r.py, 5);
-      n -= this.capacity(ship); g -= 5;
     }
     return r.id;
   }
@@ -728,16 +732,21 @@ export class Naval {
     return !!r && r.state < 3;
   }
 
-  /** cancel a request (`00472f90`): its ships become idle */
+  /**
+   * Cancel a request (`00472f90`): it is removed, and every ship working for it becomes idle
+   * whatever its state (a ship under way keeps its job and passengers).
+   */
   cancelRequest(race: number, req: number): void {
     const pl = this.planners[race];
-    const r = pl?.requests.find(x => x.id === req);
-    if (!pl || !r) return;
-    r.state = 3;
-    for (const s of pl.ships) if (s.req === req && s.state === 2) { s.state = 1; s.req = 0; }
+    if (!pl) return;
+    pl.requests = pl.requests.filter(r => r.id !== req);
+    for (const s of pl.ships) if (s.req === req) s.state = 1;
   }
 
-  /** register a ship with the planner (`00471fd0`): build count first, else claim; group 61, idle */
+  /**
+   * Register a ship with the planner (`00471fd0`): build count first, else claim; group 61, idle,
+   * counter 100. The ship's current job is left running (8.4).
+   */
   registerShip(race: number, ship: Entity): boolean {
     const pl = this.planners[race];
     if (!pl || ship.group !== 0) return false;
@@ -746,8 +755,7 @@ export class Naval {
     else if (pl.claim[t] > 0) pl.claim[t]--;
     else return false;
     ship.group = NAVAL_GROUP;
-    this.w.logistics.cancelJob(ship);
-    pl.ships.push({ id: ship.id, state: 1, req: 0, counter: 0, timer: 0 });
+    pl.ships.push({ id: ship.id, state: 1, req: 0, counter: 100, timer: 0 });
     pl.ships.sort((a, b) => a.id - b.id);
     return true;
   }
@@ -766,29 +774,35 @@ export class Naval {
     const p = this.w.economy.players[pl.race];
     if (!p || p.defeated) return 0;
     const reqOf = (id: number) => pl.requests.find(r => r.id === id);
+    // ship pass (id order); the idle list holds the ships that were idle when the pass met them
+    const idle: PlannerShip[] = [];
     for (const s of pl.ships) {
       const ship = this.w.get(s.id);
       if (!ship || !ship.alive) continue;
       switch (s.state) {
+        case 1:
+          idle.push(s);
+          break;
         case 2:
           if (!ship.job) { s.state = 3; s.timer = 0; this.boardingStep(ship, s, reqOf(s.req)); }
           break;
         case 3:
           if (++s.timer > 50) {
-            s.state = 4; s.timer = 0;
+            s.state = 4;
             const r = reqOf(s.req);
             if (r) this.startSail(ship, r.dx, r.dy, 5);
+            else this.w.logistics.cancelJob(ship);
           }
           break;
         case 4:
           if (!ship.job) { s.state = 5; s.timer = 0; this.unload(ship, -1); }
           break;
         case 5:
-          if (++s.timer > 50) { s.state = 1; s.timer = 0; s.req = 0; }
+          if (++s.timer > 50) s.state = 1;
           break;
       }
     }
-    // serve the open requests
+    // serve the open requests (id order), at most one idle ship each per run
     let unserved = 0;
     for (const r of pl.requests) {
       if (r.state >= 3) continue;
@@ -799,10 +813,10 @@ export class Naval {
         if (ship) free += this.capacity(ship) - ship.passengers.length;
       }
       if (free >= r.waiting.length) continue;
-      const idle = pl.ships.find(s => s.state === 1 && !!this.w.get(s.id)?.alive);
-      if (!idle) { unserved++; continue; }
-      idle.state = 2; idle.req = r.id; idle.timer = 0;
-      this.startSail(this.w.get(idle.id)!, r.px, r.py, 5);
+      const s = idle.shift();
+      if (!s) { unserved++; continue; }
+      s.state = 2; s.req = r.id; s.counter = 100;
+      this.startSail(this.w.get(s.id)!, r.px, r.py, 5);
     }
     if (unserved > 3) { pl.build[ShipType.Transport] = unserved >> 1; pl.claim[ShipType.Transport] = unserved - (unserved >> 1); }
     else if (pl.ships.length < unserved) pl.claim[ShipType.Transport] = 1;
@@ -811,17 +825,28 @@ export class Naval {
     return 10;
   }
 
-  /** boarding step (`00472940`): every waiting unit walks to the ship, in list order */
+  /**
+   * Boarding step (`00472940`): n = counter - passengers. Below 1 the ship leaves for the
+   * destination at once. Otherwise (a counter of 100 restarts at 0) up to n waiting units walk to
+   * the ship in list order, each raising the counter; an empty list serves the request.
+   */
   private boardingStep(ship: Entity, s: PlannerShip, r: PlannerRequest | undefined): void {
-    s.counter = 100;
+    let n = s.counter - ship.passengers.length;
+    if (n < 1) {
+      s.state = 4;
+      if (r) this.startSail(ship, r.dx, r.dy, 5);
+      else this.w.logistics.cancelJob(ship);
+      return;
+    }
+    if (s.counter === 100) s.counter = 0;
     if (!r) return;
-    for (const id of r.waiting.splice(0)) {
-      const u = this.w.get(id);
+    while (n > 0 && r.waiting.length) {
+      const u = this.w.get(r.waiting.shift()!);
       if (!u || !u.alive || u.inside >= 0) continue;
       this.startBoard(u, ship, 5);
-      s.counter--;
+      n--; s.counter++;
     }
-    r.state = 3;
+    if (!r.waiting.length) r.state = 3;
   }
 
   // ---------------------------------------------------------------- state
@@ -836,7 +861,7 @@ export class Naval {
     for (const pl of this.planners) {
       if (!pl) continue;
       mix(pl.race); mix(pl.job); mix(pl.nextReq);
-      for (const s of pl.ships) { mix(s.id); mix(s.state); mix(s.req); mix(s.timer); }
+      for (const s of pl.ships) { mix(s.id); mix(s.state); mix(s.req); mix(s.timer); mix(s.counter); }
       for (const r of pl.requests) { mix(r.id); mix(r.state); mix(r.px); mix(r.py); mix(r.dx); mix(r.dy); for (const u of r.waiting) mix(u); }
       for (let t = 64; t < ADDON_TYPES; t++) { mix(pl.claim[t]); mix(pl.build[t]); }
     }

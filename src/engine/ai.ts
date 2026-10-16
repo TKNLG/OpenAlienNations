@@ -19,6 +19,9 @@ import { Logistics } from './logistics.ts';
 
 import { AiJob, Grp, U, B, KIND_UNIT, KIND_BUILDING, KIND_NATURE, ring } from './ai-defs.ts';
 import { NJ } from './naval.ts';
+
+/** the engine's found-town job (units-and-jobs.md 3.1 kind 0x0E) */
+const LJ_FOUND = 0x0e;
 export { AiJob, isAiJob, Grp, U, B, ring } from './ai-defs.ts';
 
 const SUBCELL = 256;
@@ -458,7 +461,11 @@ export class Ai {
     return null;
   }
 
-  /** founding mission (0x36, every 50 ticks): data [town, founder, x, y, has target] */
+  /**
+   * Founding mission (0x36, every 50 ticks; 1.12 run order a..f): data [town, founder, x, y, has
+   * target] plus, in the add-on, [ship request]. A founder inside a building or aboard a ship ends
+   * the mission and keeps group 54 (step b, quirk: he never founds and blocks the town's founding).
+   */
   private runFounding(job: Job): number {
     const ps = this.players[job.owner];
     const d = job.data;
@@ -475,19 +482,27 @@ export class Ai {
     }
     const f = this.w.get(d[1]);
     if (!f || !f.alive || (f.oid & 0xffff) !== U.Founder || f.group !== Grp.Founder) return end(f);
+    // b: inside a building or a ship: the mission ends, the founder stays in group 54
+    if (f.inside >= 0) { if (ps.founding === job.id) ps.founding = 0; return 0; }
+    // c: the target is no longer valid: look for a new one; the founder's job (and a ship request) is dropped
     if (!d[4] || !this.siteValid(ps.race, d[2], d[3])) {
       const site = this.findSite(ps.race);
       if (!site) { ps.noSite = 1; return end(f); }
       [d[2], d[3]] = site; d[4] = 1;
-      // the site moved: a running ship request of the founder is cancelled (addon.md 8.4)
-      if (d[5]) { this.w.naval.cancelRequest(ps.race, d[5]); d[5] = 0; }
+      const j = f.job ? this.w.sched.get(f.job) : undefined;
+      if (j && !j.cancelled) {
+        if (j.kind === NJ.Wait && d[5]) this.w.naval.cancelRequest(ps.race, d[5]);
+        this.w.logistics.cancelJob(f);
+      }
+      if (f.path) this.w.halt(f);
+      if (d[5] !== undefined) d[5] = 0;
+      return 50;
     }
-    if (f.inside >= 0) return 50;
-    if (this.w.addon && this.distTo(f, d[2], d[3]) > 15 && this.ferry(ps, f, d)) return 50;
-    if (this.distTo(f, d[2], d[3]) <= 15) {
-      // the engine's founding (units-and-jobs.md 11): new town + town-hall site, the founder's
-      // job 0x0E builds and enters it; the think job starts the new town's AI jobs once its
-      // town hall is active
+    const dist = this.distTo(f, d[2], d[3]);
+    // d: 8..15 cells from the site: found the town (the engine's founding, units-and-jobs.md 11)
+    if (dist >= 8 && dist <= 15) {
+      const j = f.job ? this.w.sched.get(f.job) : undefined;
+      if (j && !j.cancelled && j.kind === LJ_FOUND) return 50;
       f.group = Grp.None;
       if (this.w.logistics.found(f, d[2], d[3])) {
         const s = this.towns[t.id];
@@ -498,26 +513,34 @@ export class Ai {
       d[4] = 0;   // taken meanwhile: look again next run
       return 50;
     }
-    if (!f.path) this.walkToward(f, d[2], d[3]);
+    // e: busy (a job, or a walk under way)
+    if (f.job || f.path) return 50;
+    // f: a free cell 8..15 from the site (30-ring search); another island: ask for a ship
+    const c = this.approachCell(d[2], d[3]);
+    if (!c) return 50;
+    if (this.w.addon) {
+      const here = this.w.islandAt(...this.cell(f)), there = this.w.islandAt(c[0], c[1]);
+      if (here !== there) {
+        const [fx, fy] = this.cell(f);
+        d[5] = this.w.naval.request(ps.race, 1, 0, fx, fy, c[0], c[1]);
+        if (d[5]) this.w.naval.addWaiting(ps.race, d[5], f);
+        return 50;
+      }
+    }
+    this.walkToward(f, c[0], c[1]);
     return 50;
   }
 
   /**
-   * Add-on founding across water (addon.md 8.4): a founder on another island than his site asks
-   * the naval planner for a ship and waits (job 0x3E) until it is his turn to board. True while
-   * the ferry is in progress.
+   * The founder's goal (1.12 step f, `0046ef70`): the 30-ring site search around the site
+   * (world-populate.md 2.3) for a cell that is free land and 8..15 cells from it.
    */
-  private ferry(ps: AiPlayer, f: Entity, d: number[]): boolean {
-    const target = this.w.islandAt(d[2], d[3]), here = this.w.islandAt(...this.cell(f));
-    if (target === 0 || here === 0 || target === here) return false;
-    const j = f.job ? this.w.sched.get(f.job) : undefined;
-    if (j && !j.cancelled && (j.kind === NJ.Wait || j.kind === NJ.Board || j.kind === NJ.LeaveShip)) return true;
-    if (d[5] && this.w.naval.requestOpen(ps.race, d[5])) { this.w.naval.addWaiting(ps.race, d[5], f); return true; }
-    const [fx, fy] = this.cell(f);
-    d[5] = this.w.naval.request(ps.race, 1, 0, fx, fy, d[2], d[3]);
-    if (!d[5]) return false;
-    this.w.naval.addWaiting(ps.race, d[5], f);
-    return true;
+  private approachCell(x: number, y: number): [number, number] | null {
+    return this.w.naval.siteSearch(x, y, 30, (px, py) => {
+      const dist = this.dist(px, py, x, y);
+      if (dist < 8 || dist > 15 || this.w.blocked[(py << this.w.bits) | px]) return false;
+      return !this.w.addon || this.w.islandAt(px, py) !== 0;
+    });
   }
 
   // ---------------------------------------------------------------- scouts (0x28)
@@ -527,6 +550,7 @@ export class Ai {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || u.job !== job.id) return 0;
     if (u.path) return 10;
+    if (this.w.isShip(u)) return this.exploreShip(u);
     const [x, y] = this.cell(u);
     if (!d[2] || this.dist(x, y, d[0], d[1]) <= 2 || d[3] > 40) {
       d[0] = this.rand() % this.w.size; d[1] = this.rand() % this.w.size; d[2] = 1; d[3] = 0;
@@ -536,6 +560,18 @@ export class Ai {
     d[3]++;
     if (!this.walk(u, x + dx, y + dy, 2000) || !u.path) d[2] = 0;
     return 10;
+  }
+
+  /**
+   * The explore job of a ship (the AI's patrolling warship, addon.md 8.2): a random map cell, the
+   * nearest cell of a square spiral around it that the ship may use, one walk there; the next
+   * round after rand() % 5 + 1 ticks once the walk is over (arrived, or no way to another sea).
+   */
+  private exploreShip(u: Entity): number {
+    const x = this.rand() % this.w.size, y = this.rand() % this.w.size;
+    const c = this.w.naval.spiral(x, y, this.w.size >> 1, (px, py) => this.w.shipBlocked[(this.mask(py) << this.w.bits) | this.mask(px)] === 0);
+    if (c) this.walk(u, c[0], c[1], 30000);
+    return 1 + (this.rand() % 5);
   }
 
   // ---------------------------------------------------------------- attacks (2.4, 2.5)

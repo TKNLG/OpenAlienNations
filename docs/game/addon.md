@@ -864,7 +864,11 @@ Add-on mode only:
 
 - Every member of the warship gang without a job gets job **0x28** (random map cells,
   `combat.md` 15), first run after rand() % 5 + 1 ticks. The AI patrol ship therefore wanders
-  the sea at random.
+  the sea at random. Each round of the job (Gold `00487700`): x = rand() % size, then y; walk a
+  square spiral from that cell to the first cell the unit's own blocking mask (unit +0x28; the
+  ship mask for ships) allows; a follow-path child job (kind 6) to it; the job returns
+  rand() % 5 + 1. While the child runs, the job returns the child's result; when the child ends
+  (arrived, or no path to another sea body), the next round draws a new cell.
 - A released fishing boat (gang trimmed) is sent to the town's first **shipyard**, when the town
   has a harbour and a shipyard, instead of to the school. Ships cannot enter class-5 buildings,
   so that walk fails *(quirk by reading)*.
@@ -911,19 +915,30 @@ first run after 10 ticks (`00462e10`).
 | 4 | sailing to the destination | when its job ends: state 5 and **eject every passenger** (5.3) |
 | 5 | unloading | timer + 1 per run; above 50: state 1 |
 
-**Boarding step** (`00472940`): give each waiting unit of the request (in list order) a go-to
-job to the ship (boarding, 5.2), first delay 5, and remove it from the list. The counter starts
-at 100 and limits nothing in practice. Units that find the ship full are refused and stay idle.
-When the request's list is empty, request state = 3 (served).
+**Boarding step** (`00472940`, re-read 2026-10), with the ship's counter c and its passenger
+count p:
+1. n = c − p. If n < 1, the ship skips boarding: state 4 at once, its current job is cancelled
+   and it gets the 0x3B job toward the request's destination (first run after 5 ticks).
+2. Otherwise, if c = 100, c := 0. Then for the waiting units in list order, while n > 0: cancel
+   the unit's job, give it a go-to job to the ship (boarding, 5.2), first delay 5, remove it from
+   the list, n − 1, c + 1. Units that find the ship full are refused and stay idle.
+3. When the request's list is empty, request state = 3 (served).
 
-**Request service** (each run, for each request with state < 3):
+The counter is 100 when the planner registers a ship (`00471fd0`) and when the request service
+assigns it (below); after a boarding step it holds the number of units boarded. The assignment
+inside **New request** does not touch it, so a ship assigned there boards at most as many units
+as on its last trip (none if it boarded none: it then sails to the destination empty) *(quirk)*.
+
+**Request service** (each run, for each request with state < 3, in id order):
 
 1. Sum the free places (capacity − passengers) of the ships already assigned to it (state 2,
    this request).
-2. If that is less than the units it still needs, take the next idle ship:
-   - state 2, request = this one;
-   - the ship gets a 0x3B job toward the pickup cell, first delay 5.
-3. If no ship is idle, count the request as unserved.
+2. If that is less than the number of units still waiting in its list, take the next ship of
+   the **idle list**: the ships that were in state 1 during this run's ship pass, in ship-id
+   order (a ship that turned idle in this pass is not in it); each idle ship is used once:
+   - state 2, request = this one, counter = 100;
+   - its current job is cancelled; it gets a 0x3B job toward the pickup cell, first delay 5.
+3. If the idle list is empty, count the request as unserved.
 
 Then: with u unserved requests, if u > 3, set build[67] = u/2 and claim[67] = u − u/2.
 Otherwise, if the number of ships known is less than u, set claim[67] = 1.
@@ -931,9 +946,12 @@ Otherwise, if the number of ships known is less than u, set claim[67] = 1.
 **New request** (`00472630`), with {units n, goods g, pickup, destination, flags}:
 
 - If flag bit 1 is set and more than 50 requests exist, refuse.
-- Otherwise store it with the next id. Assign idle ships at once, each reducing n by its
-  capacity and g by 5, until both reach 0. Each assigned ship gets state 2 and a 0x3B job to
-  the pickup cell.
+- A request with no units and no goods is not stored.
+- Otherwise store it (state 2, i.e. open) with the next id. Assign the ships that are idle
+  (state 1) at once, in id order, each reducing n by its capacity and g by 5 (not below 0),
+  until both reach 0. Each assigned ship gets state 2, this request, its current job cancelled
+  and a 0x3B job to the pickup cell (first delay 5); its counter is left as it is (see the
+  boarding step).
 
 **Other entry points:**
 
@@ -942,19 +960,25 @@ Otherwise, if the number of ships known is less than u, set claim[67] = 1.
 | `00471f40` | founding, army | add waiting units to a request; each unit is referenced |
 | `00471fd0` | AI training hook (8.5) | register a ship: consume one count of its type (build[t] first, else claim[t]), set the unit's **group to 61** (0x3D), add it as idle |
 | `00472160` | unit death (`00468790`), when a unit of group 61 dies | drop the ship; claim[type] = 1, so the next free ship of that type is taken over |
-| `00472f90` | founding | cancel a request (state 3); its ships become idle |
+| `00472f90` | founding | cancel a request (state 3, removed from the request map); **every** ship whose request is this one becomes state 1 whatever its state (a ship already sailing keeps its job and passengers) |
 
 **Users:**
 
-- **Founding** (`0046f340` = AN `00467f80`):
-  - when the AI founder must reach a site, a cell 8..15 cells from the site is found with a
-    30-ring search (`0046ef70`: free land);
+- **Founding** (`0046f340` = AN `00467f80`; full run order in `ai-diplomacy-trade.md` 1.12):
+  - when the AI founder (no job) must reach a site, a cell 8..15 cells from the site is found
+    with a 30-ring search (`0046ef70`: free land for the founder, distance 8..15);
   - if that cell is on the founder's island, the founder walks there (base);
   - otherwise a request is made: 1 unit, pickup = the founder's position, destination = that
-    cell. The founder is added to it and gets job **0x3E (wait for a ship)**: the run only
-    returns 500, so the unit idles until the planner replaces the job with a boarding walk;
-  - when the site moves (re-search), any running request of the founder is cancelled
-    (`00472f90`).
+    cell. The founder is added to it and gets job **0x3E (wait for a ship)**, first run after 5
+    ticks: the run only returns 500, so the unit idles until the planner replaces the job with a
+    boarding walk;
+  - when the site becomes invalid and a new one is found, a founder waiting with job 0x3E has
+    his request cancelled (`00472f90`, the request id is in the job), and the founder's job is
+    cancelled whatever it is, so the next run asks again;
+  - **once the founder is aboard** (unit +0x6C = the ship), the mission's next run ends it
+    (`ai-diplomacy-trade.md` 1.12 step b, confirmed at `0046f401..0046f404` / `0046f7aa`). The
+    ship still carries him over and ejects him, but he lands with no job and group 54 and never
+    founds *(quirk)*.
 - **Army** (`0046c050` = AN `00465ad0`):
   - members whose island differs from the target's are grouped;
   - for each group, one request is made: n = members, pickup = the first member's position,
@@ -965,8 +989,10 @@ Otherwise, if the number of ships known is less than u, set claim[67] = 1.
 
 ### 8.5 Training ships (C, `004740c0` = AN `0046b0f0`)
 
-When the nation has a naval planner, before the normal training choice, for t = 65, 66, 67 in
-this order:
+This is part of the planner's **training needs** (phase 1, `ai-diplomacy-trade.md` 1.6), not of
+the training step: after the essential workers (1.6 step 1) and the "first queue entry has
+priority 0" stop (step 2), and before the want loop (step 3). When the nation has a naval
+planner, for t = 65, 66, 67 in this order (confirmed in the disassembly `00474338..00474527`):
 
 1. Walk the town's units of type t in list order and register each one that has no group
    (`00471fd0`):
@@ -974,17 +1000,28 @@ this order:
    - then while claim[t] > 0.
 
    Every registration lowers one of the two counts.
-2. If build[t] is still > 0: queue type t in the AI training queue, unless it is already
-   there. The code first asks the build-menu check `0045faf0` with the ship type. A result of 0
-   would queue a **shipyard** instead (when the town has no shipyard and none queued). That
-   check never returns 0 (−1, 1, 2, 3 or 4), so this branch is **dead**, and its call with type
-   63 never runs *(C by reading)*.
-3. If anything naval was queued, the run ends there.
+   Registration does not test where the ship is or what it does; the town's unit list of that
+   type is walked once, continuing where the first loop stopped.
+2. If build[t] is still > 0: the code first asks the build-menu check `0045faf0` with the ship
+   type. A result of 0 would queue a **shipyard** instead (when the town has no shipyard and
+   none queued). That check never returns 0 (−1, 1, 2, 3 or 4), so this branch is **dead**, and
+   its call with type 63 never runs *(C by reading)*. Otherwise a flag "naval" is set and type t
+   is put into the planner's training queue with **priority 0** (front of the queue), unless it
+   is already there.
+3. If the flag is set (some build[t] > 0), the training needs end here: no want loop this phase.
 
-So the planner trains transport ships only when more than 3 requests are unserved
-(build[67] = u/2). Warships come from the gang target A[65] (8.2) through the normal training.
-Trade transports come from A[67] (8.6). Every free transport ship beyond the planner's claims
-stays ungrouped and available for trade.
+Then, in the want loop (1.6 step 3), Gold adds the planner's **claim[t]** to every type's want
+(confirmed at `0047457d..004745bf`: want = operators + C + B + A + claim − queued − existing).
+Since claim[67] starts at 1, **every computer town wants one transport ship** (priority 4) until
+the planner has taken one over; the first one trained anywhere in the nation is registered (claim
+falls to 0), later ones stay ungrouped. The training step (1.7) is unchanged: a ship order needs
+a free porter and goes to the first shipyard whose order check passes; without a shipyard the
+request is dropped and asked again in the next phase 1.
+
+So: one transport per nation comes from the initial claim, more from build[67] = u/2 when more
+than 3 requests are unserved, and trade transports from A[67] (8.6). Warships come from the gang
+target A[65] (8.2) through the normal training. Every free transport ship beyond the planner's
+claims stays ungrouped and available for trade.
 
 ### 8.6 Trade and research (C)
 

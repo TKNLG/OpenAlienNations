@@ -496,6 +496,29 @@ The founding mission (every 50 ticks):
    "found town" job (`00464aa0`, `units-and-jobs.md` 3.1 kind 0x0E). The founder want is cleared.
    Farther away, the founder walks to a passable cell within 30 cells of the target.
 
+Exact run order (C, re-read 2026-10 in AN `00467f80` and Gold `0046f340`, branches confirmed in
+the Gold disassembly `0046f3f6..0046f404`, `0046f7aa`, `0046f1a7..0046f1af`):
+
+| step | condition | effect | returns |
+|---|---|---|---|
+| a | no founder yet | take the first **free** founder (type 10, group 0) of the town; group := 54 | (go on) |
+| b | no founder, or the founder is **inside** something (unit +0x6C ≠ 0: a building, or in the add-on a ship) | nothing | **0: the mission ends.** The founder keeps group 54 |
+| c | the target is not valid (step 2 test) | scan the candidates (step 3). On a hit: new target; if the founder has a job, cancel it (in the add-on, a wait-for-ship job 0x3E first cancels its ship request, `addon.md` 8.4). No hit: the mission ends (0) | 50 |
+| d | target valid, founder distance 8..15 (`0045fa10`: max + min/2) | if his job is already the found-town job (0x0E): wait. Else found the town (`0046afd0`), drop the founder, clear C[10] | 50 |
+| e | target valid, distance outside 8..15, the founder has a job | wait | 50 |
+| f | as e, no job | search a cell around the target with the 30-ring site search (`00449c00` / Gold `0044ed90`, test `00467ba0` / `0046ef70`): passable for the founder **and** at distance 8..15 from the target. None: wait. Found: base game, a walk job (follow path, kind 6) to it, first run after 5 ticks; add-on, see `addon.md` 8.4 (walk if that cell is on the founder's island, else a ship request and job 0x3E) | 50 |
+
+Consequences (C):
+- A founder on a **leisure visit** counts as free (section 0), so the mission can take a founder
+  who is inside a house; its first run then ends at step b. Such a founder stays in group 54
+  for good: it is never free again, still counts as an existing founder for want(10), so the
+  town trains no other founder and starts no new mission while it lives (quirk).
+- The same happens to a founder **carried by ship** in the add-on: once he is aboard, the mission
+  ends; after landing he stands idle in group 54 on the other island and never founds (quirk,
+  `addon.md` 8.4).
+- A founder closer than 8 cells to the target does not found; he first walks out to the 8..15
+  ring (step f).
+
 ### 1.13 Map data the AI uses (C)
 
 | `.dvm` point list (file order) | used by |
@@ -1294,3 +1317,43 @@ town area, walks the founder to within 8..15 cells of it and founds the town the
   order still queued, without refund (1.15). The AI's "queued" counts depend on this.
 - `combat.md` 9 / `integration-ai.md`: the AI military job does not refill outposts (2.2, dead
   branch); garrisons come only from the completion worker requests.
+
+---
+
+## 9. Gold Edition add-on: the computer navy (C, summary; details in `addon.md` 8)
+
+Re-derived 2026-10 from `dvge.exe` after a play-test report ("an hour of island free play, never a
+ship of another nation"). The Gold AI routines were compared with the AN ones: the think job, the
+profiles and strategies, the founding check, the research pick (`00413610` = AN `00410490`) and
+the next-topic rule (`00478f00`), the training step (`00475970` = AN `0046c670`) and the planner
+run (`00475b90`) are unchanged apart from the 68-entry arrays. The additions are all in the
+building targets, the training needs, the gangs, the gathering, the markets job, the army, the
+founding mission and the new naval planner. **Nothing in them depends on the AI profile**; the
+profile only decides how often founding and attacks happen, and those reach the ships.
+
+| what | rule | where |
+|---|---|---|
+| shipyard 63 | target 1 when P > 14 (normal-target branch, 5+ completed buildings); queued like any building (priority 4), so only once invention 30 (Werft) is researched and the goods are in stock; site at the town's own shore (`addon.md` 3.1, 8.1); a town without shore in its area never gets one | `00474680` |
+| harbour 62 | target 1 when P > 19; priority 8; needs invention 31 (Hafen) | `00474680` |
+| research | unchanged: the cursor walks the race's list in order, so 30 Werft, 31 Hafen and 32 heavy warship come **after every base invention 0..29** (1.11). Free play: Niedrig grants none of them; Mittel grants 30 and 31; Hoch grants 30, 31, 32 (`economy.md` 4.4.2). Campaign missions preset them per race block | `00478f00`, `00413610` |
+| fishing boat 64 | gang of 1 in every add-on town (A[64] = 1, max(1, food factor / 4) with food factor 0), trained at the shipyard (priority 12). Every 150 ticks while food space > 5 each gang boat gets a new fishing job on a random water cell of the whole map (up to 41 tries), replacing its current job | `00478180`, `00477610` |
+| light warship 65 | gang of 1 when P > 20 (needs invention 15 and the shipyard). Each idle gang member gets the explore job 0x28: a random map cell, the nearest cell the ship may use by a square spiral around it, a follow-path walk there, then again after rand() % 5 + 1 ticks | `00478180`, `00487700` |
+| heavy warship 66 | never wanted by the gangs; only trained when the planner's build[66] or claim[66] asks (after a planner-owned 66 died, which never happens: no planner 66 exists) | `004740c0` |
+| transport 67 | (1) want(67) includes the planner's **claim[67]**, initially 1 for every computer nation, so the first town with a shipyard trains one transport (priority 4) and the planner takes it over (group 61); (2) build[67] = u/2 when more than 3 ship requests are unserved; (3) A[67] = number of harbour trade partners (markets job, second pass), whose ships stay ungrouped and run trade routes | `004740c0`, `00472b30`, `00477060` |
+| settling other islands | the founding mission (1.12) takes the first valid site of the start-candidate list. Island maps list the candidates island by island, **largest island first** (`formats/addon.md` 10.2 step 2), so a nation that does not live on the largest island usually targets a site there: its founder asks the planner for a ship (job 0x3E), is carried over, and the mission **ends when he is aboard** (1.12 step b). He lands and stands idle in group 54; that town founds nothing more while he lives | `0046f340`, `00472630` |
+| sea trade | harbour trade routes to partner harbours on any island (markets job pass 2); partners need the base trade conditions (peace, 4.3), so nothing happens without diplomacy | `00477060` |
+| attacks across water | the army (2.5) groups members whose island differs from the target's; one ship request per group (pickup = first member, destination = the target); members wait with job 0x3E; on board they are skipped when the army hands out attack jobs. Same profiles and gates as on land (2.4) | `0046c050`, `0046cbd0` |
+| defence against ships | nothing new: the military job and the intruder records are the base ones; outposts and armed units shoot ships in range, the warship gang member defends only through the help rule and patrol contacts | (no add-on code) |
+
+**Free play versus campaign.** The routines are the same. Differences come from data: campaign
+records preset inventions 30..32 and the AI profile per race, and campaign maps carry their own
+point lists (the founding candidates); free play uses profile `rand() % 3` (0..2) and the island
+generator's lists. In island free play every race starts on one of the three largest islands
+(`formats/addon.md` 10.2 step 3), so every crossing needs a ship.
+
+**What a human sees in island free play** (consequences, C): at Niedrig no computer ship
+exists before the AI has researched its whole base tree (in our runs 35,000..50,000 ticks, about
+an hour). At Mittel / Hoch the shipyard follows at P > 14 (our runs: 8,000..13,000 ticks), then a
+fishing boat that wanders the whole sea, a transport, and from P > 20 a patrolling warship. A
+transport carrying one founder towards the largest island follows as soon as a profile's founding
+threshold is reached (profiles 0..2: smallest town above 20, 10 or 30 people).

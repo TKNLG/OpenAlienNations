@@ -7,7 +7,7 @@ import type { Entity } from './world.ts';
 import type { Town } from './economy.ts';
 import type { Ai } from './ai.ts';
 import { Grp, U, B, TYPES, KIND_UNIT, KIND_BUILDING, KIND_NATURE, ring } from './ai-defs.ts';
-import { ShipType, HARBOUR, SHIPYARD } from './naval.ts';
+import { ShipType, HARBOUR, SHIPYARD, type Planner } from './naval.ts';
 import { needsTerritory } from './territory.ts';
 
 /** the AI state of one computer town (saved with the game) */
@@ -370,9 +370,12 @@ function trainingNeeds(ai: Ai, t: Town, s: AiTown, c: Census): void {
     return;
   }
   if (s.train.length && s.train[0][1] === 0) return;
+  // add-on: the naval planner's ships first (addon.md 8.5); its claim counts join every want
+  const pl = w.addon ? w.naval.planner(t.race) : null;
+  if (pl && navalNeeds(ai, t, s, pl)) return;
   const P = t.population;
   for (const ty of unitTypes(ai, t.race)) {
-    let want = c.opBld[ty] + s.C[ty] + s.B[ty] + s.A[ty] - pending(t, ty) - c.units[ty];
+    let want = c.opBld[ty] + s.C[ty] + s.B[ty] + s.A[ty] + (pl?.claim[ty] ?? 0) - pending(t, ty) - c.units[ty];
     if (ty === U.Builder) want += 1 + (P > 20 ? 1 : 0);
     if (want <= 0 || queued(ty)) continue;
     const prio = unitPrio(ty);
@@ -418,7 +421,6 @@ function trainOne(ai: Ai, t: Town, s: AiTown, c: Census): void {
     if (c.gang < 2) flushSchools(ai, t);
     return;
   }
-  if (navalTraining(ai, t, s)) return;
   while (s.train.length) {
     const [type] = s.train.shift()!;
     const r = w.rules.get(((t.race << 16) | type) >>> 0);
@@ -449,27 +451,25 @@ function flushSchools(ai: Ai, t: Town): void {
 }
 
 /**
- * The naval planner's training hook (addon.md 8.5, `004740c0`): for 65, 66, 67 register the
- * town's ungrouped ships (build count first, then claim count); a type still to build is ordered
- * at a shipyard. True when something naval was ordered (the run ends there).
+ * The naval planner's part of the training needs (addon.md 8.5, `004740c0`): for 65, 66, 67 the
+ * town's ungrouped ships of that type are registered (build count first, then claim count, one
+ * walk over the town's list); a type whose build count stays above 0 is put at the front of the
+ * training queue (priority 0) unless queued, and the training needs end there for this phase.
  */
-function navalTraining(ai: Ai, t: Town, s: AiTown): boolean {
-  const w = ai.w, pl = w.naval.planner(t.race);
-  if (!pl) return false;
-  let queued = false;
+function navalNeeds(ai: Ai, t: Town, s: AiTown, pl: Planner): boolean {
+  const w = ai.w;
+  let naval = false;
   for (const ty of [ShipType.Light, ShipType.Heavy, ShipType.Transport]) {
     for (const e of w.entities) {
       if (pl.build[ty] <= 0 && pl.claim[ty] <= 0) break;
-      if (e.kind !== KIND_UNIT || e.town !== t.id || (e.oid & 0xffff) !== ty || (e.oid >>> 16) !== t.race || !e.alive || e.group !== Grp.None || e.inside >= 0) continue;
+      if (e.kind !== KIND_UNIT || e.town !== t.id || (e.oid & 0xffff) !== ty || (e.oid >>> 16) !== t.race || !e.alive || e.group !== Grp.None) continue;
       w.naval.registerShip(t.race, e);
     }
-    if (pl.build[ty] > 0 && !pending(t, ty) && !queued) {
-      const yards = w.entities.filter(e => e.kind === KIND_BUILDING && e.town === t.id && (e.oid & 0xffff) === SHIPYARD && (e.oid >>> 16) === t.race && e.complete && e.alive);
-      for (const b of yards) if (b.queue.length < 5 && w.logistics.trainState(t, b, ty) === 1 && w.logistics.train(b, ty)) { queued = true; break; }
-    }
+    if (pl.build[ty] <= 0) continue;
+    naval = true;
+    if (!s.train.some(r => r[0] === ty)) s.train.unshift([ty, 0]);
   }
-  void s;
-  return queued;
+  return naval;
 }
 
 // ---------------------------------------------------------------- economy (0x33, 1.8)
