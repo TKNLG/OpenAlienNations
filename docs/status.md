@@ -52,6 +52,9 @@ addresses they were derived from, so any claim can be re-checked.
 - `architecture/`: simulation/lockstep, multiplayer, AI integration with the list of remaining
   deviations (`integration-ai.md` §7, §7a–c), add-on integration, runtime recorder.
 - `roadmap.md` (vanilla now / enhanced later), `release.md`.
+- Player docs linked from the README: `install.md` (game folder, add-on, music, config file),
+  `options.md`, `server.md` (Docker, NAS, multiplayer hosting), `faq.md`; developer entry:
+  `CONTRIBUTING.md` in the repo root.
 
 ## 4. Current state
 

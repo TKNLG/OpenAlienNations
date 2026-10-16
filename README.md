@@ -4,20 +4,13 @@
 
 # OpenAlienNations
 
-OpenAlienNations is an open-source remake of the 1999 strategy game **Alien Nations** (German:
-**Die Völker**) that runs in your web browser. It plays the campaigns, tutorials and free play of
-the original, the island campaigns and ships of the **Gold Edition add-on**, and **multiplayer**
-with friends in the browser, optionally with a sharper **HD interface**.
+OpenAlienNations is an open-source remake of the 1999 strategy game **Alien Nations** (German: **Die Völker**) that runs in your web browser. It plays the campaigns, tutorials and free play of the original, the island campaigns and ships of the **Gold Edition add-on**, and **multiplayer** with friends in the browser, optionally with a sharper **HD interface**.
 
-It is **not** the game itself and contains **no game files**: you need your own copy of
-Alien Nations (GOG, or the original CD / Gold Edition). "Alien Nations" and "Die Völker" are
-trademarks of their respective owners; this is an independent fan project, not affiliated with
-or endorsed by them.
+It is **not** the game itself and contains **no game files**: you need your own copy of Alien Nations (GOG, or the original CD / Gold Edition). "Alien Nations" and "Die Völker" are trademarks of their respective owners; this is an independent fan project, not affiliated with or endorsed by them.
 
-**Status:** very close to the original, including its quirks. If something plays differently
-from the original game, please [open an issue](../../issues).
+**Status:** very close to the original, including its quirks. If something plays differently from the original game, please [open an issue](../../issues).
 
-**[⬇ Download the latest release](../../releases/latest)** (Windows and Linux; Docker see [Quick start](#quick-start))
+**[⬇ Download the latest release](../../releases/latest)** (Windows and Linux; Docker: see [Quick start](#quick-start))
 
 ## What you need
 
@@ -28,13 +21,11 @@ from the original game, please [open an issue](../../issues).
 ## Quick start
 
 **Windows**
-1. Download `OpenAlienNations-<version>-windows-x64.exe` and double-click it. It is not signed:
-   if SmartScreen warns, click **More info** → **Run anyway**.
+1. Download `OpenAlienNations-<version>-windows-x64.exe` and double-click it. It is not signed: if SmartScreen warns, click **More info** → **Run anyway**.
 2. The first time, choose your game folder (a found install is already selected).
 3. The game opens in your browser. **Keep the console window open while you play**; closing it stops the game.
 
-**Linux (x64):** `tar xzf OpenAlienNations-<version>-linux-x64.tar.gz`, then `./OpenAlienNations`.
-It asks for the game folder (dialog or terminal); Wine and Lutris installs work too.
+**Linux (x64):** `tar xzf OpenAlienNations-<version>-linux-x64.tar.gz`, then `./OpenAlienNations`. It asks for the game folder (dialog or terminal); Wine and Lutris installs work too.
 
 **Docker (server / NAS):**
 ```
@@ -50,8 +41,7 @@ Then open `http://<server>:8080/`. Compose, music, Unraid: [docs/server.md](docs
 | CD version | base game; music needs a GOG install or ripped CD tracks ([how](docs/install.md#music)) |
 | Gold Edition | base game **and** add-on; music like the CD version |
 
-Point it at the folder that contains `Data` and `Bin`; start with `--setup` to choose again.
-Details: [docs/install.md](docs/install.md).
+Point it at the folder that contains `Data` and `Bin`; start with `--setup` to choose again. Details: [docs/install.md](docs/install.md).
 
 ## Play with friends
 
@@ -70,8 +60,7 @@ More in [docs/server.md](docs/server.md#multiplayer-hosting).
 
 ## Saves
 
-Saved games are stored **in your browser**, separately for each browser and address. To back them
-up or move them, use **Exportieren** / **Importieren** in the **Spiel laden** menu.
+Saved games are stored **in your browser**, separately for each browser and address. To back them up or move them, use **Exportieren** / **Importieren** in the **Spiel laden** menu.
 
 ## In-game settings
 
@@ -91,11 +80,8 @@ More in [docs/faq.md](docs/faq.md).
 
 ## More
 
-[Installing](docs/install.md) · [Options](docs/options.md) · [Server, NAS & multiplayer](docs/server.md) ·
-[FAQ](docs/faq.md) · [Contributing](CONTRIBUTING.md) · [Project status](docs/status.md)
+[Installing](docs/install.md) · [Options](docs/options.md) · [Server, NAS & multiplayer](docs/server.md) · [FAQ](docs/faq.md) · [Contributing](CONTRIBUTING.md) · [Project status](docs/status.md)
 
 ## License
 
-The code and documentation are licensed under the **GNU General Public License v3.0 or later**
-([LICENSE](LICENSE)). The HD interface pack (`hd/`) and the banner images (`docs/images/`) show
-the original game's artwork and are **not** covered by the GPL. Details: [NOTICE](NOTICE).
+The code and documentation are licensed under the **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)). The HD interface pack (`hd/`) and the banner images (`docs/images/`) show the original game's artwork and are **not** covered by the GPL. Details: [NOTICE](NOTICE).
