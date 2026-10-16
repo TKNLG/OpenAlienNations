@@ -851,22 +851,32 @@ Notes:
   - a group on the **target point's island** is moved as in the base game (cancel and walk when
     farther than 20 cells);
   - every other group makes **one transport request**: units = the group's size, goods 0,
-    pickup = the cell of the group's **first** member, destination = the target point, flags 8
-    (`00472630`); the members are added to its waiting list (`00471f40`), and **every member of
-    the group**, whatever the request's result, has its job cancelled and gets the wait job 0x3E
-    (first run after 5 ticks; it only idles, `addon.md` 8.4).
+    pickup = the cell of the group's **first** member, destination = the target point, the
+    request record's default flags 1 (`00472630`; the record's first field is 8, which earlier
+    versions of this spec took for the flags); the members are added to its waiting list
+    (`00471f40`) when the request was accepted, and **every member of the group**, whatever the
+    request's result, has its job cancelled and gets the wait job 0x3E (first run after 5
+    ticks; it only idles, `addon.md` 8.4).
 
   So the island rule is applied once per join, to the units joining in that think: an army
   formed with ten hunters on its home island makes one request for ten, and each later think
   that adds one new hunter makes another request for that one. Nothing tests whether a unit can
   reach the target at all: without any transport ship the members wait (job 0x3E) until the army
-  ends. The ships themselves follow the planner's rules (`addon.md` 8.4): requests are served one
-  ship each, a ship assigned when a request is made boards at most as many units as on its last
-  trip (none after an empty trip, one after carrying a founder), the rest wait for a later trip.
-  Units are taken from the waiting list whatever they do by then (also after the army ended or
-  retreated, or when they have since joined the town's defence group), carried over and put
-  ashore near the target point with no job; a member is still in its army there, the others are
-  free group-0 units on the victim's island (candidates of the next think).
+  ends. **Flag 1 makes the request refusable**: the planner refuses it when it already holds more
+  than 50 requests, and it never forgets a served one (`addon.md` 8.4 "New request"), so from
+  about the 51st transport request a nation has made, no army request is accepted any more and
+  every army member on another island waits (job 0x3E) until its army ends; after the end it
+  walks home, and the next army that takes it makes it wait again *(quirk)*. Before that, the
+  ships follow the planner's rules (`addon.md` 8.4): each ship works for one request per trip;
+  a ship the request service assigns sends every waiting unit (five get in, the rest are
+  dropped), a ship that was idle when the request was made sends at most its counter (the units
+  sent to it since its last service assignment: 1 after a founder or a lone hunter, then 2, 4,
+  ...; 0 keeps it sailing empty), the rest wait for a later ship. Units are taken from the
+  waiting list whatever they do by then (also after the army ended or retreated, when they have
+  since joined the town's defence group, or when they have died: a dead entry uses up a place),
+  carried over and put ashore near the target island's coast with no job (`addon.md` 8.4
+  "Unloading"); a member is still in its army there, the others are free group-0 units on the
+  victim's island (candidates of the next think).
 - Every run: if the relation between the army's race and the target town's race is no longer 0 or
   1, the army ends. Otherwise the current tactic runs; afterwards a new random tactic is chosen.
 - Both tactics first write the tick into the think job's +0x2C (the cooldown stamp) and end the
@@ -1018,14 +1028,31 @@ against our build in long island free-play runs, `integration-ai.md` 7d):
   near his town hall, raids are formed and dissolved every few hundred ticks without anything
   reaching him, except what the ships carry (below).
 - **The first unit the victim sees is often alone**, also in the original: members walk
-  individually (2.5), and across water each join makes its own transport request, a ship boards
-  as many units as on its previous trip (one after carrying a founder or a single hunter, none
-  after an empty trip), and requests made for armies that have since retreated are still served:
-  their units (by then free, or even in their town's defence group) are put ashore near the
-  victim's town hall one shipload at a time. Such a unit stands idle at the coast; if its army
-  still runs, the next army run (at most 50 ticks) sends it at the current target, otherwise it
-  waits for the next army of its nation, which (being on the target's island and more than 20
-  cells away) makes it walk to the town hall.
+  individually (2.5), and across water each join makes its own transport request (a think
+  that adds one new hunter makes a request for one), a ship that was idle when a request came
+  sends no more units than its counter allows (1 after carrying a founder or a lone hunter,
+  growing with every trip; 0 after an empty service trip), and requests made for armies that
+  have since retreated are still served: their units (by then free, or even in their town's
+  defence group) are put ashore one shipload at a time at the victim island's coast nearest the
+  ship's approach. After about 50 requests a nation's armies stop crossing the water altogether
+  (above). A landed unit has no job: **nothing scans for enemies when it lands** (`addon.md` 8.4
+  "Unloading"). If its army still runs, the next army run (at most 50 ticks) gives it an attack
+  job on the current target wherever it stands; otherwise it waits for the next army of its
+  nation, which (being on the target's island and more than 20 cells away) makes it walk to the
+  town hall. Meanwhile it reacts like any jobless unit: struck, or a unit of its race within 12
+  cells struck, it attacks the striker (help rule, `combat.md` 7).
+- **Which of the victim's units the landed raider goes for** (C): only through the army run or
+  the help rule. The army run looks at the disc of radius 40 around the victim's **town hall**,
+  never around the raider: tactic 0 files the victim's hunters (17), police (21), saboteurs (26)
+  and soldiers (29..36) standing outside buildings in that disc into bucket 0 behind the one
+  important building and the town's outposts (with up to six members everything goes to the
+  important building); tactic 1 attacks the hunters, police and soldiers in that disc first
+  (three members per target), other units (civilians, priests, ships) only when none is there.
+  Units in towers or aboard ships are not found by the scan; ships (64..67) are class 1. So
+  units of the victim near a landing point more than 40 cells from his town hall are attacked
+  only when they or the raider's friends strike first. After a kill, the attack's retarget picks
+  the next unit of the victim's race within 13 cells of the body (lowest class first, `combat.md`
+  3.6), which keeps a raider on the victim's fighters once a fight has started.
 - **What the lone raider attacks:** tactic 0 sends it at the first building of the important
   list (barracks, else the school, the laboratory, large outposts, small outposts, the town
   hall) or, for the 7th and later member, the town's outposts and fighters near the town hall in
