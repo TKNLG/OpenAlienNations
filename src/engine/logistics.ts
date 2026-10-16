@@ -500,7 +500,8 @@ export class Logistics {
   }
 
   /**
-   * The may-enter test (`00460a10`, 4.4) for the cases our build refuses: a completed outpost
+   * The may-enter test (`00460a10`, 4.4) for the cases our build refuses: a construction site
+   * admits only builders and units on a transport job; a completed outpost
    * (class 6) admits only class-2 units of its race while its occupants are below its capacity
    * (+0xDC), plus (as any building) units on a transport job (combat.md 9.1); a training
    * building (class 5) refuses ships (Gold); an active building refuses a unit of its operator
@@ -510,6 +511,9 @@ export class Logistics {
     const r = this.rule(b);
     // Gold: a training building admits everyone except ships (addon.md 3.4, `00466cd0`)
     if (r && r.cls === 5 && b.kind === Kind.Building && this.w.isShip(u)) return false;
+    // a construction site (state 1) admits only builders and units whose current job is a
+    // transport, also the site of a house or town hall (4.4); anyone else stands at its door
+    if (b.kind === Kind.Building && !b.complete && b.order?.kind === 'build') return this.type(u) === T.Builder || this.mainJob(u)?.kind === LJ.Transport;
     if (r && r.residents > 0 && r.cls !== 5 && b.complete && b.kind === Kind.Building) return this.mayEnterResidence(u, b, r);
     // a unit of the building's operator type and race is admitted only while the building is not
     // active or as its stored operator (`00460a10`); units on a transport or builder job (our

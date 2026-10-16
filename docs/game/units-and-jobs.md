@@ -474,7 +474,7 @@ Who may enter (`00460a10`), same race:
 
 | building | allowed |
 |---|---|
-| construction site | builders, and units on a transport job |
+| construction site (state 1) | **only** builders (unit type 11) and units whose **current** job (+0x30) is a transport (type 5); everyone else is refused. This is the first test for a site, so a site of a house or a town hall uses it, not the residence rules below (C, instruction level `00460a41`..`00460a5f`) |
 | training building (class 5) | everybody |
 | any building | units on a builder job; units on a transport job (if they carry goods and there is no room, advisor mentor#17 "stores full" fires, but entry is still allowed); the building's operator type, while the building is not active or when this unit is the current operator |
 | visit building (flag 0x8) | porters |
@@ -1621,6 +1621,9 @@ re-filed (144 of 180 lost transports were failed walks). The following points no
    requester and their load as good to fetch, and every unpaused site whose still-to-consume
    amounts exceed local stock + goods to fetch under way + needed entries gets the difference
    appended as needed entries with one list-1 request each, exactly what a resume (6.8) would file.
+   The site's door now uses the site rule of 4.4 (builders and units whose current job is a
+   transport); ours admitted everyone at a site, so a carrier refused by the acceptance test
+   "entered" the site instead of being turned away at its door (no goods moved either way).
    This only restores the pairing of 6.7 that the original never breaks; it is not a periodic
    check (the original has none). In the original an interrupted delivery order cannot lose a
    need; a pause and resume (6.8) refills a site anyway. A fuzz run (about 1,700 random
@@ -2183,6 +2186,13 @@ early re-files its good to the needed list with a list-1 request, 5.5), open bui
 - No new goods are fetched, except an entry re-filed by a transport that ended early: the
   dispatcher's building test (5.3) does not look at the block, so that entry **is served** (one
   extra delivery, quirk).
+- **A player's delivery order is refused** (C, `004617c0` at instruction level, 3.2): the needed
+  list is empty, so the site does not "accept the load"; the unit gets a plain go-to (0x07)
+  instead, the site's door admits only builders and transports (4.4), and the unit stands idle in
+  front of the site, still carrying its load. A delivery that was **already under way** when the
+  pause came is not touched by the pause and lands in the local stock as usual; the resume then
+  re-files only (still to consume − local stock). The only goods a paused site accepts by order
+  are re-filed ones (an early-ended transport puts an entry back, see above).
 - No builder is sent: an open builder request for the site is dropped (5.2), the last-builder
   rule does not fire (6.4).
 - **The construction step does not check the block** (6.3). A builder that still works the site

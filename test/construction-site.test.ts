@@ -234,7 +234,7 @@ test('delivery order: an interrupted delivery gives the site its needed entry ba
   // the player moves him away before he arrives: the good goes back to the front, one list-1 request
   w.schedule({ type: 'move', player: me, ids: [u.id], x: t.x - 6, y: t.y - 6 });
   w.step();
-  assert.notEqual(jobOf(w, u)?.kind, LJ.Transport);
+  assert.ok(jobOf(w, u)?.kind !== LJ.Transport, 'the delivery ended');
   assert.equal(site.needed[0], WOOD, 're-filed at the front');
   assert.equal(site.needed.filter(g => g === WOOD).length, 2);
   assert.equal(owed(w, site, WOOD), 2);
@@ -283,4 +283,42 @@ test('old saves: a site whose needs were lost by an interrupted delivery order i
   const again = World.restore(r.terrain, JSON.parse(JSON.stringify(r.snapshot())), r.rules, r.weapons);
   assert.equal(again.get(site.id)!.needed.length, 5);
   assert.equal(requests(again, again.get(site.id)!), 5);
+});
+
+test('paused site: a delivery under way still lands in the local stock, a delivery order is refused at the door; resume re-files only what is missing (6.8, 4.4)', { skip }, () => {
+  const { w, me, t, site, u } = carrierAtSchool();
+  // a delivery under way when the pause comes
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  w.step();
+  w.schedule({ type: 'building', player: me, id: site.id, action: 'pause' });
+  w.step();
+  assert.equal(site.paused, true);
+  assert.deepEqual(site.needed, []);
+  assert.equal(jobOf(w, u)?.kind, LJ.Transport, 'the pause does not touch a transport under way');
+  for (let i = 0; i < 1500 && u.carryAmount; i++) w.step();
+  assert.equal(site.local[WOOD], 1, 'delivered into the local stock while paused');
+  // a second carrier ordered to the paused site: nothing is needed, so no transport; the site's
+  // door admits only builders and transports: he stands idle in front of it with his load
+  const v = w.spawnUnit(me, WOODCUTTER, t.x + 4, t.y + 5, t.id); w.economy.joinTown(v, t);
+  v.carryGood = WOOD; v.carryAmount = 1;
+  w.schedule({ type: 'order', player: me, ids: [v.id], target: site.id });
+  w.step();
+  assert.ok(jobOf(w, v)?.kind !== LJ.Transport, 'no delivery transport');
+  assert.equal(w.logistics.mayEnter(v, site), false, 'the site door refuses a unit on a go-to');
+  assert.equal(w.logistics.mayEnter(u, site), false, 'and an idle carrier');
+  for (let i = 0; i < 600 && v.job; i++) w.step();
+  assert.equal(v.job, 0, 'refused at the door: no job');
+  assert.equal(v.carryAmount, 1, 'still carrying');
+  assert.equal(site.local[WOOD], 1, 'nothing more delivered');
+  // resume: still to consume (wood 2, stone 4) - local (wood 1)
+  w.schedule({ type: 'building', player: me, id: site.id, action: 'resume' });
+  w.step();
+  assert.deepEqual(site.needed.slice().sort(), [WOOD, STONE, STONE, STONE, STONE].sort());
+  assert.equal(requests(w, site), 5);
+  // now the order is accepted
+  w.schedule({ type: 'order', player: me, ids: [v.id], target: site.id });
+  w.step();
+  assert.equal(jobOf(w, v)?.kind, LJ.Transport);
+  for (let i = 0; i < 1500 && v.carryAmount; i++) w.step();
+  assert.equal(site.local[WOOD], 2);
 });
