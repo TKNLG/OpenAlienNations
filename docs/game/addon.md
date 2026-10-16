@@ -1034,13 +1034,19 @@ Otherwise, if the number of ships known is less than u, set claim[67] = 1.
     (`ai-diplomacy-trade.md` 1.12 step b, confirmed at `0046f401..0046f404` / `0046f7aa`). The
     ship still carries him over and ejects him, but he lands with no job and group 54 and never
     founds *(quirk)*.
-- **Army** (`0046c050` = AN `00465ad0`):
-  - members whose island differs from the target's are grouped;
-  - for each group, one request is made: n = members, pickup = the first member's position,
-    destination = the army target;
-  - every member gets job 0x3E. Members on the target's island move as in the base game.
-- **Strategy** (`0046cbd0` = AN `00466020`): when the army's idle members get attack jobs,
-  members on board a transport ship are skipped, and they keep sailing.
+- **Army** (`0046c050` = AN `00465ad0`, the join; runs when the army is created and at every
+  think that adds new candidates; full rules in `ai-diplomacy-trade.md` 2.5 "Joining and
+  moving"):
+  - joining warships (65, 66; candidates in add-on mode, `00470140`) sail to the nearest
+    ship cell of the target town's position;
+  - the joining land units whose island differs from the target point's are grouped by island;
+  - for each group, one request is made: n = members, goods 0, pickup = the first member's
+    position, destination = the army target point, flags 8;
+  - every member of such a group gets job 0x3E, whatever the request's result. Members on the
+    target's island move as in the base game.
+- **Strategy** (`0046cbd0` = AN `00466020`, `0046d9e0` = AN `00466e20`): when the army's idle
+  members get attack jobs, members on board a transport ship are skipped (not counted for the
+  six / three per target), and they keep sailing.
 
 ### 8.5 Training ships (C, `004740c0` = AN `0046b0f0`)
 

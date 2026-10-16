@@ -724,9 +724,16 @@ Every think (150 ticks) the strategy routine, for each town with a planner:
    order check passes, C[t] = K / 2 and K keeps the rest; then C[17] (hunters) = min(5, K). Types
    not eligible keep their old value;
 3. collects **army candidates**: every **free** group-0 hunter (first) and soldier 29..36 (type
-   order) of the town (`00468b10`; section 0: idle outside or on a leisure visit).
+   order) of the town (`00468b10`; section 0: idle outside or on a leisure visit). Gold, add-on
+   mode only (`00470140`, the same test as the naval planner's existence, map +0xA50 > 0): then
+   the town's free group-0 **light and heavy warships** (65, 66), in this order. The warship gang
+   member (group 51, `addon.md` 8.2) is not free; a warship becomes a candidate only when it has
+   no group, e.g. after a gang resize released it.
 
-So soldiers above the defence group's share, and idle hunters, are available for attacks.
+The list runs over all towns of the player (one list per think), so the candidate count of 2.4
+is the player's total. So soldiers above the defence group's share, and idle hunters, are
+available for attacks. A unit walking (a follow-path job, for example on its way home after an
+army ended) is not free and not a candidate until it stands.
 
 ### 2.4 Attack decision (per profile) (C)
 
@@ -769,7 +776,22 @@ Notes:
   lab exists: tower 15, then the stonemason's/woodcutter's invention 10, then hunting 12 points,
   1.11), a school, 40 gold and a free porter.
 - While an army exists, new candidates join it every think (`00465ad0`). Joining units get group
-  53; those farther than 20 cells (half the army radius) from the target walk to it.
+  53; those farther than 20 cells (half the army radius) from the target walk to it (details and
+  the Gold island rule in 2.5 "Joining and moving").
+- **The threshold gates only the creation of an army, and every candidate is sent** (C,
+  instruction level `0x4690e1..0x46911f`: tick / (2000 x 15) by signed division, capped at 10 by
+  `cmp eax,0xa; jl`, then `cmp count,eax; jbe` skips the attack, i.e. an army needs count >
+  threshold). Profiles 0..2 hand the **whole** candidate list to the new army (no cut, no
+  minimum beyond the count); only profiles 3 and 5 cut it. Once the army exists, the threshold
+  plays no part: every later think adds whatever new free candidates there are, **one is
+  enough**, and the army lasts until it ends (2.5). With 10 ticks per second the profile-0
+  threshold is 1 (2 candidates) from tick 30,000 (50 min), 2 from 60,000, ... and 10 (**11
+  candidates**) from tick 300,000 (8 h 20 min); profile 1 reaches its cap of 20 (21 candidates) at
+  tick 400,000, profile 2 at 600,000. So late in a game a **new** army of profile 0 always starts
+  with at least 11 hunters / soldiers / (add-on) free warships of the whole nation. What the
+  victim sees first can still be a single unit, because the members do not move as a group
+  (2.5 "Joining and moving"), and across water because of how ships are filled (2.5, `addon.md`
+  8.4).
 - The cooldown (`player AI job +0x30`, 10..30 ticks) counts from the last time the army ran
   (+0x2C is set on every army run), so a new attack can follow almost immediately after an army
   ends. Profiles 3 and 5 have no cooldown test at all.
@@ -790,15 +812,69 @@ Notes:
 
 ### 2.5 The army (kind 0x35, every 50 ticks) (C)
 
-- Created with the target town's position, radius 40 cells, the target town and a random tactic
-  (0 or 1). First run after rand() mod 50 ticks.
+- Created with the target town's position (its town hall anchor, town +0x28..+0x30: the
+  **target point**), radius 40 cells, the target town and a random tactic (0 or 1). First run
+  after rand() mod 50 ticks.
+- **"Within 40 cells"** always means around the **target point**, never around a member: the
+  circle scan of both tactics is the disc dx² + dy² < 40² around the target point (`0044a7c0`),
+  and the per-member test of step 6 below measures the member's wrapped distance (max + min / 2,
+  `00459a80`) **to the target point** (< 40, strict, `0x466a29`). So enemy units standing farther
+  than 40 cells from the target town's hall (at a shore, at an outpost far out) are neither
+  attacked nor counted in the retreat test, however close they stand to a member.
+
+**Joining and moving** (`00465ad0`, called at creation and by every later think; C):
+
+- Each joining unit gets group 53 and a reference. Nothing else is done to a member within 20
+  cells of the target point (max + min / 2 not above 20).
+- A member farther away has its current job cancelled and gets its own follow-path walk (job
+  0x06, not a player order) to the first free cell of a spiral around the target point (the
+  same cell for every member of this join), first run after 2 ticks. This is the same routine as
+  the player's group move order (`units-and-jobs.md` 3.2).
+- There is **no formation and no waiting**: every member walks at its own speed from wherever it
+  stood, members from a second town or joining at a later think walk on their own, and the first
+  to arrive is attacked alone. An arrived member has no job; the next army run (step 6) gives it
+  an attack job.
+- **No member looks for enemies on the way.** Neither the walk nor the attack job scans its
+  surroundings (`combat.md` 0, 8); enemy units a member passes are ignored unless the member or a
+  unit of its race within 12 cells is struck: then the help rule (`combat.md` 7.1, 7.2) sends it
+  after the striker (its walk and its army attack job are not player orders). An attack job whose
+  target is of class 2 (the school) gives way to a striker of a lower class, for example a tower
+  shooting at it: the outpost building stands in for its garrison (`combat.md` 9.7), so the member
+  turns on the tower.
+- **Gold, add-on mode** (`0046c050`, read at instruction level `0x46c8c3..0x46ca28`): the join
+  first adds every unit (group 53, reference). A joining light or heavy warship (65, 66) has its
+  job cancelled and, when the army has a target town, sails (job 0x06, first run after 2 ticks)
+  to the first cell of a spiral around the target town's position that the ship mask 0xA01E
+  allows (no distance test). The land units are then sorted **by the island of their cell**
+  (island grid, map +10; groups in island-id order, members in join order). Only while the nation
+  has a naval planner (always in add-on mode, `addon.md` 8.4):
+  - a group on the **target point's island** is moved as in the base game (cancel and walk when
+    farther than 20 cells);
+  - every other group makes **one transport request**: units = the group's size, goods 0,
+    pickup = the cell of the group's **first** member, destination = the target point, flags 8
+    (`00472630`); the members are added to its waiting list (`00471f40`), and **every member of
+    the group**, whatever the request's result, has its job cancelled and gets the wait job 0x3E
+    (first run after 5 ticks; it only idles, `addon.md` 8.4).
+
+  So the island rule is applied once per join, to the units joining in that think: an army
+  formed with ten hunters on its home island makes one request for ten, and each later think
+  that adds one new hunter makes another request for that one. Nothing tests whether a unit can
+  reach the target at all: without any transport ship the members wait (job 0x3E) until the army
+  ends. The ships themselves follow the planner's rules (`addon.md` 8.4): requests are served one
+  ship each, a ship assigned when a request is made boards at most as many units as on its last
+  trip (none after an empty trip, one after carrying a founder), the rest wait for a later trip.
+  Units are taken from the waiting list whatever they do by then (also after the army ended or
+  retreated, or when they have since joined the town's defence group), carried over and put
+  ashore near the target point with no job; a member is still in its army there, the others are
+  free group-0 units on the victim's island (candidates of the next think).
 - Every run: if the relation between the army's race and the target town's race is no longer 0 or
   1, the army ends. Otherwise the current tactic runs; afterwards a new random tactic is chosen.
 - Both tactics first write the tick into the think job's +0x2C (the cooldown stamp) and end the
   army at once when it has no members left. Dead members are dropped from the army (group 0) as
   the member list is walked.
 - **Tactic 0 (assault, `00466020`)**, corrected in the third pass (C, instruction level):
-  1. Own power: every member that is alive, a unit and armed (2.1 formula).
+  1. Own power: every member that is alive, a unit and armed (2.1 formula), wherever it stands
+     (members still walking, at home, waiting for a ship or aboard count as well).
   2. Candidates: the objects found by the circle scan (`0044a7c0`) of radius 40 around the
      target point, plus, when the army has a target town, **all** of that town's small and
      large outposts, barracks, mage towers / alchemist huts / cult sites and creature yards
@@ -839,6 +915,11 @@ Notes:
      - when the counter exceeds 5 - bucket (that is after **6** members for bucket 0), the next
        target of the bucket becomes current, wrapping to the first after the last; so all
        members end on the bucket, six per target in turn.
+     - Gold (`0046cbd0`, `0x46d67b`): a member without a job (or whose job was just cancelled
+       by one of the rules above) that sits **aboard a transport ship** (unit +0x6C is a type-67
+       unit) gets no attack job and is **not counted**. Members waiting for a ship (job 0x3E) or
+       walking to one are members "with another job": left alone unless within 40 cells of the
+       target point or in the target town's area.
   7. The next tactic is rand() & 1.
 - **Tactic 1 (skirmish, `00466e20`)**, re-read in the third pass (C): no power check. Same
   circle scan and race filter. Buckets: 0 = units whose type is 17 (hunter), 21 (police) or
@@ -847,7 +928,7 @@ Notes:
   the army ends as a success. Assignment as in tactic 0 with these differences: **3** members
   per target (counter > 2); a member already attacking is re-assigned only when bucket 0 is
   taken and its target's class is above 0, otherwise it keeps its target; **no rand() draw**.
-  Then the next tactic is rand() & 1.
+  Then the next tactic is rand() & 1. Gold (`0046d9e0`): the same aboard rule as tactic 0 step 6.
 - So an army never ends by itself while its target town stands, except through a skirmish run
   that finds no unit of the target race outside buildings in the circle (success), a retreat,
   the loss of all members, or a relation change. After a success the members walk home, become
@@ -913,6 +994,35 @@ its fighters, and picks civilians only through the retarget after a kill (2.5). 
 barracks invention is researched, 1.5 menu state), and the barracks (or its site, HP 50) is then
 the assault's target instead of the school, until it falls. See 1.15
 for when a raided town can never recover.
+
+**Late in a game, and across water** (consequences of 2.3..2.5 and `addon.md` 8.4, C; checked
+against our build in long island free-play runs, `integration-ai.md` 7d):
+
+- A **new** army needs more than min(10, tick / 30000) free candidates (profile 0), counted over
+  the whole nation and all sent. A computer player whose towns stagnate (1.15) or whose fighters
+  are kept in the defence group may therefore not attack for hours, then attack once enough free
+  units have piled up. A weak attacker does not hold back: the strength tests of 2.4 only pick
+  the target, and the retreat test (2.5 step 4) is made only in the army's assault runs.
+- **Against a defended town the army retreats at its first assault run** (enemy power within 40 cells of
+  the town hall > 2 x the army's), its members walk home and become free, and the next think
+  (150 ticks) forms the next army from the same units: as long as the victim is twice as strong
+  near his town hall, raids are formed and dissolved every few hundred ticks without anything
+  reaching him, except what the ships carry (below).
+- **The first unit the victim sees is often alone**, also in the original: members walk
+  individually (2.5), and across water each join makes its own transport request, a ship boards
+  as many units as on its previous trip (one after carrying a founder or a single hunter, none
+  after an empty trip), and requests made for armies that have since retreated are still served:
+  their units (by then free, or even in their town's defence group) are put ashore near the
+  victim's town hall one shipload at a time. Such a unit stands idle at the coast; if its army
+  still runs, the next army run (at most 50 ticks) sends it at the current target, otherwise it
+  waits for the next army of its nation, which (being on the target's island and more than 20
+  cells away) makes it walk to the town hall.
+- **What the lone raider attacks:** tactic 0 sends it at the first building of the important
+  list (barracks, else the school, the laboratory, large outposts, small outposts, the town
+  hall) or, for the 7th and later member, the town's outposts and fighters near the town hall in
+  turn; tactic 1 at a hunter, police officer or soldier of the victim within 40 cells of the town
+  hall. It ignores everything on the way (no scan) unless struck; a tower that shoots at it
+  draws it to the tower (help rule, 2.5).
 
 ---
 
@@ -1342,7 +1452,7 @@ profile only decides how often founding and attacks happen, and those reach the 
 | transport 67 | (1) want(67) includes the planner's **claim[67]**, initially 1 for every computer nation, so the first town with a shipyard trains one transport (priority 4) and the planner takes it over (group 61); (2) build[67] = u/2 when more than 3 ship requests are unserved; (3) A[67] = number of harbour trade partners (markets job, second pass), whose ships stay ungrouped and run trade routes | `004740c0`, `00472b30`, `00477060` |
 | settling other islands | the founding mission (1.12) takes the first valid site of the start-candidate list. Island maps list the candidates island by island, **largest island first** (`formats/addon.md` 10.2 step 2), so a nation that does not live on the largest island usually targets a site there: its founder asks the planner for a ship (job 0x3E), is carried over, and the mission **ends when he is aboard** (1.12 step b). He lands and stands idle in group 54; that town founds nothing more while he lives | `0046f340`, `00472630` |
 | sea trade | harbour trade routes to partner harbours on any island (markets job pass 2); partners need the base trade conditions (peace, 4.3), so nothing happens without diplomacy | `00477060` |
-| attacks across water | the army (2.5) groups members whose island differs from the target's; one ship request per group (pickup = first member, destination = the target); members wait with job 0x3E; on board they are skipped when the army hands out attack jobs. Same profiles and gates as on land (2.4) | `0046c050`, `0046cbd0` |
+| attacks across water | when units **join** the army (2.5 "Joining and moving": at creation and at every later think) they are grouped by island; one ship request per group not on the target's island (pickup = first member, destination = the target point); those members wait with job 0x3E; on board they are skipped (and not counted) when the army hands out attack jobs. Free warships 65/66 are candidates too and sail to the target. Same profiles and gates as on land (2.4) | `00470140`, `0046c050`, `0046cbd0`, `0046d9e0` |
 | defence against ships | nothing new: the military job and the intruder records are the base ones; outposts and armed units shoot ships in range, the warship gang member defends only through the help rule and patrol contacts | (no add-on code) |
 
 **Free play versus campaign.** The routines are the same. Differences come from data: campaign

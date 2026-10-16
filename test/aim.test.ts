@@ -7,7 +7,10 @@ import { aimCell, aimCandidates, aimDistance } from '../src/engine/aim.ts';
 import { drawOrder, DrawKind, type DrawItem } from '../src/client/draw-order.ts';
 import { Effects } from '../src/client/effects.ts';
 import type { GameData } from '../src/client/data.ts';
-import type { World } from '../src/engine/world.ts';
+import { existsSync } from 'node:fs';
+import { Kind, SUB, type World } from '../src/engine/world.ts';
+import type { CombatEffect } from '../src/engine/combat.ts';
+import { loadMission, DATA } from './helpers/mission.ts';
 
 test('aim: distance is max + floor(min / 2) in whole cells', {}, () => {
   assert.equal(aimDistance(4, 1), 4);
@@ -125,4 +128,36 @@ test('effects: the flight ends at the target\'s own height', {}, () => {
   let last: number | undefined;
   for (let k = 0; k < 9; k++) for (const d of fx.update(k * 0.1, k * 95, 64)) if (d.entry.name === 'P') last = d.h;
   assert.ok(last !== undefined && last > 140, `close to the target's height near the end (${last})`);
+});
+
+// ---------------------------------------------------------------- the simulation's shot event
+
+test('simulation: an archer shooting a building aims at the aimCell candidate; f follows from it', { skip: !existsSync(`${DATA}/dv.wdb`) && 'AN_DATA not set' }, () => {
+  const { world: w, mission: m } = loadMission('Pimmons.mdb', 7, DATA, false);
+  const me = m.humanRace;
+  const enemy = m.races.find(r => r.present && r.race !== me)!.race;
+  const t = w.economy.towns.find(x => x.race === me)!;
+  const targets = w.entities.filter(e => e.kind === Kind.Building && e.owner === enemy && e.complete);
+  const target = targets.find(e => { const r = w.rules.get(e.oid)!; return r.sizeX !== r.sizeY; }) ?? targets[0];
+  const r = w.rules.get(target.oid)!;
+  const bx = Math.floor(target.x / SUB), by = Math.floor(target.y / SUB);
+  // an archer a few cells off the building's left side
+  let spot: [number, number] | undefined;
+  for (let d = 4; d < 9 && !spot; d++) for (const [x, y] of [[bx + d, by - 1], [bx - 1, by + d], [bx + d, by + d]]) {
+    if (!spot && w.motion.free(x, y)) spot = [x, y];
+  }
+  assert.ok(spot, 'a free cell near the building');
+  const archer = w.spawnUnit(me, 29, spot![0], spot![1], t.id);
+  w.schedule({ type: 'order', player: me, ids: [archer.id], target: target.id });
+  let shot: CombatEffect | undefined;
+  for (let i = 0; i < 600 && !shot; i++) { w.step(); shot = w.effects.splice(0).find(e => e.kind === 'shot' && e.shooter === archer.id); }
+  assert.ok(shot, 'it fired');
+  const n = w.size;
+  const wrap = (d: number) => (d > n / 2 ? d - n : d < -n / 2 ? d + n : d);
+  const [ax, ay] = aimCell(bx, by, r.sizeX, r.sizeY, shot!.x, shot!.y, wrap).map(v => ((v % n) + n) % n);
+  assert.deepEqual([shot!.tx, shot!.ty], [ax, ay], `${r.name} ${r.sizeX}x${r.sizeY} from (${shot!.x - bx}, ${shot!.y - by})`);
+  assert.equal(shot!.target, target.id);
+  const dx = Math.abs(wrap(ax - shot!.x)) * 64, dy = Math.abs(wrap(ay - shot!.y)) * 64;
+  const wpn = w.weapons[w.rules.get(archer.oid)!.weapon];
+  assert.equal(Math.round(shot!.flight! * 100), Math.floor(((Math.max(dx, dy) + Math.floor(Math.min(dx, dy) / 2)) * 1000) / wpn.speed));
 });
