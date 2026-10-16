@@ -1622,8 +1622,12 @@ re-filed (144 of 180 lost transports were failed walks). The following points no
    amounts exceed local stock + goods to fetch under way + needed entries gets the difference
    appended as needed entries with one list-1 request each, exactly what a resume (6.8) would file.
    This only restores the pairing of 6.7 that the original never breaks; it is not a periodic
-   check (the original has none). In the original a stuck site of this kind could not arise; a
-   pause and resume (6.8) would also refill it.
+   check (the original has none). In the original an interrupted delivery order cannot lose a
+   need; a pause and resume (6.8) refills a site anyway. A fuzz run (about 1,700 random
+   player orders, moves, go-home and pause commands on the reporting save) found no other way to
+   lose a need. Not checked against the original: `WEGWERFEN` (drop goods) on a unit that is
+   delivering; ours lets the transport go on empty-handed, which clears its good to fetch at the
+   destination without delivering it.
 
 Remaining differences: our planner is synchronous, so "the blocker's planner is still running"
 (4.7 case 3) has no exact counterpart; plain move orders still use one search with partial ways;
