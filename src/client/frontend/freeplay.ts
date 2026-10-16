@@ -42,7 +42,9 @@ export function randomSeed(): number {
 /**
  * The free-play record with the menu overrides applied (6.2): size bits, seed, stock (start gold
  * and goods 0..5 of the first town-hall column in all three race blocks) and development
- * (research level 12 / 20 for every player, in addition to the record's own level).
+ * (research level 12 / 20 for every player, in addition to the record's own level; the levels
+ * are a union, so the larger one stands for both). In an add-on record the economy adds the
+ * add-on inventions 30..32 of that level (docs/game/economy.md 4.4.2).
  */
 export function applyFreePlay(base: Mission, p: FreePlayParams, seed: number): Mission {
   return {

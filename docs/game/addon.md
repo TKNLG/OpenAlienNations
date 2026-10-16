@@ -170,7 +170,11 @@ Entries 0..29 are identical to `DV.idb`. Three entries are new:
 | 32 | Kreuzer / Schlachtschiff / Seepyro | 150 | 30 and 15 | heavy warship 66 |
 
 The light warship 65 needs only invention 15 (Metallurgie), but it is trained in the shipyard,
-so in practice it also needs 30. Research mechanics are unchanged (`idb-wdb.md`). The AI's
+so in practice it also needs 30. Research mechanics are unchanged (`idb-wdb.md`). Starting
+inventions: in an add-on record a research level n > 0 (mission +0x64 or the free-play
+development 12 / 20) also grants 30, 31 (n > 5) and 32 (n > 15), so add-on free play with
+"Entwicklungsstufe" Mittel or Hoch starts with Werft and Hafen (shipyard, harbour, fishing boat,
+transport ship available) ([economy.md](economy.md) 4.4.2). The AI's
 research cursor walks the table in file order, so it reaches 30..32 last (8.6).
 
 ### 1.5 Strings (`Addon.tdb`, ids 325..330)

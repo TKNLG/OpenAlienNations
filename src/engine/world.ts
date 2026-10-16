@@ -224,8 +224,10 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  activation, not completion (economy.md 5.3); 8: walks owned by suspended jobs, walk planning
  *  mask (units-and-jobs.md 4.1, combat.md 7.4); 9: the attack state's walk flag and stored plan
  *  (combat.md 3.3.1); 10: the towns' criminal lists (combat.md 12.3); 12: the towns' crop
- *  conversion ring (economy.md 7); older saves are migrated on restore */
-export const SNAPSHOT_VERSION = 12;
+ *  conversion ring (economy.md 7); 13: the player's delivery order is an ordinary transport for
+ *  its site, lost site needs re-filed once (units-and-jobs.md 5.8 item 10); older saves are
+ *  migrated on restore */
+export const SNAPSHOT_VERSION = 13;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -1208,7 +1210,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1249,6 +1251,9 @@ export class World {
     // before version 12 the ring was not kept (only "convert now" existed, the divisor stayed 0):
     // the ring starts off, as in a new town
     if (snap.v < 12) for (const t of w.economy.towns) { t.cropPct ??= 0; t.cropDiv ??= 0; t.cropAcc ??= 0; }
+    // before version 13 a delivery order that did not happen lost its site's needed entry, which
+    // could leave a site waiting for ever (units-and-jobs.md 5.8 item 10): re-file what is missing
+    if (snap.v < 13) w.logistics.refileLostSiteNeeds();
     for (const [race, mentor, t] of snap.advisor ?? []) w.advisorLast.set(race * 1024 + mentor, t);
     w.respawns = snap.respawns.map(r => ({ ...r })); w.respawnJob = snap.respawnJob;
     w.logistics.ensureRespawnManager();   // saves from before October 2026 ran it only while it had entries

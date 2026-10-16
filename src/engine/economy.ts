@@ -191,10 +191,22 @@ export class Economy {
         goals: r.computer ? [] : goals.map(g => ({ ...g })), outcome: 0,
         startGoods: r.startGoods.map(g => g[0] ?? 0),
       };
-      // research level n: every invention with index <= n starts researched; plus explicit flags
-      for (let i = 0; i < c.length; i++) {
-        if ((r.researchLevel > 0 && i <= r.researchLevel) || r.preResearched[i]) p.progress[i] = c[i];
+      // starting inventions (4.4.2), a union of: research level n (index <= n; the free-play
+      // development level is folded into n by the front end), the pre-researched flags, the
+      // inventions of disabled objects, and in add-on records the add-on extras of the level
+      const done = new Set<number>();
+      const n = r.researchLevel;
+      for (let i = 0; i < c.length; i++) if ((n > 0 && i <= n) || r.preResearched[i]) done.add(i);
+      for (const type of r.disabled) {
+        const inv = this.host.rules.get(((r.race << 16) | type) >>> 0)?.invention ?? -1;
+        if (inv >= 0) done.add(inv);
       }
+      if (this.host.addon && n > 0) {
+        done.add(30);
+        if (n > 5) done.add(31);
+        if (n > 15) done.add(32);
+      }
+      for (const i of done) if (i < c.length) p.progress[i] = c[i];
       this.players[r.race] = p;
     }
     for (const p of this.players) {

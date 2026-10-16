@@ -99,7 +99,9 @@ Offsets are relative to the start of the block. "Good i" is object type i of nat
 Applied when a race's invention table (`DV.idb`, see [idb-wdb.md](idb-wdb.md)) is loaded for the
 mission:
 
-1. If research level n > 0: every invention with index <= n becomes researched.
+1. If research level n > 0: every invention with index <= n becomes researched. (Gold Edition,
+   add-on records only: also 30, 31 if n > 5, 32 if n > 15; [addon.md](addon.md) 6,
+   [economy.md](../game/economy.md) 4.4.2.)
 2. For each non-zero type in the two disabled lists: look up the object's required invention
    (field +0xE4 of its `dv.odb` record). If it has one, that invention is set to "researched" (the
    flag at +0x80 for that index is set). Then the object's required invention is changed to an

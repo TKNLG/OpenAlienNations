@@ -849,6 +849,55 @@ export class Logistics {
     this.assign(u, LJ.Transport, 5, d);
   }
 
+  /**
+   * The player's delivery order (3.2, constructor `0047bee0`): no source, the building as
+   * destination and requester, the carried good as the good to fetch. An early end re-files that
+   * good at the building like any transport (5.5 destructor), restoring the needed entry the
+   * acceptance test removed.
+   */
+  private startDelivery(u: Entity, b: Entity): void {
+    const d = new Array(TR.Size).fill(0);
+    d[TR.Phase] = 3; d[TR.Dest] = b.id; d[TR.Source] = NONE;
+    d[TR.Requester] = b.id; d[TR.Fetch] = u.carryGood; d[TR.Output] = NONE;
+    this.assign(u, LJ.Transport, 5, d);
+  }
+
+  /**
+   * Save games before version 13 (units-and-jobs.md 5.8 item 10): our delivery order had no
+   * requester, so a delivery that did not happen lost the site's needed entry. Manual deliveries
+   * under way become ordinary ones (requester = destination, good to fetch = the load); every
+   * unpaused site whose still-to-consume amounts exceed its local stock, the goods to fetch under
+   * way for it and its needed entries gets the difference appended as needed entries with one
+   * list-1 request each (what a resume files, 6.8). Paused sites are left to their resume.
+   */
+  refileLostSiteNeeds(): void {
+    const coming = new Map<number, number[]>();
+    for (const u of this.w.entities) {
+      if (u.kind !== Kind.Unit || !u.alive) continue;
+      for (const id of [u.job, ...u.suspended]) {
+        const j = id ? this.w.sched.get(id) : undefined;
+        if (!j || j.cancelled || j.kind !== LJ.Transport) continue;
+        const d = j.data;
+        if (d[TR.Requester] === NONE && d[TR.Source] === NONE && u.carryAmount > 0) { d[TR.Requester] = d[TR.Dest]; d[TR.Fetch] = u.carryGood; }
+        if (d[TR.Requester] < 0 || d[TR.Fetch] < 0) continue;
+        let a = coming.get(d[TR.Requester]);
+        if (!a) coming.set(d[TR.Requester], a = new Array(GOODS).fill(0));
+        a[d[TR.Fetch]]++;
+      }
+    }
+    for (const b of this.w.entities) {
+      if (b.kind !== Kind.Building || !b.alive || b.complete || b.paused || b.order?.kind !== 'build') continue;
+      const t = this.town(b);
+      if (!t) continue;
+      const a = coming.get(b.id);
+      for (const [g, left] of b.order.list) {
+        let k = left - b.local[g] - (a?.[g] ?? 0);
+        for (const x of b.needed) if (x === g) k--;
+        for (; k > 0; k--) { b.needed.push(g); this.requestTransport(t, List.Construction, b.id); }
+      }
+    }
+  }
+
   private runTransport(job: Job): number {
     const u = this.w.get(job.owner), d = job.data;
     if (!u) return 0;
@@ -2661,7 +2710,7 @@ export class Logistics {
         if (u.carryAmount > 0 && (this.isStore(target) || target.needed.includes(u.carryGood))) {
           const i = target.needed.indexOf(u.carryGood);
           if (i >= 0 && !this.isStore(target)) target.needed.splice(i, 1);
-          this.startTransport(u, target, null, null);
+          this.startDelivery(u, target);
           continue;
         }
         this.assign(u, LJ.Answer, 1, [0, target.id, ut, 1]);

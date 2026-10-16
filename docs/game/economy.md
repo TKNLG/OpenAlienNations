@@ -517,6 +517,50 @@ settlement, and the accumulator only grows in a research step that actually happ
 - The money counter (side-panel 3.6) shows the treasury only; research appears there only
   through the settlement's net.
 
+#### 4.4.2 Inventions researched at the start (C, Gold `00413270`, `00413730`, `00463830`)
+
+A nation starts with every invention that one of these sources marks; marked inventions get
+progress = cost (finished) and are announced to the human's panel. The sources are a union, the
+order does not matter.
+
+1. **Mission research level** n (race block +0x64, [mdb.md](../formats/mdb.md)), applied when the
+   race's invention table is loaded, only if n > 0: every invention whose index is <= n (the
+   table in file order, stopping at the first index > n).
+2. **Pre-researched flags** (race block +0x80 + 4i, i = 0..29 base, 0..32 Gold).
+3. **Disabled objects** (race block +0x68 / +0x74): the invention the disabled object needs
+   (odb +0xE4, if any) is marked researched, the object itself stays unavailable.
+4. **Free-play development** (mode 4 = free play and multiplayer, base and add-on): when each
+   player object is set up (human and computer alike, `00463830`), "Entwicklungsstufe" Mittel
+   applies research level **12**, Hoch level **20**, by the same routine as source 1; Niedrig
+   applies nothing.
+5. **Add-on inventions (Gold only, `00413730`):** whenever the research-level routine runs (n > 0;
+   sources 1 and 4) in an **add-on mission** (mission record +0xA50 > 0: every `*AO.mdb` record,
+   including `InfiniteAO.mdb`), it also marks invention **30 (Werft)** always, **31 (Hafen)** if
+   n > 5 and **32 (heavy warship)** if n > 15. These three sit after index 29 in `AO.idb`, so the
+   "index <= n" rule alone never reaches them for the levels in use. (Instruction level:
+   `cmp [record+0xA50], 0 / jle`, `cmp n, 5 / jle`, `cmp n, 15 / jle`, Gold `004137b0..00413810`.)
+   A base mission (+0xA50 = 0) gets no add-on extras.
+
+Free-play starting inventions per development setting (all players of the game):
+
+| development | level | base free play (`Infinite.mdb`) | add-on free play (`InfiniteAO.mdb`) |
+|---|---|---|---|
+| Niedrig | - | none | none |
+| Mittel | 12 | 0..12 | 0..12, **30 Werft, 31 Hafen** |
+| Hoch | 20 | 0..20 | 0..20, **30 Werft, 31 Hafen, 32 heavy warship** |
+
+What that makes available in add-on free play (Addon.odb +0xE4, [addon.md](addon.md) 1.4): with
+Mittel and Hoch the **shipyard (63), harbour (62), fishing boat (64) and transport ship (67)**
+need no research; the light warship (65) needs 15 Metallurgie, so it is free only with Hoch; the
+heavy warship (66, invention 32) only with Hoch. Ships are trained in the shipyard, so a fishing
+boat still needs a finished shipyard; with Niedrig, Werft and Hafen must be researched (30 needs
+invention 1, except for the Sajiki).
+
+Add-on campaigns go through the same routine: a record with research level n > 0 also gets 30,
+31 (n > 5) and 32 (n > 15) in addition to its own flags (e.g. PimmonsAO 1: Pimmons L7 and Sajiki
+L10 both start with Werft and Hafen; AmazonsAO 3: Sajiki L21 also gets 32). Disabled harbours or
+heavy warships (X[62], X[66]) mark 31 or 32 researched by source 3.
+
 ### 4.5 Overheads (upkeep) (C)
 
 Town +0x4A0 is the sum of odb +0xD4 of every **active** building of the town: added when a

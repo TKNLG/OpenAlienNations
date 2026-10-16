@@ -269,7 +269,12 @@ ist es möglich Seehandel zu treiben, weiters steht das Fischerboot zu Verfügun
 inventions: the loop runs over indices 0..32 (AN.exe: 0..29) and reads the flags at race block
 +0x80 + 4i, so **+0xF8, +0xFC, +0x100 are the flags of inventions 30, 31, 32** (formerly part of
 the "unused" tail). In a base mission these words are 0 in all shipped files. The research level
-(+0x64) works as before (`index <= n`).
+(+0x64) works as before (`index <= n`), with one addition (C, Gold `00413730`, confirmed at
+instruction level `004137b0..00413810`): when the record is an add-on record (+0xA50 > 0) and the
+level routine runs (n > 0, also for the free-play development level 12 / 20), it marks invention
+**30** always, **31** if n > 5 and **32** if n > 15. Disabled objects mark their invention
+researched as in the base game (Gold `00413406..0041350c`, unchanged). Full list of start sources
+and the free-play table: [economy.md](../game/economy.md) 4.4.2.
 
 ---
 

@@ -267,6 +267,19 @@ A building "accepts the unit's load" (`004617c0`) if the unit carries something 
 - the building is a completed store, or
 - the building's needed-goods list contains the carried good (one entry is then removed).
 
+**The delivery transport of an order** (C, confirmed at instruction level, `00450f83`..`00450f8f`
+calling the transport constructor `0047bee0`): it is built with **no source**, destination =
+**requester = the clicked building**, good to fetch (+0x30) = **the good the unit carries**
+(+0x38), no output (−1). It is therefore an ordinary transport for its destructor (5.5): it ends
+cleanly when the load is dropped at the building (+0x30 = −1), and when it ends early (another
+order, a move, go home, the unit's death, a refusal) the carried good goes back to the **front of
+the building's needed list with one list-1 request**, unless the building is a completed store.
+So the needed entry removed by the acceptance test above is restored whenever the delivery does
+not happen. The transport request that belonged to the removed entry is not withdrawn: the
+dispatcher serves it for another entry of the list, or drops it when the list is empty (5.3).
+Ordering a carrier to a site again while he is already delivering there removes one more entry
+and re-files the old one (net: the same needed list, one spare request).
+
 A plain **move order** (group move `00465ad0`) gives every unit a follow-path job (0x06) to a
 free cell near the target point, scheduled after 2 ticks. Units already within half the group's
 spread of the target are not moved. Group membership (+0x48) is cleared when the group object
@@ -1358,6 +1371,11 @@ At creation (`0047bfd0`):
   +0x30 = −1 instead.
 - The requester's first output entry, if any, is popped into +0x34.
 
+This is the dispatcher's constructor. A second constructor (`0047bee0`) takes all five fields as
+arguments and pops nothing; the player's delivery order uses it with no source, the building as
+destination and requester, and the carried good as +0x30 (3.2 "The delivery transport of an
+order").
+
 Then the porter goes to the source with job 0x07 (no source: straight to the destination). The
 goods move inside the building's "unit entered" handler (`00460ed0` calls `0047c400`).
 
@@ -1590,6 +1608,22 @@ re-filed (144 of 180 lost transports were failed walks). The following points no
 9. **Flee** (`combat.ts` `flee`, `runFlee`): first run 3 ticks after the strike; outward walk
    with mask 0x3E, home walk with 0x3C; the attacker's death ends the flee at any run, the unit
    stops where it is.
+10. **The player's delivery order** (`order`, `startTransport`; found October 2026 from a save
+   with a house site stuck at `0/1 0/2`): our build created the order's transport with no
+   requester and no good to fetch, while the acceptance test had already removed one needed
+   entry. A delivery that did not happen (the carrier re-ordered, moved, sent home, killed) lost
+   that entry for good; once the site's needed list was empty its builder waited for ever, the
+   dispatcher dropped the leftover requests, and further delivery orders were refused because
+   nothing was "needed" any more (the carriers then stood idle at the site). Now the transport is
+   built as in 3.2: requester = the building, good to fetch = the carried good, so its early end
+   re-files the good like any transport. **Old saves** (snapshot version < 13) are repaired once
+   on load (`Logistics.refileLostSiteNeeds`): manual deliveries under way get the building as
+   requester and their load as good to fetch, and every unpaused site whose still-to-consume
+   amounts exceed local stock + goods to fetch under way + needed entries gets the difference
+   appended as needed entries with one list-1 request each, exactly what a resume (6.8) would file.
+   This only restores the pairing of 6.7 that the original never breaks; it is not a periodic
+   check (the original has none). In the original a stuck site of this kind could not arise; a
+   pause and resume (6.8) would also refill it.
 
 Remaining differences: our planner is synchronous, so "the blocker's planner is still running"
 (4.7 case 3) has no exact counterpart; plain move orders still use one search with partial ways;
@@ -2092,6 +2126,8 @@ change only in these places:
 | dispatcher finds nothing in stock | unchanged | **kept**; it is tried again at every dispatcher run (every 20 ticks) with the advisor "you lack X" |
 | transport delivers | – (the good is now in the site's local stock, which the builder consumes, 6.3) | – |
 | transport ends early (5.5 destructor) | the good goes back to the front | one list-1 request filed |
+| player orders a carrier to the site (3.2, `004617c0`) | one entry of the carried good removed; the delivery transport holds it as its good to fetch | unchanged (one spare request, served for another entry or dropped when the list is empty) |
+| that delivery ends early (5.5 destructor; requester = the site) | the carried good goes back to the front | one list-1 request filed |
 | pause construction (`004758c0`, 6.8) | cleared | every request for the site is removed from all four lists |
 | resume construction (`00475990`, 6.8) | for each good still in the order: (amount still to consume − local stock) entries appended at the end | one list-1 request per appended entry |
 

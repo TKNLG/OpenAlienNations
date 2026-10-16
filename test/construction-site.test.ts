@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { loadMission, DATA } from './helpers/mission.ts';
-import { Kind, SUB, type Entity, type World } from '../src/engine/world.ts';
+import { Kind, SUB, World, type Entity } from '../src/engine/world.ts';
 import { LJ, BJ, List } from '../src/engine/logistics.ts';
 import { siteView } from '../src/client/hud-pages.ts';
 
@@ -198,4 +198,89 @@ test('pause is a toggle: a second "pause" resumes; a builder ordered onto a paus
   for (let i = 0; i < 6000 && !site.complete; i++) w.step();
   assert.ok(site.complete, 'built while paused');
   assert.equal(requests(w, site), 0, 'no goods were requested for it');
+});
+
+// ---------------------------------------------------------------- the player's delivery order (3.2, 5.5, 5.8 item 10)
+
+const WOODCUTTER = 19;
+/** goods still owed to the site: needed entries + goods to fetch of transports under way for it */
+const owed = (w: World, site: Entity, g: number) => site.needed.filter(x => x === g).length
+  + w.entities.filter(u => u.kind === Kind.Unit && u.alive).reduce((n, u) => n + [u.job, ...u.suspended].filter(id => {
+    const j = id ? w.sched.get(id) : undefined;
+    return !!j && !j.cancelled && j.kind === LJ.Transport && j.data[TR.Requester] === site.id && j.data[TR.Fetch] === g;
+  }).length, 0);
+
+/** the school site with an empty town stock (nothing is fetched) and a woodcutter carrying one wood */
+function carrierAtSchool() {
+  const s = schoolSite();
+  s.t.stock.fill(0);
+  const u = s.w.spawnUnit(s.me, WOODCUTTER, s.t.x + 4, s.t.y + 4, s.t.id); s.w.economy.joinTown(u, s.t);
+  u.carryGood = WOOD; u.carryAmount = 1;
+  return { ...s, u };
+}
+
+test('delivery order: an interrupted delivery gives the site its needed entry back; the site still gets every good (3.2, 5.5)', { skip }, () => {
+  const { w, me, t, site, u } = carrierAtSchool();
+  assert.equal(owed(w, site, WOOD), 2);
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  w.step();
+  const j = jobOf(w, u)!;
+  assert.equal(j.kind, LJ.Transport);
+  assert.equal(j.data[TR.Requester], site.id, 'the site is the requester (constructor 0047bee0)');
+  assert.equal(j.data[TR.Fetch], WOOD, 'the carried good is the good to fetch');
+  assert.equal(site.needed.filter(g => g === WOOD).length, 1, 'the acceptance test removed one entry');
+  assert.equal(owed(w, site, WOOD), 2, 'nothing lost: one entry needed, one under way');
+  for (let i = 0; i < 6; i++) w.step();
+  // the player moves him away before he arrives: the good goes back to the front, one list-1 request
+  w.schedule({ type: 'move', player: me, ids: [u.id], x: t.x - 6, y: t.y - 6 });
+  w.step();
+  assert.notEqual(jobOf(w, u)?.kind, LJ.Transport);
+  assert.equal(site.needed[0], WOOD, 're-filed at the front');
+  assert.equal(site.needed.filter(g => g === WOOD).length, 2);
+  assert.equal(owed(w, site, WOOD), 2);
+  assert.equal(requests(w, site), 7, 'six requests of the placement + the re-filed one');
+  assert.equal(u.carryAmount, 1, 'the carrier keeps his load');
+  // ordered twice in a row: the second order re-files the first one's entry (net unchanged)
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  w.step();
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  w.step();
+  assert.equal(owed(w, site, WOOD), 2);
+  // now he delivers: one wood at the site, one still needed
+  for (let i = 0; i < 1500 && u.carryAmount; i++) w.step();
+  assert.equal(u.carryAmount, 0);
+  assert.equal(site.local[WOOD], 1);
+  assert.equal(site.needed.filter(g => g === WOOD).length, 1);
+  assert.equal(panel(site), '1/2 0/4');
+  // with goods in stock the rest arrives and the site is finished
+  t.stock[WOOD] = 10; t.stock[STONE] = 10;
+  for (let i = 0; i < 8000 && !site.complete; i++) w.step();
+  assert.ok(site.complete, 'the site is finished');
+});
+
+test('old saves: a site whose needs were lost by an interrupted delivery order is re-filed on load (5.8 item 10)', { skip }, () => {
+  const { w, me, site, u } = carrierAtSchool();
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  w.step();
+  // the state the old build left: delivery under way without requester or good to fetch; the
+  // needs of earlier interrupted deliveries lost (needed list and requests empty) while the
+  // builder waits
+  const snap = JSON.parse(JSON.stringify(w.snapshot()));
+  snap.v = 12;
+  const job = snap.sched.slots.flat().find((j: { id: number }) => j.id === u.job);
+  job.data[TR.Requester] = -1; job.data[TR.Fetch] = -1;
+  const s = snap.entities.find((e: Entity) => e.id === site.id);
+  s.needed = [];
+  for (const t of snap.economy.towns) t.lists = t.lists.map((l: number[]) => l.filter(x => x !== site.id));
+  const r = World.restore(w.terrain, snap, w.rules, w.weapons);
+  const site2 = r.get(site.id)!, u2 = r.get(u.id)!;
+  const j2 = jobOf(r, u2)!;
+  assert.equal(j2.data[TR.Requester], site.id, 'the delivery under way became an ordinary transport');
+  assert.equal(j2.data[TR.Fetch], WOOD);
+  assert.deepEqual(site2.needed, [WOOD, STONE, STONE, STONE, STONE], 'still to consume - local - under way');
+  assert.equal(requests(r, site2), 5, 'one list-1 request each');
+  // a current save is not touched
+  const again = World.restore(r.terrain, JSON.parse(JSON.stringify(r.snapshot())), r.rules, r.weapons);
+  assert.equal(again.get(site.id)!.needed.length, 5);
+  assert.equal(requests(again, again.get(site.id)!), 5);
 });
