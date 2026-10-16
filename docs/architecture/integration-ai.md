@@ -147,10 +147,14 @@ code.
 
 The founding mission (0x36) uses the engine's founding (`units-and-jobs.md` 11). Sites are
 tested with `logistics.canFound(race, x, y, true)` plus the AI's extra rule that the new town's
-radius-25 disc (the territory disc it would claim, `economy.md` 11.3) stays clear of every territory. Once the founder is within 15 cells of the site,
+radius-25 disc (the territory disc it would claim, `economy.md` 11.3) stays clear of every territory. The run follows the order a..f of 1.12 (2026-10):
+a founder inside a building or aboard a ship ends the mission and keeps group 54; a moved site
+cancels the founder's job (and a ship request); once the founder is 8..15 cells from the site,
 `logistics.found(founder, x, y)` creates the town and its town-hall site, and the founder's job
-0x0E completes and enters it (births, goods). If `found` refuses (the site was taken meanwhile),
-the mission looks for a new site on its next run. The new town's AI jobs are started by the think
+0x0E completes and enters it (births, goods); an idle founder elsewhere walks (in legs) to the
+first cell of the 30-ring site search that is free land 8..15 cells from the site, or, in the
+add-on, asks the naval planner for a ship when that cell is on another island. If `found`
+refuses (the site was taken meanwhile), the mission looks for a new site on its next run. The new town's AI jobs are started by the think
 job's fallback (`ensureTownJobs`) as soon as its town hall is active, at most 150 ticks later.
 No hook in logistics is needed. If an immediate start is wanted, the engine's completion can call
 `world.ai.startTown(t)` for computer towns.
@@ -269,6 +273,13 @@ sensibly:
     key per moved building; every "first building of a type" read by the AI (trainable, training
     step, school, first mine, embassy, the army's important buildings) uses that order. The
     engine's own code keeps creation order.
+22. **Founding search details (1.12)**: the candidate search around each start candidate walks
+    rings 0, 2, 4 .. 20 (the original's site search with radius 20 walks rings 1..9 and the corner
+    of ring 10, `world-populate.md` 2.3); a mission that finds no site at all releases its
+    founder (group 0) and marks the player as having no site, where the original ends with the
+    founder left in group 54. The approach cell (step f) uses the exact ring walk.
+23. **Add-on navy (section 9)**: see `integration-addon-gameplay.md` 7 "Computer players" for
+    what was fixed in the 2026-10 audit and what still differs.
 
 ## 7a. Audit against the original (2026-10): our build versus spec, ordered by impact
 

@@ -857,6 +857,11 @@ export class Naval {
     this.planners = s ? (JSON.parse(JSON.stringify(s.planners)) as (Planner | null)[]) : [null, null, null];
   }
 
+  /** saves before version 14: the ship counter limited nothing; it starts at 100 as on registration */
+  migrateCounters(): void {
+    for (const pl of this.planners) if (pl) for (const sh of pl.ships) sh.counter = 100;
+  }
+
   digest(mix: (v: number) => void): void {
     for (const pl of this.planners) {
       if (!pl) continue;

@@ -167,12 +167,24 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   rule.
 - **Top-up**: the raw-material branch (crop conversion) is simplified to +15 (never runs on
   shipped data).
-- **Computer players**: the fishing gang is always wanted (the "food gangs enabled" condition is
-  taken as always on); a released fishing boat is not sent to the shipyard (the original's walk
-  fails anyway); the training hook orders a missing transport directly at a shipyard; served
-  planner requests without ships are dropped; founding across water takes the site itself as the
-  request's destination (not a cell 8..15 from it found by the 30-ring search); the army groups
-  only members that are idle-on-the-wrong-island at each army run.
+- **Computer players** (re-audited 2026-10, `ai-diplomacy-trade.md` 9): the fishing gang is
+  always wanted (the "food gangs enabled" condition is always on in the original too); a released
+  fishing boat is not sent to the shipyard (the original's walk fails anyway); served planner
+  requests no ship works for are dropped from the list (the original keeps them; nothing reads
+  them); the army groups only members that are idle-on-the-wrong-island at each army run; the
+  warship's explore job uses the nearest-cell spiral (`004853c0` order) for the random cell's
+  usable neighbour, the original walks its own square spiral; dead or already embarked units in a
+  request's waiting list are skipped by the boarding step without using a place.
+  **Fixed in the 2026-10 audit** (they kept every computer navy small or idle): the planner's
+  claim counts were missing from the training wants (no transport was ever trained for the
+  planner, so founders waited for ever); the naval part ran in the training step and ordered
+  directly at a shipyard instead of queueing priority-0 entries in the training needs; the
+  founding mission went on while the founder was aboard (the original ends it: the founder lands
+  and stays idle), kept a waiting founder's job when its site moved (stuck in job 0x3E with a
+  cancelled request), founded closer than 8 cells, and sent the ship to the site itself instead of
+  the 8..15 cell of the 30-ring search; registration cancelled the ship's job; the boarding
+  counter, the idle list of the request service and request cancelling (all ships of the
+  request become idle) follow 8.4 now.
 - **Goal 17** uses the object's own position; a unit aboard keeps the cell where it boarded (or
   was created). **SajikisAO 8**'s goal ids still point at the outpost/house objects
   (formats addon.md 7.3); **SajikisAO 2**'s goal `19(1, ...)` can never hold (no island 1).
