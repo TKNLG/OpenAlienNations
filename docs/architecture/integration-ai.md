@@ -471,6 +471,64 @@ ticks; before = this week's build without the two fixes, after = with them):
 
 The differences are within the run-to-run noise (the raids decide everything).
 
+## 7d. Fifth audit (2026-10): a single hunter, late in an island free-play game
+
+Report from play-testing: in a long add-on free-play game the Pimmon computer player attacked for
+the first time after a long while, with **one hunter**, which ignored the human's units at the
+shore and walked to a tower in his territory; the original would "have sent more". The army code
+was re-read in AN.exe and dvge.exe (spec 2.3..2.6 corrected, `addon.md` 8.4).
+
+**What the original does** (C, details in the spec):
+
+- The candidate threshold (profile 0: more than min(10, tick / 30000)) gates only the **creation**
+  of an army, counts the free hunters / soldiers (add-on: also free warships) of the whole nation
+  and sends **all** of them; later thinks add any number of new candidates, one is enough
+  (`0x4690e1..0x46911f`). After tick 300,000 a new profile-0 army therefore has at least 11
+  members.
+- Members do not move as a group: each walks on its own from where it stood; nobody scans for
+  enemies on the way (only the help rule makes a struck member fight); "within 40 cells" is
+  always measured from the **target point** (the target town hall), not from a member.
+- Across water (Gold `0046c050`): at each join the new land members are grouped by island, one
+  transport request per group not on the target's island, members wait (job 0x3E). Nothing tests
+  reachability. The naval planner's rules then decide what arrives: one ship per request, a ship
+  assigned when the request is made boards at most as many units as on its last trip (one after
+  a founder or a lone hunter, none after an empty trip), and requests of armies that have since
+  retreated are still served. Against a human whose defence near his town hall is more than
+  twice the army's power, every army retreats at its first assault run and is formed again at
+  the next think, so in the long run what reaches him is a trickle of single units put ashore
+  near his town. That is the reported picture, and it is the original's.
+- A lone arrival attacks the first building of the important list (tactic 0) or a fighter near
+  the town hall (tactic 1), ignores units elsewhere, and is drawn to a tower that shoots at it
+  (help rule, the outpost stands in for its garrison).
+
+**Reproduction** (harness: island and base free play, all three races computer players, the
+"human" race redirected for `Ai.human()` and given profile 4 or 2, logging every army, join,
+transport request and unload): in island free play the Pimmon and Sajiki armies of 1..4 hunters
+(before tick 60,000) and of 13..23 hunters and soldiers (tick 100,000+) were formed and retreated
+at once against a "human" with about 40 soldiers; ships brought single hunters (army members,
+freed members of retreated armies and even defence-group hunters from stale requests) and made
+many empty trips. Seed 1, Mittel, to tick 140,000:
+
+| | before | after (U..X) |
+|---|---|---|
+| armies formed | 269 | 253 |
+| transport requests with units (armies and founders) | 310 | 267 |
+| ship trips by passengers (0 / 1 / 2 / 3+) | 83 / 54 / 5 / 18 | 46 / 24 / 1 / 0 |
+
+Deviations of our army code found and fixed (rand() order changes):
+
+| | ours before | original (fixed now) |
+|---|---|---|
+| U | every army run grouped the members standing on another island and requested a ship for them, after the join had first sent them walking toward the target in legs (into the coast) | the grouping and the request happen **at the join**, once per joining batch; members on the target's island walk in, the others wait at once; the wait job is given even if the request fails; flags 8 |
+| V | warships were never army members | free group-0 warships 65 / 66 are candidates in add-on mode (after the soldiers) and sail to the nearest ship cell of the target town at the join; the tactics give them attack jobs wherever they are |
+| W | a member with another job outside the circle and the target's territory had that job cancelled and was walked in (only ship waiters were exempt); members waiting for or walking to a ship were skipped and not counted | members with another job are left alone unless within 40 cells or inside the target's territory (then cancelled and assigned); only members aboard a transport are skipped and not counted |
+| X | "far" meant more than 40 cells | assigned when the distance is **below** 40 (`0x466a29`) |
+| Y | no draw when an army ends | the destructor draws rand() mod 10 + 2 for every living member (walk-home delay) |
+
+Not changed (original behaviour): the threshold, single-unit and empty ship trips, stale
+requests, retreats at the first assault run, no scanning on the way. Kept deviation: idle
+members far from the target walk in legs before they get an attack job (7b T).
+
 ## 8. Tests and cost
 
 `test/ai.test.ts` (with or without integration):
@@ -486,6 +544,11 @@ The differences are within the run-to-run noise (the raids decide everything).
   the same hash (world hash + AI digest);
 - free play 512 x 512 (populator, two computer opponents set to profile 4): both build and
   research, and a town grows.
+
+`test/ai-army.test.ts` (7d): the late-game threshold (10 candidates no army, 11 an army with all
+of them, a single later candidate joins), the end-of-army draws, and in island free play the
+join by island (one request per group, pickup and destination, the wait job, no request from
+the army runs) and a free warship as candidate that sails toward the target town.
 
 Cost: Pimmons 4 (256²) 0.23 to 0.32 ms/tick (machine load varies) for the whole simulation with two active computer
 players. Of that, AI code including its units' path searches is about 0.026 ms/tick, and the
