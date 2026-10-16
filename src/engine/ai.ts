@@ -700,11 +700,17 @@ export class Ai {
     if (c) this.walk(u, c[0], c[1], 30000);
   }
 
-  /** every surviving member is released and walks home; the player's army slot is cleared (`004657c0`) */
+  /**
+   * Every surviving member is released and walks home; the player's army slot is cleared
+   * (`004657c0`, spec 2.5 last bullet). The original's walk starts after rand() mod 10 + 2 ticks:
+   * one draw per living member, in member order (ours walks at once).
+   */
   private endArmy(ps: AiPlayer): number {
     for (const id of ps.armyMembers) {
       const u = this.w.get(id);
-      if (u && u.group === Grp.Army) this.release(u, true);
+      if (!u || u.group !== Grp.Army) continue;
+      if (u.alive) this.rand();
+      this.release(u, true);
     }
     ps.armyMembers = [];
     ps.army = 0;

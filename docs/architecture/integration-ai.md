@@ -178,7 +178,7 @@ No hook in logistics is needed. If an immediate start is wanted, the engine's co
 | 2.1 strength, army power | `strength`, `power` |
 | 2.2 defence targets, budget, defence group with reserve (profile 0: 25 %, members and refill: units outside with any job), no outpost refill (dead branch), intruder records, response with every defender (3 per intruder, wrapping, most urgent bucket only), idle defenders walking back | `defenceTargets`, `record`, `respond`, `assignAttackers` |
 | 0.1 / 2.3 think order (diplomacy, per town scouts / troops / candidates, attack or join, founding), scouts and explore job, offensive troop wants, army candidates (free group-0 hunters, then soldiers by type) | `runThink`, `scouts`, `runExplore`, `troopWants` |
-| 2.4 attack decision per profile, joining | `considerAttack`, `joinArmy` |
+| 2.4 attack decision per profile, joining (2.5 "Joining and moving": walk in beyond 20 cells; add-on: warships sail in, land units grouped by island, one ship request per group on another island, wait job 0x3E) | `considerAttack`, `joinArmy`, `sailToTown` |
 | 2.5 army: relation check, tactic 0 (assault: bucket 0 only = the first building of the important list, the target town's outposts and the target race's class-0 units in the circle; candidate town halls set aside under 10 members, the important one never; retreat at 2x power; 6 per target, wrapping; re-assign when the running target's class exceeds the bucket's, or equals it and rand() mod 10 = 0), tactic 1 (skirmish: fighters, else other units; 3 per target, wrapping; re-assign only in bucket 0 from class > 0, no draw), refused attacks counted, random tactic per run, end and walk home | `runArmy`, `assignArmy`, `endArmy` |
 | 3.5 acceptance flags every think, offers (6001 ticks, 1/15, state differs, not 0, first town's embassy with the diplomat at home) | `Ai.diplomacy` via `diplomacy.setAccept` / `diplomacy.offer` |
 | 4.6 market settings, partners with the flag test, merchant want, merchant routes | `markets` via `trade.computerSettings`, `trade.partners(t, true)`, `trade.startRoute`, `trade.routeOf` |
@@ -232,10 +232,13 @@ sensibly:
    around the site free of every territory. Sites are searched in rings of step 2 up to 20 cells around each start candidate in
    file order. A `noSite` flag stops further missions once no site is left.
 9. **Army target classes** (object +0x20, 7 item 1) use `combat.tier()` (0 fighters / outposts,
-   1 military buildings and civilians, 2 the rest), so the cap is 5 - tier. Members far from the
-   target re-walk when they stand. **Differs from the original** (spec 2.5, corrected in the
-   third pass): the assault attacks only bucket 0, six per target, and the keep rule compares
-   with the bucket; see 7b items O..R.
+   1 military buildings and civilians, 2 the rest). The assault attacks bucket 0 only, six per
+   target, the keep rule compares with the bucket (7b O..R). Members without an attack job
+   follow spec 2.5 step 6: one with another job (walking, waiting for or walking to a ship) is
+   taken only within 40 cells of the target point or inside the target town's territory; an
+   idle one far from both walks on in legs of 32 cells first (7b T, cost); warships are taken
+   wherever they are; members inside a building other than a transport are skipped (the
+   original hands them the attack through `00465650`, which sends them out first; rare).
 10. **Ending armies:** as specified, tactic 1 finds only units outside buildings, and an army with
     no target "ends as a success". Against a town whose people are indoors, armies therefore end
     and are re-created often (each think). Kept as in the spec.

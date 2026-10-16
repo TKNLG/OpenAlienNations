@@ -171,7 +171,8 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   always wanted (the "food gangs enabled" condition is always on in the original too); a released
   fishing boat is not sent to the shipyard (the original's walk fails anyway); served planner
   requests no ship works for are dropped from the list (the original keeps them; nothing reads
-  them); the army groups only members that are idle-on-the-wrong-island at each army run; the
+  them); the army's island grouping happens at the join as in the original (fixed 2026-10,
+  `integration-ai.md` 7d); the
   warship's explore job uses the nearest-cell spiral (`004853c0` order) for the random cell's
   usable neighbour, the original walks its own square spiral; dead or already embarked units in a
   request's waiting list are skipped by the boarding step without using a place.

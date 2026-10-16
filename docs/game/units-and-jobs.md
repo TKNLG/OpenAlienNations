@@ -2837,6 +2837,73 @@ therefore never got its animals back. Differences that remain:
    populators still draw (and discard) the constructor's two draws in their own streams.
 4. Fish (add-on) are never filed (addon.md 6.1).
 
+#### 7.5.2 Where a new tree can appear (C; AN `004826a0`, `00451510`, `004638d0`, `00481e90`, `00481ee0`; Gold `0048d920`, `004565a0`)
+
+Re-derived at instruction level (October 2026) after a play-test report that trees grow on the
+mine ground ("ore", the grey rock and white snow cells of the mountains, height > 250 / 290)
+and the memory that this never happened in the original.
+
+**Every source of trees.** The nature constructor (`004638d0`, Gold `00469d50`) is the only way
+a tree object comes into being. Its callers in AN.exe are exactly five: the map loader
+(`0041130c`), building collapse (rubble, type 38 only, `0045f859`), the farm planter (crops of
+the farmer's crop_base..+3 only, `0047ebe3`, 7.6), the respawn manager (`00482989`, 7.5.1) and
+the free-play cluster placer (`004850e5`, `world-populate.md` 5). Gold adds the fishing job's
+fish and the island populator. So:
+
+| source | trees? | cell test |
+|---|---|---|
+| mission map (`.dvm`) | yes, where the map file puts them | none; the shipped campaign maps hold 18,867 trees, **2** of them on cells above 250 (`Amazons.mdb`, play order 8) |
+| free-play / island populator | yes, at game start only | 0x17E per cell (0x13E per site square): **no mountain (0x100)**, no object, no water (`world-populate.md` 5) |
+| respawn manager | yes, one small tree per felled tree (7.5.1) | **0x1003F** only, see below |
+| planting by a unit | **no**: no race has a forester; the farmer plants only crops | − |
+| natural spreading / seeding | **no**: nothing else creates trees; the growth job (0x1D) only advances the frame of the tree it belongs to | − |
+
+**What blocks a respawned tree.** The spiral of 7.5.1 step 3 reads the cell flag word
+(`00451510`, Gold `004565a0`) and takes the first cell where (flags AND 0x1003F) = 0. The literal
+is `0x1003F` in both executables (AN `0x482887`, Gold `0x48db07`, `test eax,0x1003f` followed by
+the jump to the creation). Per bit:
+
+| flag | meaning | blocks a respawned tree? |
+|---|---|---|
+| 0x01 | path flag: building foundation ring (6.6) or worn path (4.5) | **yes** |
+| 0x02 | a unit stands there | **yes** |
+| 0x04 | building footprint | **yes** |
+| 0x08 | special object (index 0xF000..0xF00F) | **yes** |
+| 0x10 | nature object (tree, bush, stone, animal or carcass, crop, rubble) | **yes** |
+| 0x20 | water tile | **yes** |
+| 0x10000 | Gold only: class-0 tile (base mode meadow; add-on beach and worn paths, addon.md 10.2) | **yes** in dvge.exe; AN.exe never sets it |
+| 0x100 | height > 250 (Gold add-on mode 290): **mountain, the only ground a mine may stand on** (6.1) | **no** |
+| 0x200 / 0x400 | hill band / lowland | no |
+| 0x80 | not in sight | no |
+| 0x2000, 0x8000 | land / Gold coastal water | no (water itself is 0x20) |
+| (not a flag) | slope, terrain class (rock, snow, weg shore cells of lakes), town territory, fog | not tested |
+
+Neither the constructor nor the growth job (`00481e90` → `00481ee0`) looks at the terrain: a
+small tree created on a mountain cell grows to a full tree there, can be felled, and counts as a
+survivor for later respawns (7.5.1 step 1) like any other tree.
+
+**Consequence: in the original, respawned trees can stand on mine ground.** The jittered start
+cell (± 3 cells around the surviving tree) and the spiral may land on a mountain cell whenever a
+forest borders a mountain. Two things make it more frequent over a long game than the start state
+suggests:
+
+- low ground near towns fills with blocked cells (foundation rings, worn paths, buildings,
+  units), but **mountain cells never carry the path flag** (worn paths need height < 250,
+  4.5; a foundation on a mountain is only a mine's), so a spiral that starts in a busy area
+  walks on to the first free cell, which is often a mountain cell;
+- a tree that respawned on a mountain is itself a survivor, so later respawns near it are
+  centred on the mountain.
+
+At the start of a game trees are (almost) never on mountains: the populators forbid 0x100 and the
+campaign maps do not place them there. That is the likely source of the memory. Trees on mountain
+cells block mines exactly like elsewhere (the mine's mask contains 0x10, 6.1).
+
+**Our build**: as above (`respawnFree` tests path flag, units, buildings, nature objects, water
+and, in Gold, the class-0 flag; no height test). Test `test/tree-respawn-terrain.test.ts`. A
+measured base free-play game (three computer players, seed 3, Mittel) went from 0 of 552 trees on
+mountain cells to 21 of 449 after 96,000 ticks. An "enhanced" option that adds 0x100 to the mask
+would be a deviation and is not implemented.
+
 ### 7.6 Farms and farmers (C, `00478cb0` case 14, `0047ead0`)
 
 - The farm (45) is "staffed" (flag 0x4). When its farmer enters, the operator job (0x22) is

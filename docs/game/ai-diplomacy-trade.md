@@ -952,7 +952,16 @@ Notes:
   site falls within a few hits (2 to 5 hunter strikes), and the wood already delivered to it is
   lost (the stone comes back as rubble).
 - When an army ends for any reason, every surviving member gets group 0 and walks back to its home
-  town (`004657c0`), and the player's army slot is cleared.
+  town (`004657c0`), and the player's army slot is cleared. In detail (C, the army's destructor,
+  `rand()` call at `0x4659e6`; the same in Gold `0046bd40`): the member list is walked in order;
+  each member gets group 0 and loses the army's reference; a member that is alive (inside a
+  building or a ship too) has its current job cancelled and gets a follow-path walk (0x06) to the
+  first free cell of a spiral around its home town's position, first run after **rand() mod 10 +
+  2** ticks: **one rand() per living member**, in member order. The destructor runs right after
+  the run that ended the army, so after a retreat (step 4, which first gave every member outside
+  a building a direct walk home with delay 1, no draw) these walks replace the retreat's. A
+  member that was waiting for a ship keeps its place in the request's waiting list (`addon.md`
+  8.4): the ship still fetches it later.
 
 How the attack jobs themselves move and hit is in `combat.md`.
 

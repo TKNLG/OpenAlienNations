@@ -188,7 +188,9 @@ Inputs: centre `(x, y)`, remaining counts `T` trees, `A` animals, `B` bushes, `S
 Notes: the created object occupies its cell, so later tests (and the second visit of a ring corner)
 skip it. Counts are maxima: on crowded ground, water or mountains the 10,000-cell limit can end a
 cluster early. Tree, bush and stone types are chosen uniformly; **the terrain class does not
-choose the tree type**.
+choose the tree type**. Because 0x17E includes 0x100, no populated object starts on a mountain
+(mine) cell; trees respawned later during play do not test 0x100 and can stand there
+(`units-and-jobs.md` 7.5.2).
 
 ### 5.1 Nature object initial state (C, `004638d0`)
 
