@@ -2178,7 +2178,25 @@ export class Logistics {
 
   /** unit commands from the info page */
   unitAction(u: Entity, action: string, town?: Town): void {
-    if (action === 'drop') { u.carryAmount = 0; u.carryGood = NONE; this.setAction(u, u.path ? Action.Walk : Action.Idle); return; }
+    // drop goods (command 0x53, 3.2): only with a load; the current job is cancelled (a transport's
+    // destructor re-files its good to fetch, a harvest ends), then the load is gone. A unit on its
+    // way out of a building keeps its leave job (only the job queued behind it is cancelled)
+    if (action === 'drop') {
+      if (u.carryAmount <= 0) return;
+      if (this.leaving(u)) {
+        for (const id of u.suspended.splice(0)) {
+          const sj = this.w.sched.get(id);
+          if (sj && !sj.cancelled) { sj.cancelled = true; sj.hold = 0; this.cleanup(sj, u); this.dutyDropped(sj, u); }
+        }
+      } else {
+        this.cancelJob(u);
+        this.w.stopWalk(u);
+        this.w.combat.endUnitJob(u);
+      }
+      u.carryAmount = 0; u.carryGood = NONE;
+      this.setAction(u, u.path ? Action.Walk : Action.Idle);
+      return;
+    }
     // go home (command 0x20, 3.2): a walk to the first cell of the 4.8 spiral around the current
     // town's position (its hall's anchor) that misses the path mask; it enters nothing
     if (action === 'home') {

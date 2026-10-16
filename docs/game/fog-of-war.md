@@ -345,7 +345,12 @@ Map sizes and the scaled radii (r × s, (r + 1) × s):
   `00451510`) bit 0x80 means "cell counter is 0, not currently visible". So every cell of the
   footprint grown by one cell must be **currently visible** for the preview to be valid. The
   simulation's own check (`00451780`) uses the mask without 0x80 and accepts any cell (C). The
-  preview validity is stored and gates the click (I).
+  click runs the same test with the same stored mask again and sends no build command when it
+  fails (C, `0x440C73`; Gold `0x440254`). This holds for **every** building type, the mine, the
+  town hall and the add-on harbour and shipyard included: explored-but-fogged cells are refused
+  like unexplored ones. The special status of those four types is the territory exemption
+  (`economy.md` 11.7), not a fog exemption (`units-and-jobs.md` 6.1.1, with the Gold mine
+  preview quirk).
 - **Death effects** play only for drawn objects (combat.md 6), so deaths in the fog are silent
   and invisible (I: same drawn-list test).
 - **AI:** no vision. All AI scans and choices read the simulation directly (C for the area scan
@@ -414,7 +419,8 @@ same modular arithmetic.
 ## 11. Open points
 
 - Whether map creation explicitly zeroes cell bytes +2/+3, or they are zero by allocation (I).
-- The exact gating of the placement click by the preview result (I).
+- ~~The exact gating of the placement click by the preview result.~~ Resolved: the click re-runs
+  the test with the preview mask (section 6).
 - The global `0x4B3B1C` = network session (I).
 - How projectiles and effects are culled in fog: they are not in the anchor-cell object path (U).
 - Exhaustive proof that no simulation caller passes a mask with bit 0x80 (I, section 9).

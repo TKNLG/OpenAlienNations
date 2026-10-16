@@ -1072,6 +1072,12 @@ export class World {
     }
     if (cmd.type === 'unit') {
       // go home acts on the first selected unit only, toward the player's current town (units-and-jobs.md 3.2)
+      // drop goods also acts on the first selected unit only (command 0x53, units-and-jobs.md 3.2)
+      if (cmd.action === 'drop') {
+        const u = this.byId.get(cmd.ids[0]);
+        if (u && u.kind === Kind.Unit && u.owner === cmd.player && (u.oid & 0xffff) !== T.Criminal) this.logistics.unitAction(u, 'drop');
+        return;
+      }
       if (cmd.action === 'home') {
         const u = this.byId.get(cmd.ids[0]);
         const t = cmd.town === undefined ? undefined : this.ownTown(cmd.player, cmd.town);

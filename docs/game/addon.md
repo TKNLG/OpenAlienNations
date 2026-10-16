@@ -346,6 +346,13 @@ The same rule is in the UI click test (`0044bdb0`, which also adds the base terr
 own-area bits) and in the AI site test. The AI passes a padded rectangle, so its limit is
 "padded height + 1" (8.1).
 
+**Fog.** The UI preview and click use the mask 0x405E **+ 0x80** like every building
+(`0x445ED7`), so the whole grown footprint must be **currently in sight** for the local player;
+explored-but-fogged shore is refused like unexplored shore. The harbour and shipyard are exempt
+from the **territory** test only (no 0x800). The simulation (`004571e0`) tests no fog and no
+territory. A ship's vision disc counts (ships are units, 4.1). Details and the Gold mine preview
+quirk: `units-and-jobs.md` 6.1.1.
+
 Missing goods do not block placement (base rule). The shipyard also has a goods top-up (3.5).
 
 ### 3.2 Construction (C)

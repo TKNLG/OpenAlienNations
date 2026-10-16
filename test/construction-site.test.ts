@@ -322,3 +322,29 @@ test('paused site: a delivery under way still lands in the local stock, a delive
   for (let i = 0; i < 1500 && v.carryAmount; i++) w.step();
   assert.equal(site.local[WOOD], 2);
 });
+
+test('drop goods (WEGWERFEN, command 0x53) during a delivery: the job ends and the site gets its need back; only the first selected unit drops (3.2)', { skip }, () => {
+  const { w, me, site, u } = carrierAtSchool();
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: site.id });
+  for (let i = 0; i < 4; i++) w.step();
+  assert.equal(jobOf(w, u)?.kind, LJ.Transport);
+  assert.equal(site.needed.filter(g => g === WOOD).length, 1);
+  const before = requests(w, site);
+  w.schedule({ type: 'unit', player: me, ids: [u.id], action: 'drop' });
+  w.step();
+  assert.equal(u.carryAmount, 0, 'the load is gone');
+  assert.equal(u.job, 0, 'the delivery is cancelled');
+  assert.equal(site.needed[0], WOOD, 'the good to fetch is re-filed at the front');
+  assert.equal(owed(w, site, WOOD), 2, 'no need lost');
+  assert.equal(requests(w, site), before + 1, 'one list-1 request');
+  for (let i = 0; i < 300; i++) w.step();
+  assert.equal(site.local[WOOD], 0, 'nothing was delivered');
+  // only the first selected unit drops; a unit without a load is not touched
+  const [ux, uy] = cellOf(u);
+  const a = w.spawnUnit(me, WOODCUTTER, ux + 2, uy, u.town), b = w.spawnUnit(me, WOODCUTTER, ux + 3, uy, u.town);
+  a.carryGood = WOOD; a.carryAmount = 1; b.carryGood = WOOD; b.carryAmount = 1;
+  w.schedule({ type: 'unit', player: me, ids: [a.id, b.id], action: 'drop' });
+  w.step();
+  assert.equal(a.carryAmount, 0);
+  assert.equal(b.carryAmount, 1, 'the second selected unit keeps its load');
+});

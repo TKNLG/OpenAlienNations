@@ -306,6 +306,25 @@ It does not enter the town hall or the house, does not change the unit's home or
 the same for every unit type (a porter, a soldier, a founder). A criminal shows no unit buttons
 (`docs/ui/side-panel.md`), so it cannot be sent.
 
+**Drop goods** (`WEGWERFEN` on the unit page, command class **0x53**, executor `00452950`; the
+same code in the Gold exe; C, instruction level):
+
+1. It acts on the **first object of the sender's selection** only (no payload) and does nothing
+   if nothing is selected or that unit carries nothing (+0x3C = 0).
+2. If the unit has a current job (+0x30), the job's **cancel flag** is set and the unit's current
+   job is **cleared** at once, as when a pause sends a builder away (6.8): the job is deleted at
+   its next due slot without running again, its destructor runs then, and the job queued behind
+   it (+0x20) is cancelled with it (1.2). The unit stands where it is with no job.
+3. The carried amount (+0x3C) is set to 0; the good field (+0x38) is left as it was, which does
+   not matter with amount 0. The load is gone: no pile, no stock.
+4. A display message follows (the unit's action changes; it plays no part in the simulation).
+
+So dropping the load of a unit that is **delivering** ends the delivery: the transport's
+destructor (5.5) finds its good to fetch still set and puts it back at the front of the
+requester's needed list with one list-1 request, so a site or production building loses no
+need, only the unit of goods. A gatherer that drops its load also loses its harvest job (he does
+not go on cutting), and a porter on a dispatcher transport is free again at once.
+
 **Explicit versus automatic work.** A porter with any job (for example an ordered harvest) is
 not free, so the dispatcher ignores it. A harvest started by an order keeps auto-continue
 (7.1), so the porter keeps picking until nothing of that class remains within reach. This is the
@@ -1422,7 +1441,7 @@ the collected output when the job turns round). The same holds for the output to
 #### Early end of a transport: the destructor (`0047c160`, vtable 0x4A577C slot 0) (C)
 
 A transport ends early when its unit dies (death cancels the current job, and through the job
-chain of 1.2 every job suspended behind it), when another job replaces it (a player order,
+chain of 1.2 every job suspended behind it), when the player drops its load (3.2 "Drop goods"), when another job replaces it (a player order,
 `00465650`), when its source or destination dies, when the source has none of the good, or when a
 building refuses entry. In every case the destructor runs:
 
@@ -1628,9 +1647,14 @@ re-filed (144 of 180 lost transports were failed walks). The following points no
    check (the original has none). In the original an interrupted delivery order cannot lose a
    need; a pause and resume (6.8) refills a site anyway. A fuzz run (about 1,700 random
    player orders, moves, go-home and pause commands on the reporting save) found no other way to
-   lose a need. Not checked against the original: `WEGWERFEN` (drop goods) on a unit that is
-   delivering; ours lets the transport go on empty-handed, which clears its good to fetch at the
-   destination without delivering it.
+   lose a need.
+11. **Drop goods** (`unitAction` 'drop', 3.2 "Drop goods"): ours only emptied the unit's hands and
+   let its job go on, so a delivering unit walked on empty-handed and its good to fetch was
+   cleared at the destination without a delivery (a lost need), and a gatherer went on
+   harvesting. Now the command acts on the first selected unit only, cancels its job (the
+   transport destructor re-files the good) and then empties its hands. Our choice for a case the
+   client hardly allows: a unit already on its way out of a building keeps its leave job and only
+   the job queued behind it is cancelled (the original would cancel the leave job too).
 
 Remaining differences: our planner is synchronous, so "the blocker's planner is still running"
 (4.7 case 3) has no exact counterpart; plain move orders still use one search with partial ways;
@@ -1675,6 +1699,43 @@ Forbidden masks (`0045f0a0`):
 | town hall (40) | 0x107E | |
 
 The AI adds 0x100 for everything except the mine and outposts (`0046c1a0`).
+
+#### 6.1.1 Who tests what: UI, simulation, computer player (C, re-checked at instruction level)
+
+The same area scan (`00447cd0`, Gold `0044bdb0`) runs in three places with different masks:
+
+| caller | mask | visibility | territory | evidence |
+|---|---|---|---|---|
+| **UI preview** (ghost colour, every cursor move) | type mask **+ 0x80** | every cell of the footprint grown by one must be **currently in sight** (viewer counter > 0) | 0x800 corner test (types with 0x800 in their mask), 0x1000 for the town hall | mask set once at placement start: `0x441E4B` call, `or al,0x80` at `0x441E57` (Gold `0x445ED7`); test `00441e80` (Gold `00445f00`) |
+| **UI click** (the only sender of the build command, message 0x17) | the same stored mask (+0x80) | same | same | `004404a0`: `call 0x447cd0` at `0x440C73`, any non-zero result jumps over the command (`jne 0x440E25`); Gold `0x440254` region (returns at once on non-zero) |
+| **simulation** (command execution, also on every network peer) | type mask, **no 0x80** | **none** | **none** | `0x45196F`..`0x451984`: per-cell flags OR-ed, then `test` with the `0045f0a0` mask; Gold `0x4573FD`..`0x45740E` |
+| **computer player** site search | type mask + 0x100 (not mine / outposts), no 0x80 | none (computer players are omniscient) | 0x800 / 0x1000 as for the UI | `0046c39c`, `0046c4b6`; `ai-diplomacy-trade.md` 1.5 |
+
+Consequences:
+
+- **No building is placeable in the fog.** The 0x80 bit is added for every type without a type
+  test, so the mine, the town hall and the add-on harbour and shipyard need the whole grown
+  footprint in sight exactly like a house. "Explored but not in sight" and "unexplored" are the
+  same for placement: both have counter 0. There is no record field or flag that relaxes this.
+- What the mine (0x67E), the town hall (0x107E) and the add-on harbour and shipyard (0x405E) do
+  have is the **territory exemption**: their masks lack 0x800, so they may stand outside the
+  current town's area (the town hall must even stand outside every area, 0x1000). Every other
+  building (0x87E, farm 0x97E) needs all four corner blocks in the current town's own territory
+  (`economy.md` 11.7).
+- Visibility is the local player's display state, so the test lives only in the UI. The
+  simulation re-checks terrain, objects, units (0x02), water/land, height bands and slope, but
+  neither fog nor territory, so a command is executed identically on every machine.
+- The fog cheat **MAGICEYE** only changes drawing (`fog-of-war.md` 8). The counters keep
+  running, so the 0x80 test still applies with fog switched off.
+- Ships are units: a ship's vision disc puts shore cells in sight like a walker's, which is how a
+  harbour site on an otherwise unvisited coast becomes placeable (`addon.md` 4.1).
+- *Gold only, display quirk (C, `0x445FDD`..`0x44602D`):* for the **mine** (type 50), when the
+  preview test fails, the preview looks up the island id of the cursor cell and the island id
+  of the current town's position (the side panel's town-list entry, `00428260`; I: the town
+  centre). If the two differ, the ghost is drawn **green (allowed)** anyway. The click test
+  has no such branch, so the click does nothing. On base maps both ids are 0 and nothing
+  changes; in add-on island games the mine ghost turns green over the sea and over every other
+  island wherever the placement fails (in the fog too).
 
 After placement:
 
