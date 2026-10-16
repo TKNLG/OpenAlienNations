@@ -603,6 +603,18 @@ changes how the walk target is chosen:
 3. Path to the cell with the normal target chooser, then turn and **enter** (job 0x0B against
    the ship, 5.1). On a human player's ship the unit must be within distance < 4 of it.
 
+**The ship comes to the unit** (C, instruction level, go-to constructor `00485670`,
+`0x4856c3..0x485729`): whenever a go-to-object job is **created** with a type-67 target, the
+constructor cancels the ship's current job (whatever it is: a trade route, a sail job of the
+naval planner, ...) and gives the ship a new sail-to-coast job (0x3B, 5.4) toward the **unit's
+current position**, first run after **1** tick. This happens for every unit sent at a transport:
+the player's right-click (5.6), the naval planner's boarding step (8.4, one per unit sent, so the
+ship ends up with the job toward the last unit sent). There is no race or owner test, so a
+player who orders a unit onto a foreign ship also re-routes that ship *(quirk)*. When the ship
+is already within 2 cells of the unit's island, the new job finds a near cell of that island at
+its first run and ends at once (5.4 step 1); otherwise the ship sails to the nearest coast of
+the unit's island, and the boarding walk (steps 1 and 2) goes to that landing.
+
 Other targets: the island test of 2.5 applies.
 
 Consequences:
@@ -970,19 +982,52 @@ first run after 10 ticks (`00462e10`).
 | 4 | sailing to the destination | when its job ends: state 5 and **eject every passenger** (5.3) |
 | 5 | unloading | timer + 1 per run; above 50: state 1 |
 
-**Boarding step** (`00472940`, re-read 2026-10), with the ship's counter c and its passenger
-count p:
+**Boarding step** (`00472940`, instruction level `0x4729a7..0x472b10`, re-read 2026-10-17),
+with the ship's counter c and its passenger count p (occupants, +0x5C). It runs **once per
+trip**, when a ship in state 2 has no job any more (ship pass above):
 1. n = c − p. If n < 1, the ship skips boarding: state 4 at once, its current job is cancelled
    and it gets the 0x3B job toward the request's destination (first run after 5 ticks).
-2. Otherwise, if c = 100, c := 0. Then for the waiting units in list order, while n > 0: cancel
-   the unit's job, give it a go-to job to the ship (boarding, 5.2), first delay 5, remove it from
-   the list, n − 1, c + 1. Units that find the ship full are refused and stay idle.
+2. Otherwise, if c = 100, c := 0. Then for the entries of the waiting list in list order, while
+   n > 0: cancel the unit's job, give it a go-to job to the ship (boarding, 5.2; its constructor
+   also re-aims the ship at that unit), first delay 5, drop the planner's reference, remove the
+   entry, n − 1, c + 1. **There is no test of the unit**: a unit that has died meanwhile (the
+   list's reference keeps the object), one already aboard another ship or one inside a building
+   is sent and counted like any other. A dead unit's job never does anything.
 3. When the request's list is empty, request state = 3 (served).
 
-The counter is 100 when the planner registers a ship (`00471fd0`) and when the request service
-assigns it (below); after a boarding step it holds the number of units boarded. The assignment
-inside **New request** does not touch it, so a ship assigned there boards at most as many units
-as on its last trip (none if it boarded none: it then sails to the destination empty) *(quirk)*.
+Nothing else happens at the pickup: the ship waits 50 runs (state 3) whatever happens, then
+sails. Who actually gets aboard is decided by the units' boarding walks and the ship's door
+(5.1): the first **5** (capacity) to reach their shore cell enter, a later one is refused at its
+first entry request (ship full) and stands idle on the shore, out of the request for good; one
+that has not arrived when the ship leaves follows the ship's new job (5.2 step 2) or waits.
+
+**The ship counter c** (record +0x0C; all writes, instruction level):
+
+| where | value |
+|---|---|
+| registration `00471fd0` (`0x47206d`) | 100 |
+| request service in `00472b30` (`0x472e69`), when it assigns an idle ship | 100 |
+| boarding step `0x472a2c` | 100 → 0 before the list walk |
+| boarding step `0x472af5..0x472afb` | + 1 for every list entry sent |
+| save / load (`0040c900` / `0040cc20`) | stored and restored as is |
+
+Nothing else writes it: not the assignment inside **New request** (`0x4727e1..0x4727ee` writes
+only the state and the request), not the unloading, the return to idle, a cancelled request
+(`00472f90`) or docking. So 100 means "no limit", and any other value is **the number of list
+entries sent to this ship since it last received 100**. Consequences *(quirk)*:
+
+- A ship assigned by the request service (c = 100) sends **every** waiting unit of the request,
+  up to 100, and the 5 first to arrive board; the rest are dropped from the request.
+- A ship assigned by New request (it was idle when the request was made) sends at most c − p
+  units, and c then grows by the number sent. A ship whose last service trip carried one unit (a
+  founder, a lone hunter) sends 1, then at most 2, then 4, 8, ... at its later direct
+  assignments, as long as the requests hold that many; it is never locked to one unit.
+- c = 0 (the ship got 100 and then found the list empty, typically because another ship of the
+  same request had already sent everybody) stays 0 while the ship is only assigned directly: it
+  sails to every destination empty, until the request service assigns it again.
+- A request's units are never merged with another request's: each ship works for one request
+  per trip. A request of n units asks for ships until their free places cover the units still in
+  its list (request service); the assignment at New request takes idle ships for n units at once.
 
 **Request service** (each run, for each request with state < 3, in id order):
 
@@ -998,10 +1043,19 @@ as on its last trip (none if it boarded none: it then sails to the destination e
 Then: with u unserved requests, if u > 3, set build[67] = u/2 and claim[67] = u − u/2.
 Otherwise, if the number of ships known is less than u, set claim[67] = 1.
 
-**New request** (`00472630`), with {units n, goods g, pickup, destination, flags}:
+**New request** (`00472630`), with a 13-field record {+0x00 kind (8 by default), +0x04 units
+n, +0x08 goods g, +0x0C/+0x10 pickup, +0x14/+0x18 destination, +0x20 flags, ...}; the record's
+default constructor (`0040d050`) sets kind 8 and flags = 1 (the constant at 0x4B35E0):
 
-- If flag bit 1 is set and more than 50 requests exist, refuse.
-- A request with no units and no goods is not stored.
+- A request with no units and no goods is not stored (checked first, `0x472664..0x472670`).
+- If **flags & 1** is set and the planner holds **more than 50 requests**, refuse (return false,
+  `0x472676..0x472684`). The count is the size of the request map (+0x3C), and requests are
+  **never removed** from it except by a cancel (`00472f90`, founding only; the save
+  `0040c900` writes all of them): served requests (state 3) stay forever. So from the 51st
+  request a nation has ever made (minus cancelled ones), **every army request is refused**
+  *(quirk)*; the army join still gives the group the wait job 0x3E (below), so those members
+  wait until their army ends. Founding requests are not affected: the founding code clears the
+  whole record, flags included (`0x46f61d..0x46f645`), before filling it.
 - Otherwise store it (state 2, i.e. open) with the next id. Assign the ships that are idle
   (state 1) at once, in id order, each reducing n by its capacity and g by 5 (not below 0),
   until both reach 0. Each assigned ship gets state 2, this request, its current job cancelled
@@ -1040,10 +1094,24 @@ Otherwise, if the number of ships known is less than u, set claim[67] = 1.
   - joining warships (65, 66; candidates in add-on mode, `00470140`) sail to the nearest
     ship cell of the target town's position;
   - the joining land units whose island differs from the target point's are grouped by island;
-  - for each group, one request is made: n = members, goods 0, pickup = the first member's
-    position, destination = the army target point, flags 8;
-  - every member of such a group gets job 0x3E, whatever the request's result. Members on the
-    target's island move as in the base game.
+  - for each group, one request is made: n = the group's size (the members of this join on
+    that island, not the army's earlier members), goods 0, pickup = the first member's
+    position, destination = the army target point, the default record (kind 8, **flags 1**,
+    `0x46c8c3..0x46c994`): refused once the planner holds more than 50 requests (New request);
+  - every member of such a group gets job 0x3E (with the request id), whatever the request's
+    result (`0x46c999..0x46ca28`). Members on the target's island move as in the base game.
+- **Unloading at the destination** (state 4 → 5 above): every passenger is ejected (5.1) and
+  placed by its leave job (5.3; `00484e00` ship branch `0x485288..0x485380`, place `0046b770`).
+  That is all: the passenger had no job aboard (its boarding walk ended when it entered), so
+  nothing is chained behind the leave job, and it stands on the coast **with no job**: no
+  attack, no walk, no scan for enemies, no message to its army. The landing point is where the
+  ship's sail job toward the destination stopped: the first spot within 2 cells of the target
+  point's island (5.4), i.e. the coast of that island nearest the ship's approach, which can be
+  far from the target point. What the unit does next comes from the rules for jobless units: the
+  help rule and the flight rule (`combat.md` 7, 8.4), the army's next run if it is still a
+  member (`ai-diplomacy-trade.md` 2.5 step 6: a member without a job gets an attack job on the
+  current target wherever it stands), and otherwise the rules for free units (the next think's
+  army, the gangs).
 - **Strategy** (`0046cbd0` = AN `00466020`, `0046d9e0` = AN `00466e20`): when the army's idle
   members get attack jobs, members on board a transport ship are skipped (not counted for the
   six / three per target), and they keep sailing.
