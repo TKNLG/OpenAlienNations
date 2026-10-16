@@ -589,6 +589,10 @@ Leaving (job 0x0D), in short (full rules, timings and births in 4.10):
    pushed aside; anything else is waited for in 5-tick polls. After three polls the unit takes
    the nearest free cell instead. A unit is never put on a taken cell.
 3. The exiting unit faces **3 if door_dx < 0, otherwise 5**.
+4. Gold harbour and shipyard (door (0, 0), `addon.md` 3.7): the entrance is the building's own
+   max-corner cell, so it is always taken (by the building, which is never pushed). The unit is
+   put at run 5, 35 ticks after the eject, on the first spiral cell without unit, building,
+   nature object, special object or water: the nearest free shore cell, one unit per cell.
 
 ### 4.5 Worn paths (C, `00448690`; Gold `0044c7d0`)
 
@@ -687,7 +691,8 @@ Every object gets the same two masks at creation (`00461a40`): a **movement mask
 - **A step never enters a cell that holds another unit**, nor a building, a nature object or
   water.
 - Two units never share a cell by walking, and **not by leaving a building either**: the leave
-  job puts a unit down only on an empty cell (4.10). Births appear through the same leave job.
+  job puts a unit down only on an empty cell (4.10), also at the Gold harbour and shipyard whose
+  entrance is a footprint cell (`addon.md` 3.7). Births appear through the same leave job.
   Because the world view draws only the object whose index is on a cell (`objects.md` 12), a
   second unit on a cell would not even be drawn in the original.
 
@@ -919,6 +924,11 @@ inside the footprint. Pimmon examples:
 | (+1, −2) | in front of the +x face, one cell further up that face | large house, distillery, mine, large outpost, police |
 | (0, −1) | behind a 1×1 tower (its −y side, screen up-left) | watchtower |
 
+Exception (Gold add-on): the harbour (62) and shipyard (63) of every race have the door offset
+(0, 0). Their entrance is the max corner itself, a footprint cell holding the building's index,
+so it is never free: units walk to the nearest shore cell instead (4.8 ring search), and the
+leave job always ends with the spiral fallback at run 5 (below; `addon.md` 3.7).
+
 A unit "inside" keeps the simulation position it had when it entered (normally the entrance
 cell), but its object index is taken off the map, so the cell is free (4.7) and the unit is not
 drawn.
@@ -1109,7 +1119,7 @@ follow this section; the founding worked example is reproduced tick by tick. Rem
 | same-slot order | insertion order assumed above | the wheel is LIFO (`combat.md` 16.2): jobs ejected in one tick run their first runs in reverse order, their second runs (the first placement test) in ejection order again; later polls alternate, so at a founding the two porters may come out in swapped order (same timing, same cells) |
 | eject outside a tick | n/a | a unit ejected between ticks (map loading, tests) has its first run 11 ticks later |
 | operator leaving (`004613f0` step 4) | the building is deactivated when the unit is placed outside if it is of the operator type and race and either not the stored operator or "sent out" | only the "sent out" half is tested (leave job data word 2, set by `sendOut` and `DEAKTIVIEREN`, 4.11): a second operator-type unit is refused at the door of an active building (as the original); one admitted anyway (on a transport job) is bounced through a plain eject, which must not deactivate. The police dispatch keeps the station active (8.5; fixed October 2026, it used to deactivate at the eject) |
-| add-on harbour / shipyard (door 0,0) | not traced | put on the nearest free land cell of its island at run 2, no polls |
+| add-on harbour / shipyard (door 0,0) | the entrance is the building's own cell: runs 2..4 poll without pushing, run 5 takes the first free spiral cell (`addon.md` 3.7) | as the original since October 2026 (it used to put the unit at run 2 on the nearest land cell without testing units, so porters leaving a shipyard in a row stood on one cell); `test/harbour-door.test.ts`. Ships still leave a shipyard at once through the launch and dock without a leave job |
 | building gone while a unit is on its way out | not traced | put on the first free spiral cell around its stored position |
 | nowhere free at run 5 | not traced | the job keeps polling every 5 ticks |
 | admission (may-enter test, 4.4) | refused units fail at the door and stay outside | outposts refuse (`logistics.mayEnter`, `combat.md` 9.1, 9.10), (Gold) training buildings refuse ships, and a completed active building refuses a unit of its operator type and race that is not its stored operator unless it is on a transport, builder or gathering job (October 2026, 8.6); every other building admits everyone, who then comes out again unless a per-type effect keeps it |

@@ -416,9 +416,10 @@ the base training rules apply unchanged (`units-and-jobs.md` 9; job 0x12 `0047f8
 
 - **Launch**: the new ship is ejected with a leave job (0x0D, `00484e00`). The entrance cell is
   the shipyard's max-corner cell, which the building itself occupies. The leave job therefore
-  falls back to the nearest-passable-cell spiral (`004853c0`) with the ship's mask 0xA01E: the
-  ship appears on the **nearest open-sea cell** that holds no unit (C by reading;
-  `units-and-jobs.md` 4.4 for the leave job).
+  polls (runs 2..4) and at run 5, 35 ticks after the eject, falls back to the
+  nearest-passable-cell spiral (`004853c0`) with the ship's mask 0xA01E: the ship appears on the
+  **nearest open-sea cell** that holds no unit (C; the polls checked at instruction level, 3.7;
+  `units-and-jobs.md` 4.10 for the leave job).
 - The side panel shows the shipyard's training page as `KAEMPFERBAUEN` (every class-5 building
   except the school, `00427000`).
 
@@ -457,6 +458,57 @@ the simulation, at the placement command and in the AI. Keep a fidelity switch.
 Harbours and shipyards leave **no rubble**: the rubble step is skipped for types 62 and 63.
 Everything else is base: collapse, occupants ejected, upkeep removed. The harbour adds no
 capacity, so it removes none either. Ships in a destroyed shipyard's queue are refunded as usual.
+
+### 3.7 The door cell: land units entering and leaving (C, leave job `00484e00`, place `004676d0`)
+
+Every race's harbour and shipyard has the door offset **(0, 0)** in `Addon.odb` (3 × 3, the
+Pimmon shipyard 3 × 2). The entrance cell (+0x70 = anchor + door offset, `units-and-jobs.md`
+4.10) is therefore the building's **own max-corner cell**, a footprint cell that holds the
+building's object index. Nothing in Gold special-cases types 62 or 63 for entering or leaving;
+the base rules simply meet an entrance that is never free.
+
+**Who leaves them on foot.** Porters that delivered goods to a shipyard (the goods of its
+training orders, 3.4) and any unit sent out of a shipyard (a unit inside a training building,
+`units-and-jobs.md` 4.11). Porters never take goods to or from a harbour (3.3), and nobody stays
+inside a harbour, so on foot the harbour is reached only by builders and by porters supplying
+its construction site (no leave job at a site, `units-and-jobs.md` 4.10).
+
+**Entering** (base rules, not re-traced for Gold): the go-to target choice (`units-and-jobs.md`
+4.8) finds the building on the entrance and its four orthogonal neighbours mostly footprint or
+water, so its ring search picks the nearest cell the planning mask 0x3C allows: a shore cell next
+to the building. Units are ignored there, so every carrier walks to the **same** shore cell.
+There is no distance test, so the unit enters from where its walk ended.
+
+**Leaving** (leave job 0x0D, `00484e00`; checked at instruction level). The Gold leave job
+branches on the **container's** class (record +0xC0 = 14, a ship: 5.3); for a building it is the
+base job of `units-and-jobs.md` 4.10 unchanged:
+
+| run | tick after the eject | harbour / shipyard |
+|---|---|---|
+| 1 | +10 | door counter + 1 (door message on 0 → 1); returns 10 |
+| 2, 3, 4 | +20, +25, +30 | the entrance cell's index is not 0xFFFF (it is the building itself). The object found there is not a unit (record kind +0xA4 ≠ 0), so **nothing is pushed**; returns 5 |
+| 5 | +35 | still taken: the square spiral `004853c0` (the base `0047a9b0`) from the entrance, with the **leaving unit's movement mask** (+0x24: 0x3E for land units): the first cell with no unit, building, special object, nature object or water. Slope and island id are not tested. The unit is put there (place method +0x1C) |
+
+So a land unit always comes out **35 ticks** after its eject (never earlier), on the **nearest
+free land cell** around the max corner in spiral order (ring 1 from (x+1, y−1) through +y, −x,
+−y, +x; then ring 2, and so on). Because a unit's index is on its cell from the moment it is
+placed (`units-and-jobs.md` 4.7), the next unit to come out skips that cell and takes the next
+free one: **two units never share a cell after leaving a harbour or shipyard**. Several porters
+that delivered in a row stand on neighbouring shore cells, one per cell, in spiral order.
+
+- No push and no step aside: the entrance holds the building, so the unit-in-the-way branch of
+  the leave job never runs here; units already standing on the shore are not moved.
+- The spiral has no ring limit and no island test *(quirk by reading: if land of another island
+  were closer to the max corner, in spiral order, than any free cell of the building's own
+  island, the unit would be put there)*.
+- Facing: the place method writes **5** (door offset x = 0 is not negative).
+- What the unit does next is the base rule: a job queued behind the leave job resumes; a porter
+  whose transport ended has no job and **stands idle where it was put** (free porter, leisure
+  job `units-and-jobs.md` 5.7). Nothing walks it away from the shore.
+- Ships take the same job. A ship launched from the shipyard therefore also polls runs 2..4 and
+  is put at run 5 on the first spiral cell its mask 0xA01E allows (3.4). A docking ship (5.8)
+  runs it too, but the place method sees that the ship still owns its own map cell and only
+  clears "inside": it stays where it docked.
 
 ---
 

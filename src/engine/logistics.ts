@@ -706,9 +706,13 @@ export class Logistics {
     d[LV.Runs]++;
     if (d[LV.Runs] === 1) { this.doorUp(b); return 10; }
     const [ex, ey] = this.entrance(b);
-    if (this.doorInside(b)) {
-      // add-on harbour / shipyard (door 0,0): the entrance is a footprint cell; the nearest free
-      // land cell of the unit's island (addon.md 3.2)
+    // add-on harbour / shipyard (door 0,0, addon.md 3.7): the entrance is the building's own max
+    // corner, so the test below always finds it taken (by the building: nothing is pushed) and the
+    // unit comes out at run 5 on the first free spiral cell, one unit per cell, no island test.
+    // Ships leave a shipyard through `naval.launch` and dock without leaving; one that got here
+    // anyway is put on open sea.
+    if (this.doorInside(b) && this.w.isShip(u)) {
+      if (d[LV.Runs] < 5) return 5;
       u.inside = -1;
       this.w.place(u, ex, ey);
       this.putOutside(u, b, ...this.cellOf(u), d[LV.SentOut] === 1);
