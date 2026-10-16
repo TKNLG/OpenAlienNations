@@ -875,7 +875,10 @@ impact 0x15 `0048ced0`, range and line of fire `0047a420` / `0047ad40`, firing-p
   12 reach 10 cells inland from the closest sea cell. Melee ships can only hit other ships, and
   fish.
 - **Automatic fighting**: ships join fights through the help rule and patrol jobs (`combat.md`
-  7, 8). The AI's warship wanders with job 0x28 (8.2).
+  7, 8) and keep fighting through the retarget after a kill (`combat.md` 3.6: the next object of
+  the dead target's race within sight + 3 of it, land units and buildings included). An idle
+  ship, like an idle land unit, never scans (`combat.md` 8.4; confirmed: no attack job is created
+  by any Gold-only code). The AI's warship wanders with job 0x28 (8.2).
 - **Sinking**: a ship at 0 HP dies like any unit. Its passengers die with it (5.1). The display
   plays the race's death effect (`combat.md` 6). There is no wreck and no rubble.
 - **Coastal defence**: no new building. The base outposts (52/53) do the job.

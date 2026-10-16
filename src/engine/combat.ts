@@ -16,6 +16,7 @@ import type { Weapon } from '../formats/wdb.ts';
 import { WeaponKind } from '../formats/wdb.ts';
 import { dirToward, turnStep } from './path.ts';
 import { WalkResult } from './motion.ts';
+import { aimCell } from './aim.ts';
 
 export const CJ = {
   Attack: 0x08, Impact: 0x15, Criminal: 0x17, Arrest: 0x18, Escort: 0x19, GarrisonFire: 0x1b, Outpost: 0x1c,
@@ -39,8 +40,12 @@ const M = { TownAttacked: 20, TownDestroyed: 21, HallAttacked: 22, Defeated: 23,
  * data). Walk: the attack's own walk (the original's follow-path child, state 2) is under way.
  * Plan: a stored plan for the next walk (3.3.1): searched from (PX, PY), ending on the firing
  * position (GX, GY); its cells are planned again from (PX, PY) when the walk is made.
+ * Plan = GONE: the target has left the world (dead and removed); the plan slots then hold what the
+ * original still reads from the referenced object (3.6, 7.2): its last cell (PX, PY), its race
+ * (GX) and its tier (GY). The next run retargets from them, which clears the plan.
  */
 const A = { Target: 0, AX: 1, AY: 2, Searches: 3, Auto: 4, Player: 5, Walk: 6, Plan: 7, PX: 8, PY: 9, GX: 10, GY: 11, Size: 12 } as const;
+const GONE = 2;
 /** attack state size before snapshot version 9 (no walk flag, no stored plan) */
 const A_SIZE_V8 = 6;
 /** node budget of the firing-position search (3.5) */
@@ -61,6 +66,8 @@ export interface CombatEffect {
   shooter?: number;
   /** shot: the outpost building id when a garrison fired, else -1 */
   garrison?: number;
+  /** shot: the target's id (display: the projectile ends at the target's height, projectiles.md 3) */
+  target?: number;
 }
 
 export class Combat {
@@ -382,17 +389,22 @@ export class Combat {
     u.charging = false;
   }
 
-  /** retarget after the target was lost (3.6) */
+  /**
+   * Retarget after the target was lost (3.6): a circle of sight + 3 around the old target's cell,
+   * the old target's race only. A dead target is still read (the original's job holds a reference
+   * to it): the cell where it died and its race, kept in the plan slots when it left the world.
+   */
   private retarget(u: Entity, d: number[], base: number): Entity | undefined {
+    const old = this.w.get(d[base + A.Target]);
+    const gone = !old && d[base + A.Plan] === GONE;
+    const [ox, oy] = old ? this.cell(old) : gone ? [d[base + A.PX], d[base + A.PY]] : this.cell(u);
+    const race = old ? (old.kind !== Kind.Nature ? this.race(old) : -2) : gone ? d[base + A.GX] : -2;
     // state, walk child, search and stored plan are cleared first; the walk stops where the unit stands
     d[base + A.Searches] = 0;
     if (d[base + A.Walk]) { this.stopWalk(u); d[base + A.Walk] = 0; }
     d[base + A.Plan] = 0;
     if (!d[base + A.Auto]) return undefined;
-    const old = this.w.get(d[base + A.Target]);
-    const [ox, oy] = old ? this.cell(old) : this.cell(u);
     const r = (this.rule(u)?.radius ?? 5) + 3;
-    const race = old && old.kind !== Kind.Nature ? this.race(old) : -2;
     if (race < 0) return undefined;
     const t = this.choose(u, this.scan(ox, oy, r), race, 2);
     if (!t) return undefined;
@@ -434,15 +446,17 @@ export class Combat {
     }
     let f = 0;
     if (wpn.projectile >= 0) {
-      // nearest footprint corner; distance in 1/64 cells (the original does not wrap: we do)
+      // aim cell: four candidates with transposed sizes, ties to the front corner
+      // (rendering/projectiles.md 1.1); flight distance in 1/64 cells (the original does not wrap: we do)
       const [x0, y0, x1, y1] = this.footprint(t);
-      const ax = Math.abs(this.wrapD(x0 - ox)) < Math.abs(this.wrapD(x1 - ox)) ? x0 : x1;
-      const ay = Math.abs(this.wrapD(y0 - oy)) < Math.abs(this.wrapD(y1 - oy)) ? y0 : y1;
+      const n = this.w.size;
+      const [rx, ry] = aimCell(x1, y1, x1 - x0 + 1, y1 - y0 + 1, ox, oy, d => this.wrapD(d));
+      const ax = ((rx % n) + n) % n, ay = ((ry % n) + n) % n;
       const dx = Math.abs(this.wrapD(ax - ox)) * 64, dy = Math.abs(this.wrapD(ay - oy)) * 64;
       const d64 = Math.max(dx, dy) + Math.floor(Math.min(dx, dy) / 2);
       f = Math.floor((d64 * 1000) / Math.max(1, wpn.speed));
       // on screen the shot starts at the shooter's cell, or at its outpost's cell (projectiles.md 2.6)
-      this.w.effect({ kind: 'shot', tick, x: fx, y: fy, tx: ax, ty: ay, wait: a / 100, flight: f / 100, type: wpn.projectile, race: this.race(u), shooter: u.id, garrison: garrison ? garrison.id : -1 });
+      this.w.effect({ kind: 'shot', tick, x: fx, y: fy, tx: ax, ty: ay, wait: a / 100, flight: f / 100, type: wpn.projectile, race: this.race(u), shooter: u.id, garrison: garrison ? garrison.id : -1, target: t.id });
     }
     const delay = Math.floor((f + a) / 100) + 1;
     this.w.sched.create(CJ.Impact, t.id, Math.min(599, delay), [u.id, wpn.index, u.rank, this.race(u), this.type(u), this.rule(u)?.hp ?? 0]);

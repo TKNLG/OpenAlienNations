@@ -46,9 +46,13 @@ Related documents:
   - guard/patrol jobs;
   - outpost garrisons;
   - the "help" rule: when anything of a race is attacked by another race, every armed unit of
-    the victim's race within 12 cells joins in (section 7).
+    the victim's race within 12 cells joins in (section 7);
+  - the retarget after a kill (3.6), which keeps a running fight going;
+  - the computer player's defence response and army (`ai-diplomacy-trade.md` 2.2, 2.5).
 
-  (C)
+  (C, instruction level: the attack job's vtable 0x4A572C is written at exactly 12 places in
+  AN.exe, and its Gold counterpart 0x4B2780 at the same 12 in dvge.exe; section 8.4 lists them.)
+  The full rule table of automatic engagement is in 8.4.
 
 ---
 
@@ -426,6 +430,25 @@ Other things that follow:
 Animals are never found by this scan, which collects only units and buildings. A hunter's attack
 therefore always ends after the kill (section 14).
 
+**A dead target still has a position and a race** (C, instruction level `0x472219..0x47227f`;
+Gold `0x47bc89..0x47bcef` identical). The attack job holds a counted reference to its target
+(+0x2C of the object, taken at creation, released when the job lets go of it), so a unit or
+building that has died is not freed while an attack job still names it. The retarget reads the
+old target's stored cell (+0x10/+0x14) and its record's race (+0xA0) unconditionally. Death does
+not change the stored cell (`004641d0`, `00462430` never write it), so the scan is centred on the
+cell where the target died, and the race filter is the dead target's race. This is the normal
+case: almost every retarget happens because the target was just killed.
+
+Consequence for group fights: when a soldier kills its target, at its next run (at most 5 ticks
+after the impact, the strike child's poll) it switches to the best target of the dead one's race
+within sight + 3 of the body (13 cells for soldiers and hunters, 8.3: lowest tier present first,
+then the highest score), without waiting to be hit. The player-order flag is cleared, so the new
+attack is an automatic one. Only when nothing of that race is within that radius does the attack
+end and the unit stand idle (and the suspended job, if any, resumes).
+
+The same holds for an attack job that was suspended behind another one (7.4) and resumes after
+its target has died meanwhile: its first run retargets around the body, wherever that is.
+
 ---
 
 ## 4. Strike job (0x09) (C, ctor `004734f0`, run `00481450`)
@@ -460,8 +483,12 @@ One strike job lives as long as the attacker stays in range. It fires repeatedly
    - Without a projectile: send the action message (0x19,11) with the action, sound frame
      rec+0x04 and loop parameter 0 (play once, I). Flight f = 0.
    - With a projectile:
-     - aim point = the corner cell of the target footprint nearest to the attacker
-       (`00461e30`). For a unit this is its own cell;
+     - aim point = the first of four candidate cells with the smallest distance from the
+       attacker's own cell (`00461e30`): (X, Y), (X, Y + 1 − size_x),
+       (X + 1 − size_y, Y + 1 − size_x), (X + 1 − size_y, Y + size_y − size_x), distance
+       max + floor(min/2) of the wrapped cell deltas, strictly-smaller replaces. The sizes are
+       used transposed (a quirk; exact corners only for square footprints). Full rule and
+       examples: `rendering/projectiles.md` 1.1. For a unit this is its own cell;
      - with dx, dy = (attacker cell - aim cell) × 64, not wrapped (see 16);
      - d64 = max(|dx|,|dy|) + min(|dx|,|dy|)/2;
      - **f = d64 × 1000 / speed**;
@@ -750,6 +777,25 @@ suspended behind it) unless one of these holds:
 Hunters on an automatic harvest and police on an arrest are not "attacking" at top level, so
 they do switch (I, from the rule).
 
+Instruction-level reading (`0x464d22..0x464e0b`): the tier test is `jle` on (current target's
+tier, A's tier), so equal tiers keep the old target. The current target's tier is read from the
+object even when that target has died and the attack job has not run since (the reference of
+3.6 keeps it): such a unit keeps its dead target's tier for the comparison until its next run
+retargets.
+
+**What is a player order** (job +8 = 1), C:
+
+| set by | jobs marked |
+|---|---|
+| the right-click order (`00450bb0`, `0x45112e`) | every job it creates: attack, go-to, transport, harvest, builder, hunt, heal for a priest, arrest for a police officer, boarding |
+| the move order (`00451170`, `0x451462`) | the follow-path job 0x06 that walks each selected unit to its cell (`004644a0` cancels the old job and makes this one current) |
+| everything else (patrol button `00452790`, map orders, the dispatcher, AI routines, retaliation, retarget) | nothing; a retarget even clears the flag of a player-ordered attack (3.6) |
+
+So a unit **walking under a move order neither retaliates nor flees** when it or a friend is hit;
+the flag ends with the walk, and an idle unit standing at its goal reacts again. A guard or
+patrol job is not a player order: a patrolling soldier answers the help rule with a top-level
+attack (its guard job waits behind it, 7.4) and resumes the patrol afterwards.
+
 ### 7.3 Flee job (0x26) (C, ctor `0047d9a0`, run `0047da50`)
 
 Fields: home cell (V's cell at creation), attacker A, "returning" flag.
@@ -847,6 +893,15 @@ Each run:
 While walking, the scan repeats every step. A stationary guard, whose walks to its own cell end
 at once, scans about every 3 ticks. After a fight the unit walks back to the current waypoint.
 
+Run order in detail (C, `00480a10`): the child runs first and its return value is kept. If the
+child is not an attack (a walk, or none), the scan follows. A find drops the child, creates the
+attack child **without running it** and returns 1, so the attack's first run is one tick later.
+Without a find, a running walk's return value (its step delay D, `units-and-jobs.md` 4.1) is the
+guard's delay, so the scan comes once per step, D ticks apart, never in between. Only when there
+is no child left (the walk or attack has just finished, or none existed) does the guard create the
+walk to the current waypoint and return 3. While an attack child runs, its own delay is returned
+and there is no scan.
+
 ### 8.2 How guard jobs come into being (C)
 
 | source | effect |
@@ -898,6 +953,62 @@ after a patrol/guard order or an explicit attack order (C).
 the first one in iteration order wins ties. Once a tier-0 candidate has been seen, later tier-1
 candidates are ignored. A tier-0 candidate that comes later still overrides an earlier tier-1
 choice.
+
+Confirmed at instruction level (`00464580`): the race filter -1 accepts a candidate only when the
+pair has a relation entry with state 0 or 1 (no entry, i.e. the own race, falls through to the
+"given race" test, which -1 never passes); the tier gate is `cmp tier, max; jg skip`; the score
+uses the torus distance `00459a80` (max + min/2) between the candidate's stored cell and the
+chooser's, the chooser's raw range (+0x14 of its weapon record), the candidate's HP (+0x44)
+against the chooser's min (+0x0C), and the weapon bonus only for a candidate of category 0 that
+is armed; the per-tier best is replaced only by a strictly greater score.
+
+### 8.4 Automatic engagement: the complete rule table (C)
+
+Every way an attack, a garrison shot or a fight reaction starts without a click. The attack job
+(vtable 0x4A572C AN / 0x4B2780 Gold) is constructed at exactly these 12 places in each exe:
+job factory for saved games (`00402dc0` / `004031c0`), right-click order (`00450bb0` /
+`004567a0`), retaliation (`00464ce0` / `0046b210`), AI assault (`00466020` / `0046cbd0`), AI
+skirmish (`00466e20` / `0046d9e0`), AI defence response (`0046d3a0` / `004766a0`), the attack
+job's own destructor (`004720d0`), hunter (`00476930` / `00480360`), criminal (`004784d0`),
+arrest (`0047b860`), guard (`00480a10` / `0048bce0`), heal (`00481180`). Gold adds no new one: the
+naval planner and the ship jobs never create attacks.
+
+| situation | who reacts, how | scan / radius | interval | eligible targets | diplomacy | chooser |
+|---|---|---|---|---|---|---|
+| idle unit (no job), enemy near | **nobody**: there is no idle scan in either exe | - | - | - | - | - |
+| unit on a work job (porter, builder, harvester, hunter on its round, operator) | nobody, unless the help rule reaches it | - | - | - | - | - |
+| unit walking a **move order**, or on any job of a right-click order | does not retaliate, does not flee (7.2 "player order") | - | - | - | - | - |
+| unit that has just finished a move or an attack | idle: as "idle unit" | - | - | - | - | - |
+| "hold position" / stand ground | does not exist (8.2) | - | - | - | - | - |
+| friend of the same race struck (any unit or building of race V hit by another race) | every armed non-priest unit of V's race on the map within the circle, the victim itself included, through 7.2 | dx² + dy² < 144 around the victim | at every strike (the strike's fire step) | the attacker A (or the outpost it shoots from) | none (2.1 only: any other race) | - (fixed target A, subject to the tier and player-order tests of 7.2) |
+| priest near a wounded victim | heal job (7.1) | same circle | at every strike | the victim | own race or peace | - |
+| unarmed unit, priest or criminal struck | flee (7.3), unless on a player order | - | at every strike | - | - | - |
+| target killed or lost (dead, inside a building) | the same attacker, if its attack has the retarget flag (player order, help, guard, AI) | circle of sight + 3 around the old target's last cell (the body) | at the attack's next run (≤ 5 ticks after the impact) | units and buildings of the **old target's race**, 2.1, no merchants or diplomats, all tiers | none | 8.3, all tiers |
+| 6th path search for one target (target out of reach) | the same, as above | as above | - | as above | none | 8.3 |
+| guard / patrol job (patrol button for one soldier 29..36 or warship 65/66; map orders) | the guard's attack child | circle of sight + 1 around the unit | every step while walking, about every 3 ticks when stationary, none while fighting | units and buildings with tier ≤ 1 (no ordinary buildings, no criminals), 2.1, no merchants or diplomats | state 0 or 1 only | 8.3 |
+| outpost garrison | garrison-fire jobs (9.3) | disc of radius 15 / 25 around the outpost | every 20 ticks | **anything** of a race at state 0/1 except diplomats: civilians, merchants, buildings, sites | state 0 or 1 only | none: first in scan order in garrison range |
+| computer town: intruder in its territory, or a unit attacking the town's race | defence group and free soldiers/hunters (`ai-diplomacy-trade.md` 2.2) | the town's territory, or the attacker wherever it stands | military job (every 50 ticks, alternating its two phases): a response every 100 ticks; the strike notification only records | hostile units by tier bucket, 3 defenders per intruder | state 0 or 1 | bucket by tier, list order |
+| computer army near its target town | army members (`ai-diplomacy-trade.md` 2.5) | circle of radius 40 around the target town | every 50 ticks | the target town's race only (tier-0 bucket incl. one important building, or units) | army ends if not 0/1 | buckets, 6 or 3 per target |
+| computer warship (gang of 1) | none: it wanders with job 0x28 and fights only through the help rule or retarget | - | - | - | - | - |
+
+Notes:
+
+- **Visibility plays no part** anywhere: the area scan (`0044a7c0`) takes no player and no fog
+  test, so units in the black or grey fog are found and targeted by every row above.
+- **Diplomacy**: only the guard, the outposts and the computer player's routines test the
+  relation. The help rule and the retarget never do: a unit of a nation at peace that strikes
+  (which itself causes war at the impact, 5.1) is answered at once, and a retarget picks any unit
+  of the dead target's race.
+- **Ships** follow the same rules: they are armed units of their race (help rule, retarget, patrol
+  for 65/66). Their weapons and reach are in `addon.md` 7; a melee land unit never reaches a ship
+  and gives up after its 5 searches (3.5, then 3.6).
+- **Computer players' units** use exactly the same reactions (help, retarget, flee); their
+  military and army jobs only add attack orders. A computer unit standing idle outside its
+  territory next to enemies does nothing, the same as the player's.
+- So two idle groups of hostile nations can stand next to each other indefinitely outside the
+  computer player's territory and away from outposts, until one unit strikes. After the first
+  strike the help rule pulls in every armed unit within 12 cells of each victim, and the retarget
+  keeps each fighter on the enemy race after every kill.
 
 ---
 

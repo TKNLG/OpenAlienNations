@@ -752,7 +752,10 @@ that frame either.
 3. the object list of 12.2/12.3. Each building is followed at once by its garrison units
    (section 13). Effects are inserted in base order at their cell, after the object anchored on
    that cell, and are **never** deferred (an impact on a cell behind a building's front face is
-   drawn before the building);
+   drawn before the building). An effect's cell is fixed when it is created: for a projectile
+   and its impact explosion it is the **aim cell** (`projectiles.md` 1.1, 5.1), also while the
+   projectile is still in the air. Aimed at a building's front corner (the usual case), both are
+   drawn over the building;
 4. the placement ghost (section 6).
 
 The click and box tests walk the same list from the end (section 8).

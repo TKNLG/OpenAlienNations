@@ -908,8 +908,9 @@ class Game implements HudHost {
       const gx = cam.nearest(d.x, cam.x), gy = cam.nearest(d.y, cam.y);
       const h = d.h ?? t.height[((Math.floor(d.y) & mask) << t.sizeBits) | (Math.floor(d.x) & mask)];
       const [px, py] = Camera.project(gx - cam.x, gy - cam.y, h);
-      // effects: at their cell in base order, after the object anchored there, never deferred (12.4)
-      const [ax, ay] = anchor(Math.floor(d.x), Math.floor(d.y));
+      // effects: at their cell in base order, after the object anchored there, never deferred
+      // (12.4); a projectile's cell is its aim cell for the whole flight (projectiles.md 5.1)
+      const [ax, ay] = anchor(d.cx, d.cy);
       items.push({ kind: DrawKind.Effect, x: ax, y: ay });
       groups.push([{ page: ar.page, r: ar.r, x: px + d.ox - d.anchorX + d.entry.left, y: py + d.oy - d.anchorY + d.entry.top, depth: 0 }]);
     }

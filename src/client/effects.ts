@@ -13,6 +13,9 @@
 // hit sound) plays and its impact effect starts. Effects play their slot once at the layer speed
 // (game time) and vanish when the last frame is reached. A death effect's record sound plays
 // when it is created (combat.md 6); no effect sounds at its end.
+// Draw order: a projectile is ordered at its aim cell for the whole flight, an impact at its
+// cell (projectiles.md 5.1, objects.md 12.4); the aim cell itself comes from the simulation
+// (projectiles.md 1.1, src/engine/aim.ts).
 
 import type { World, Entity } from '../engine/world.ts';
 import { SUB, TICK_MS, Kind } from '../engine/world.ts';
@@ -33,6 +36,8 @@ interface Shot {
   release: number; f: number;
   /** start and aim cells (cell units) */
   sx: number; sy: number; ax: number; ay: number;
+  /** height at arrival: the target's own height (its cell's terrain), else the aim cell's (projectiles.md 3) */
+  ah: number | null;
   type: number;
   /** launch pixel offset L (zoom-1 px, subtracted from the drawn point), set at release */
   lx: number; ly: number;
@@ -48,6 +53,11 @@ export interface FxDraw {
   x: number; y: number; h?: number;
   /** extra screen offset in zoom-1 px (launch point) */
   ox: number; oy: number;
+  /**
+   * the cell the sprite is ordered at (objects.md 12.4, projectiles.md 5.1): a projectile's aim
+   * cell for its whole flight, an effect's own cell
+   */
+  cx: number; cy: number;
 }
 
 export class Effects {
@@ -91,7 +101,10 @@ export class Effects {
       const [lx, ly] = this.launchOffset(w, e, dir);
       // released when the shooter's strike row shows its release frame (2), the flight lasts f ms of wall clock
       const release = e.tick + this.releaseTicks(w, e);
-      this.shots.push({ release, f: Math.max(0, Math.round((e.flight ?? 0) * 100)), sx: e.x, sy: e.y, ax: tx, ay: ty, type: e.type, lx, ly, dir, step: null });
+      // the flight ends at the target's own height (projectiles.md 1.1, 3): its anchor cell's height
+      const tg = e.target !== undefined ? w.get(e.target) : undefined;
+      const ah = tg ? this.height(Math.floor(tg.x / SUB), Math.floor(tg.y / SUB)) : null;
+      this.shots.push({ release, f: Math.max(0, Math.round((e.flight ?? 0) * 100)), sx: e.x, sy: e.y, ax: tx, ay: ty, ah, type: e.type, lx, ly, dir, step: null });
     } else if (e.kind === 'sound') {
       if (e.type !== undefined && e.type > 0) this.onSound(e.type, e.x, e.y);
     } else if (e.kind === 'collapse') {
@@ -195,9 +208,10 @@ export class Effects {
       if (!entry) continue;
       // pixel offset L - L t/f and height h_S + (h_A - h_S) t/f (3)
       const rem = 1 - st.progress(now);
-      const h0 = this.height(s.sx, s.sy), h1 = this.height(s.ax, s.ay);
+      const h0 = this.height(s.sx, s.sy), h1 = s.ah ?? this.height(s.ax, s.ay);
+      // ordered at the aim cell for the whole flight (5.1)
       out.push({ entry, frame: st.frame % entry.frames, anchorX: d.anchorX, anchorY: d.anchorY,
-        x: gx, y: gy, h: h1 + (h0 - h1) * rem, ox: -Math.trunc(s.lx * rem), oy: -Math.trunc(s.ly * rem) });
+        x: gx, y: gy, h: h1 + (h0 - h1) * rem, ox: -Math.trunc(s.lx * rem), oy: -Math.trunc(s.ly * rem), cx: s.ax, cy: s.ay });
     }
     this.shots = keep;
     const anims: Anim[] = [];
@@ -216,7 +230,7 @@ export class Effects {
         continue;
       }
       anims.push(a);
-      out.push({ entry, frame: af.frame, anchorX: d.anchorX, anchorY: d.anchorY, x: a.x + 0.5, y: a.y + 0.5, ox: 0, oy: 0 });
+      out.push({ entry, frame: af.frame, anchorX: d.anchorX, anchorY: d.anchorY, x: a.x + 0.5, y: a.y + 0.5, ox: 0, oy: 0, cx: a.x, cy: a.y });
     }
     this.anims = anims;
     return out;

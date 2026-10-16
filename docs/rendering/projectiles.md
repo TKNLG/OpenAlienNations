@@ -46,7 +46,7 @@ of the plain action message (0x19, 11). It carries:
 | flight f | d64 × 1000 / speed, with d64 = max + min/2 of the cell delta × 64 between the shooter's cell (or its outpost's cell) and the aim cell. Not wrapped in the simulation |
 | action | 1 `ST` if the shooter's sprite set has a strike row, else 2 `WO` (all shooters have `ST`) |
 | release frame | the shooter record's sound frame +0x04 (−1 = the last frame) |
-| aim cell | x, y, z of the target footprint corner nearest the shooter (`00461e30`); a unit's own cell |
+| aim cell | x, y of one of four candidate corner cells of the target (section 1.1, `00461e30`), z = the **target's** height (object +0x18); a unit's own cell |
 
 On the shooter's display object the message:
 
@@ -59,6 +59,62 @@ On the shooter's display object the message:
 A new action message for the same unit replaces this action **without** firing the event, so a
 projectile can be lost on screen if something restarts the shooter's animation before the
 release frame (display only; the simulation's impact still happens).
+
+### 1.1 The aim cell (C, `00461e30`, Gold `00468190` identical; checked at instruction level)
+
+There is **no per-building target pixel**: no record field (odb, od) holds a hit or aim offset;
+the only per-type points (+0x54..) are launch and garrison points (odb.md). The projectile
+always flies to the ground point of one **cell**, the aim cell, computed when the shot is fired.
+
+Let (X, Y) be the target's position (the max corner of its footprint, odb.md 2.2) and
+size_x = record +0x10, size_y = record +0x0C (the footprint is X − size_x + 1 .. X by
+Y − size_y + 1 .. Y). The function tests **four candidate cells in this order**:
+
+| # | candidate | for a square building | for size_x ≠ size_y |
+|---|---|---|---|
+| 1 | (X, Y) | front corner (the anchor) | front corner |
+| 2 | (X, Y + 1 − size_x) | left corner | **not** the left corner: the y offset uses size_x |
+| 3 | (X + 1 − size_y, Y + 1 − size_x) | back corner | transposed back corner |
+| 4 | (X + 1 − size_y, Y + size_y − size_x) | right corner | a mixed cell (x from size_y, y from both) |
+
+**Quirk:** candidates 2..4 use the two sizes the wrong way round (the x offset is taken from
++0x0C, the y offset from +0x10), and candidate 4 is built by adding size_y − 1 back to
+candidate 3's y. For square footprints (2×2, 3×3, 4×4, 1×1) this gives the four true corners. For
+the many 3×2 and 2×3 buildings two or three candidates lie on other cells, some **outside** the
+footprint (e.g. a 3×2 building: (X, Y − 2) and (X − 1, Y − 2) are one cell beyond its back-left
+face, (X − 1, Y − 1) is an inner cell; a 2×3 building: (X, Y − 1) is on its +x face, (X − 2, Y − 1)
+and (X − 2, Y + 1) lie beyond its right side).
+
+**Distance:** per candidate, dx and dy = candidate minus the shooter's own cell (object
++0x10/+0x14; for a garrison unit its stored position, not the outpost), each wrapped the short
+way round the torus, then d = max(|dx|, |dy|) + **floor(min(|dx|, |dy|) / 2)**, in whole cells
+(`0045aea0`), so the half step is truncated. A candidate replaces the current best only if its d
+is **strictly smaller**. Ties therefore keep the earlier candidate, i.e. candidate 1 (the front
+corner) wins every tie.
+
+The returned cell is not wrapped (candidates of a building next to the map edge can be −1 or
+size); z is the target object's own height for every candidate. Units, ships, animals and every
+other 1×1 target give their own cell.
+
+Examples (X, Y = 0, 0; shooter cell relative to the target's max corner):
+
+| shooter | 2×2 | 3×2 (size_x 3, size_y 2) | 2×3 (size_x 2, size_y 3) |
+|---|---|---|---|
+| (+4, 0) | (0, 0) | (0, 0) | (0, 0) |
+| (+4, −1) | (0, 0) (tie 4 = 4) | (0, 0) | (0, 0) |
+| (+3, −3) | (0, 0) | (0, −2) | (0, 0) |
+| (−1, +4) | (0, 0) | (0, 0) | (−2, +1) |
+| (−3, +3) | (0, 0) | (0, 0) | (−2, +1) |
+| (−5, 0) | (−1, −1) | (−1, −1) | (−2, −1) |
+| (0, −5) | (0, −1) | (0, −2) | (0, −1) |
+
+Consequence: a shooter anywhere in front of a building, and in many positions beside it, aims
+at the **front corner**, and the impact is then drawn over the building (section 5.1). A naive
+"nearest true corner per axis" picks the left or right corner much more often (e.g. (0, −1) for
+a 2×2 building shot from (+4, −1)), which is drawn behind the building.
+
+The same aim cell gives the simulation's flight f (combat.md 4.1), so it also sets the impact
+tick.
 
 ---
 
@@ -121,7 +177,7 @@ The projectile has three things that change with t = min(now − release, f) in 
 |---|---|---|---|
 | ground offset from A, in 1/64 cell | S − A (wrapped the short way) | 0 | (S − A) − (S − A)·t/f, integer division |
 | pixel offset | L | 0 | L − L·t/f |
-| height | terrain height of S | terrain height of A | linear: h_S + (h_A − h_S)·t/f |
+| height | height of S (the shooter's, or its outpost's, object height) | the aim height: the **target's** object height (1.1) | linear: h_S + (h_A − h_S)·t/f |
 
 The position is updated at most once per 10 ms. The drawn point is the aim cell's projected
 point minus the remaining ground offset, then lifted by the remaining pixel offset.
@@ -220,6 +276,29 @@ screen point; the effect then runs its frames silently and is removed at its las
 (`combat.md` 6, "When the death sound plays"). Impact effects (17, 18) are not given this
 start sound (and have no sound anyway).
 
+### 5.1 Draw depth of projectiles and impacts (C, `00436970`, `00449550`, frame builder `00445e40`; Gold identical)
+
+- A projectile and an impact effect are entered in the per-cell effect table (objects.md 12.1)
+  under their **aim cell** (display +0x210/+0x214) when they are created, and stay there: the
+  projectile is **not** re-filed while it flies. Every frame they are put into the drawn list at
+  the aim cell, in base order, right after the object anchored on that cell (objects.md 12.4),
+  never deferred. Their drawn position (flight, height, pixel offset) does not influence the
+  order.
+- So the whole flight and the explosion are ordered as if they stood on the aim cell:
+  - aim cell = the target building's **front corner** (candidate 1 of 1.1; the usual case, see
+    the examples): projectile and explosion are drawn **after the building**, i.e. on top of it,
+    and after its garrison;
+  - aim cell = another footprint cell (left, right or back corner, or an inner cell of the
+    transposed candidates): the building's anchor comes later in base order, so the building is
+    drawn **over** the projectile and the explosion where their sprites overlap;
+  - aim cell outside the footprint (transposed candidates of 3×2/2×3 buildings): ordered with
+    that ground cell like any object there;
+  - unit targets: the aim cell is the unit's cell, so the shot and impact are drawn right after
+    that unit.
+- Several effects on one cell keep their creation order (I, the cell's list is appended to).
+
+There is no screen-y sort and no depth bias for effects.
+
 ---
 
 ## 6. Timeline of one shot (Amazon hunter, 5 cells straight, normal speed)
@@ -268,8 +347,19 @@ the bow at the twang.
     the effect reached its last frame, about one animation length (≈ 1–1.5 s) after the poof
     started. It must play when the effect is created (section 5, last paragraph).
 10. Correct already: projectile type per weapon (no remap), launch time = strike + rel × 10/7
-    ticks, flight f = d64 × 1000 / speed, aim at the nearest footprint corner, impact effect type
-    from the record, bomb and "Die" death effects.
+    ticks, flight f = d64 × 1000 / speed, impact effect type from the record, bomb and "Die"
+    death effects.
+12. **Aim cell** (fixed October 2026): the simulation picked the nearest *true* footprint corner
+    per axis. The original tests the four candidates of 1.1 (transposed sizes, truncated
+    min/2 metric, ties to the front corner). Ours therefore aimed at the left or right corner in
+    many cases where the original hits the front corner (2×2 shot from (+4, −1)), and at quite
+    different cells on 3×2/2×3 buildings. Since the impact is ordered at the aim cell (5.1), our
+    explosion was then drawn behind the building where the original draws it on top. The aim
+    cell also changes f and so the impact tick.
+13. **Projectile depth** (fixed October 2026): ours ordered a flying projectile at the cell under
+    its current ground point; the original orders it at its aim cell for the whole flight (5.1).
+14. **Arrival height** (fixed October 2026): the original flies to the target's own height, ours
+    to the terrain height of the aim cell (differs only off a levelled footprint).
 
 ---
 
