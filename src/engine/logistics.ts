@@ -9,7 +9,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity, BuildOrder } from './world.ts';
 import { Kind, Action, SUB } from './world.ts';
-import { T, Good, ADVISOR_REPEAT_MS, type Town } from './economy.ts';
+import { T, Good, ADVISOR_REPEAT_MS, MAX_TOWNS, type Town } from './economy.ts';
 import { BuildingFlag, type ObjectRule } from '../formats/odb.ts';
 import { MAX_PLANS, WalkResult } from './motion.ts';
 import { needsTerritory } from './territory.ts';
@@ -51,7 +51,6 @@ const M = { BuildingDone: 1, NoBuilder: 9, OperatorArrived: 10, Stopped: 11, Tra
 const MAX_QUEUE = 5;
 /** a walk ended by the arrival tolerance may enter a building from this far: the tolerance's own limit (4.1, 4.4) */
 const NEAR_DOOR = MAX_PLANS;
-const MAX_TOWNS = 10;
 
 const GOODS = 9;
 const NONE = -1;
@@ -2363,8 +2362,6 @@ export class Logistics {
   found(u: Entity, x: number, y: number): boolean {
     const race = u.oid >>> 16;
     if (u.inside >= 0 || (u.oid & 0xffff) !== T.Founder || !u.alive) return false;
-    const p = this.w.economy.players[race];
-    if (p && p.towns.filter(id => this.w.economy.towns[id]?.alive).length >= MAX_TOWNS) return false;
     if (!this.canFound(race, x, y, false)) return false;
     const r = this.w.rules.get(((race << 16) | T.TownHall) >>> 0)!;
     this.cancelJob(u);

@@ -10,7 +10,7 @@ import type { ObjectRule } from '../formats/odb.ts';
 import type { Goal } from '../formats/mission.ts';
 import { MsRand } from '../world/rand.ts';
 import { Scheduler, type SchedulerSnapshot } from './scheduler.ts';
-import { Economy, T, type EconomySnapshot, type RaceSetupLite, type Town } from './economy.ts';
+import { Economy, T, MAX_TOWNS, type EconomySnapshot, type RaceSetupLite, type Town } from './economy.ts';
 import { Logistics, isLogisticsJob, HV, HG } from './logistics.ts';
 import { Combat, isCombatJob, type CombatEffect } from './combat.ts';
 import { Trade, isTradeJob, type TradeCommand, type TradeSnapshot } from './trade.ts';
@@ -226,8 +226,9 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  (combat.md 3.3.1); 10: the towns' criminal lists (combat.md 12.3); 12: the towns' crop
  *  conversion ring (economy.md 7); 13: the player's delivery order is an ordinary transport for
  *  its site, lost site needs re-filed once (units-and-jobs.md 5.8 item 10); 14: the naval
- *  planner's ship counters bound boarding (addon.md 8.4); older saves are migrated on restore */
-export const SNAPSHOT_VERSION = 14;
+ *  planner's ship counters bound boarding (addon.md 8.4); 15: a destroyed town leaves its nation's
+ *  town list once nothing refers to it (combat.md 10.4 "Lifetime"); older saves are migrated on restore */
+export const SNAPSHOT_VERSION = 15;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -1035,6 +1036,8 @@ export class World {
     for (const e of this.entities) {
       if (e.path && e.moveAt <= t && (e.kind === Kind.Nature || (e.kind === Kind.Unit && e.inside < 0))) this.motion.run(e);
     }
+    // destroyed towns whose last reference went this tick leave their nation's list (combat.md 10.4)
+    this.economy.releaseTowns();
   }
 
   /** the town a command may change: it must belong to the commanding player */
@@ -1105,6 +1108,10 @@ export class World {
     }
     if (cmd.type === 'found') {
       const u = this.byId.get(cmd.unit);
+      // the UI's 10-town limit (units-and-jobs.md 11.1): `GRUENDEN` is disabled at 10 entries of the
+      // nation's town list, destroyed towns not yet freed included; the simulation has no limit
+      const p = this.economy.players[cmd.player];
+      if (p && p.towns.length >= MAX_TOWNS) return;
       if (u && u.kind === Kind.Unit && u.owner === cmd.player) this.logistics.found(u, Math.trunc(cmd.x), Math.trunc(cmd.y));
       return;
     }
@@ -1220,7 +1227,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1270,6 +1277,9 @@ export class World {
     w.trade.restore(snap.trade); w.diplomacy.restore(snap.diplomacy); w.ai.restore(snap.ai); w.naval.restore(snap.naval);
     // before version 14 the planner's ship counter limited nothing: every ship starts at 100 (addon.md 8.4)
     if (snap.v < 14) w.naval.migrateCounters();
+    // before version 15 destroyed towns stayed in their nation's town list for good (combat.md 10.4
+    // "Lifetime"): those nothing refers to any more leave it now
+    if (snap.v < 15) w.economy.releaseTowns();
     if (snap.lists) w.lists = snap.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (snap.territory) w.territory.restore(snap.territory);
     else w.migrateTerritory();

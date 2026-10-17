@@ -3565,7 +3565,11 @@ founder. The data byte that drives it is:
 | the founder is inside a building (and its job is missing or blocked) | bits 1+2 | disabled, tooltip stays T6 "Stadt gründen" |
 
 So the starting founder of a town-less human player can found at once. The limit of 10 exists
-only here and in the training page (T202). The simulation itself never checks it (11.2).
+only here and in the training page (T202). The simulation itself never checks it (11.2). The
+count is the town list (+0x238, read at `00455dd9`, compared with 10 at `00455de9`), which also holds destroyed
+towns until their objects are freed (`combat.md` 10.4 "Lifetime"), so failed foundings count
+only for a short while. *Our build* also refuses a player's found-town command at 10 list
+entries (command validation, `World`); the AI's founding (11.7) is not limited there.
 
 **Placement mode** (`00441c40`). Clicking the button enters the normal building-placement mode
 (see `docs/ui/side-panel.md` 5.3) for the race's town-hall record (type 40). The preview mask is
@@ -3752,8 +3756,9 @@ current operator (+0xA8) and no operator job (0x22) is created.
 
    Column 2 of the race block ("second town hall") is used only by town halls loaded from a map
    (`mdb.md`), never by a town founded in play. The count includes every town still in the
-   list, including towns whose hall is still a site *(I: a destroyed town leaves the list only
-   when its object is freed, `0045d570`)*.
+   list, including towns whose hall is still a site and destroyed towns not yet freed (C: a
+   destroyed town leaves the list only when its object is freed, `0045d570`; `combat.md` 10.4
+   "Lifetime").
 5. A **house job** (type 0x0A) starts with first run after 599 ticks, because the hall has
    resident places. It finds the hall full and ends.
 6. The hall's need entry (record +0x128) is registered (`00459e80`).
@@ -3837,6 +3842,10 @@ Consequences:
   with an orphaned site, rare)*.
 - **An empty town** (its site gone) is destroyed as above. Its object is freed when the last
   reference goes. Nothing re-founds it.
+- **Repeated attempts.** Every found-town command creates a new town with a new id, also on the
+  very spot of an earlier failed one; a failed one is never reused. Destroyed towns leave the
+  nation's town list once freed (`combat.md` 10.4 "Lifetime"), so any number of failed
+  foundings leaves no lasting trace in the 10-town limit or the start-goods count.
 
 ### 11.7 Computer players
 

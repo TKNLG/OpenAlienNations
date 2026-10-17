@@ -122,8 +122,8 @@ function lakeLevel(height: Uint16Array, cls: Uint8Array, x: number, y: number, R
 }
 
 /**
- * Per-vertex shading 128..239 (162 = flat), from the height slope against a fixed sun.
- * Rendering only; not bit-exact with the original (see spec step 5).
+ * Per-vertex shading 128..239 (162 = flat), from the slopes to the four direct neighbours
+ * against a fixed sun (docs/formats/terrain-gen.md step 5). Rendering only.
  */
 export function computeLight(t: Terrain): Uint8Array {
   const out = new Uint8Array(t.size * t.size);
@@ -131,17 +131,34 @@ export function computeLight(t: Terrain): Uint8Array {
   return out;
 }
 
+const f32 = Math.fround;
+/** 1 / f32(sqrt 2) in double, and that value stored to f32 (both are used, step 5 item 4) */
+const SUN_D = 1 / f32(Math.SQRT2);
+const SUN_F = f32(SUN_D);
+
+/**
+ * Light byte of one vertex (terrain-gen.md step 5), evaluated in the documented order with the
+ * documented float32 roundings. d1 = height(x-1, y) - height(x+1, y),
+ * d2 = height(x, y+1) - height(x, y-1).
+ */
+export function lightValue(d1: number, d2: number): number {
+  const s1 = Math.sqrt(d1 * d1 + 1024);
+  const p = f32(-32 / s1);
+  const u = d1 / s1;
+  const s2 = Math.sqrt(d2 * d2 + 1024);
+  const q = f32(-32 / s2);
+  const ny = f32(-(q * u));
+  const nz = q * p;
+  const v = ((nz * SUN_D + 0) + SUN_F * ny) * 320 - 64;
+  const i = Math.trunc(v);
+  return i < 128 ? 128 : i >= 240 ? 239 : i;
+}
+
 /** recompute the light of cells x0..x1, y0..y1 (wrapped) after height changes */
 export function relight(t: Terrain, out: Uint8Array, x0: number, y0: number, x1: number, y1: number): void {
   const mask = t.size - 1, bits = t.sizeBits;
   const h = (x: number, y: number) => t.height[((y & mask) << bits) | (x & mask)];
   for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++) {
-      const e = h(x + 1, y) - h(x - 1, y);
-      const f = h(x, y + 1) - h(x, y - 1);
-      const len = Math.sqrt(e * e + f * f + 1024);
-      const dot = (-e / len + 32 / len) * Math.SQRT1_2; // light from -x, above
-      const v = Math.trunc(dot * 320 - 64);
-      out[((y & mask) << bits) | (x & mask)] = v < 128 ? 128 : v > 239 ? 239 : v;
-    }
+    for (let x = x0; x <= x1; x++)
+      out[((y & mask) << bits) | (x & mask)] = lightValue(h(x - 1, y) - h(x + 1, y), h(x, y + 1) - h(x, y - 1));
 }

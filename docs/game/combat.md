@@ -1482,8 +1482,10 @@ already on their way out keep their leave job.
 
 ### 10.4 Town destruction (C, town vtable slot 0 = `00459400`)
 
-1. The town is removed from its nation. mentor#21 ("a town was destroyed") goes to the owner.
-   Message (0x4C,7). Town alive = 0.
+1. Its name index is removed from the nation's set of used names (+0x248, `0045c690`; its size
+   +0x254 is the number of living towns). mentor#21 ("a town was destroyed") goes to the owner.
+   Message (0x4C,7). Town alive (+0x34) = 0. The town stays in the nation's **town list**
+   (+0x234, count +0x238) until its object is freed (see "Lifetime" below).
 2. Find the **nearest other town** of the same nation that still has a town hall.
 3. Every unit of the town has its job cancelled, then:
    - if another town exists: it moves to that town and is put on its **homeless list**. The
@@ -1495,8 +1497,43 @@ already on their way out keep their leave job.
    - every other nation's advisor gets mentor#(23 + race) ("the X were defeated");
    - its jobs are cancelled and the nation is marked dead;
    - a human nation gets its game-over handling (`0044fc20`, U).
-6. If the destroyed town was the nation's current town, the first remaining town takes over
-   (message 0x41).
+6. If the destroyed town was the nation's current town, the first entry of the town list takes
+   over (message 0x41). *(Quirk, C: the list still holds destroyed towns that are not freed yet,
+   the destroyed town itself included, so this can again be a dead town.)*
+7. The town's own jobs (town +0x04, +0x08, +0x0C, +0x10, +0x14: consumption, status, idle stroll
+   and the others) get the cancel flag (+0x18); the scheduler deletes each at its next slot. Then
+   the town drops its own reference (below).
+
+**Lifetime of a town object** (C, `00459400` tail, `004823b0`, `00482400`, `00459210`,
+`0045d570`). The town object (`0045d370`) is reference counted (town +0x38):
+
+- the town holds one reference on itself from creation; it drops it at the end of its
+  destruction (step 7);
+- every job it owns holds one: the job base constructor (`004823b0`) adds one to its owner,
+  the job destructor (`00482400`) drops it. The town jobs are deleted at their next run after the
+  cancel flag, so up to 299 ticks later (the consumption job's period); a computer town's three
+  planner jobs are cancelled when its town hall is destroyed (`0045ff30`,
+  `ai-diplomacy-trade.md` 0);
+- every game object whose town it is (+0x50) holds one: units and buildings drop it when they
+  are deleted (`00462a06`) or change town (`0046441b`, resettling and founding,
+  `units-and-jobs.md` 11.2 step 4).
+
+When the count reaches 0 the destructor (`00459210`) removes the town from its nation's town
+list (`0045d570`: the entry is unlinked and +0x238 drops by 1) and frees it. So a destroyed town
+leaves the list a little later, once its jobs have run out, its units have moved to another town
+or died and its buildings are gone. Until then it still counts wherever the list count is read:
+the 10-town limit of `GRUENDEN` (`00455d50` compares +0x238 with 10, `units-and-jobs.md` 11.1),
+the "first town" start goods rule (11.4) and the list order. Town ids are a global serial and are
+never reused; there is no limit on how many towns are created over a game, only the 10 entries
+in a nation's list (UI only).
+
+*Our build* (`src/engine/economy.ts releaseTowns`): destroyed towns keep their record in the
+town table (the id is its index), and leave the nation's list (`Player.towns`) at the end of the
+tick in which the last reference went: no own job of the town (dispatcher, consumption, status,
+idle stroll, research, the AI town jobs) is left in the scheduler and no unit or building has the
+town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
+destroyed town in the list (the 10-town limit of the training page then blocked founders for
+good after ten failed foundings); they are cleaned up on load.
 
 ---
 

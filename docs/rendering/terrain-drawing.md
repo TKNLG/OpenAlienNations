@@ -190,7 +190,24 @@ four quads around the vertex for a worn path.
 
 ## Brightness
 
-Each vertex's light value (128..239) modulates the tile colour like a grey vertex colour,
-interpolated across the quad. The light is computed once at generation and recomputed locally
-after a foundation changes heights (same formula, `00447b90`). In the original, areas a player hasn't explored are drawn black,
+Each vertex's light value (128..239; formula and worked values in terrain-gen.md step 5)
+modulates the tile colour like a grey vertex colour, interpolated across the quad. The light is
+computed once at generation and recomputed locally after a foundation changes heights (same
+function, `00447b90`); the frame builder just copies the stored byte, nothing is cached or
+recomputed per frame.
+
+Scale of the modulation (C+I):
+
+- Direct3D path (dvge.exe `004412a0`): the vertex diffuse colour is the grey (L, L, L) with L the
+  light byte (halved per channel for fogged vertices, see below), so with the default
+  texture-modulate stage the pixel is **tile colour × L / 255**: flat ground (162) at about 0.635
+  of the tile colour, the brightest slope (239) at 0.937, the darkest (128) at 0.502. The
+  stage-0 blend mode itself was not traced; this assumes Direct3D's default (modulate).
+- Software path (AN.exe `0043dfb0`): light is interpolated in 16.16 fixed point, and per pixel
+  its top six bits (L >> 2) multiply each 4-bit channel of the 12-bit (4:4:4) texel; the
+  product is shifted into the screen's pixel format. Net effect ≈ tile colour × L / 256, the
+  same as the Direct3D path within rounding.
+
+So the light byte is an absolute brightness (255 would be the unshaded tile), not a factor
+relative to flat ground. In the original, areas a player hasn't explored are drawn black,
 and explored areas outside current sight at half brightness (fog of war).

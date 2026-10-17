@@ -28,6 +28,12 @@ export const ROUND = 299;
 export const JobKind = {
   Finance: 0x2c, Goals: 0x2d, Consumption: 1, TownStatus: 2, Research: 0x2e, House: 10,
 } as const;
+/** a nation's town list holds at most 10 towns: `GRUENDEN` and the founder's training slot are
+ *  disabled at 10 entries (units-and-jobs.md 11.1); the simulation itself has no limit */
+export const MAX_TOWNS = 10;
+/** job kinds whose owner is a town (each holds a reference on it, combat.md 10.4 "Lifetime"):
+ *  dispatcher 0x00, consumption, status, idle stroll 0x03, research, the AI town jobs 0x32..0x34 */
+const TOWN_JOBS = new Set<number>([0x00, JobKind.Consumption, JobKind.TownStatus, 0x03, JobKind.Research, 0x32, 0x33, 0x34]);
 
 /** mentor (advisor) line ids used here (Mentor.tdb) */
 export const Mentor = {
@@ -279,6 +285,27 @@ export class Economy {
     const p = this.players[race];
     if (!p) return undefined;
     return this.towns[p.towns[Math.max(1, n) - 1]];
+  }
+
+  /**
+   * A destroyed town leaves its nation's town list once nothing refers to it any more
+   * (combat.md 10.4 "Lifetime"): no job of its own is left in the scheduler and no unit or
+   * building has it as its town. Its record stays in `towns` (the id is the index and is never
+   * reused). Run at the end of every tick and when an old save is loaded.
+   */
+  releaseTowns(): void {
+    for (const p of this.players) {
+      if (!p || p.towns.every(id => this.towns[id]?.alive)) continue;
+      p.towns = p.towns.filter(id => {
+        const t = this.towns[id];
+        return !!t && (t.alive || this.referenced(t));
+      });
+    }
+  }
+
+  private referenced(t: Town): boolean {
+    for (const j of this.host.sched.jobs()) if (j.owner === t.id && TOWN_JOBS.has(j.kind)) return true;
+    return this.host.entities.some(e => e.town === t.id);
   }
 
   // ---------------------------------------------------------------- buildings
@@ -898,6 +925,7 @@ export class Economy {
       if (!p) { mix(-1); continue; }
       mix(p.money); mix(p.outcome);
       for (const v of p.progress) mix(Math.round(v * 4096));
+      mix(p.towns.length); for (const id of p.towns) mix(id);
     }
     for (const t of this.towns) {
       mix(t.population); mix(t.happiness); mix(t.capacity); mix(t.overheads); mix(t.income);

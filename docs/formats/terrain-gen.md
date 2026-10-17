@@ -35,7 +35,7 @@ edges (coordinates are taken modulo n, i.e. `& mask`). Each cell has:
 
 - `height`: uint16
 - `cls`: terrain class (below)
-- `light`: 0..239 shading byte (rendering only)
+- `light`: 128..239 shading byte (rendering only, step 5)
 
 How the original stores a cell (C, 8 bytes, see also `fog-of-war.md` 1.1): object index (u16),
 flags byte, viewer counter, height (u16), light, tile. The class has **no field of its own**.
@@ -109,12 +109,84 @@ For every cell, rows `y` outer and columns `x` inner: `t = rand() & 0xFF`, and t
 lookup from the `.os` tile weights `w_i`, total `W`. Tile `i` fills entries from
 `floor(256*sum(w_0..w_{i-1})/W)` up to `floor(256*sum(w_0..w_i)/W)`.
 
-## Step 5: lighting (rendering only)
+## Step 5: lighting (rendering only) (C, `00447b90`; Gold `0044bc70`, identical)
 
-Each cell's `light` comes from a surface normal built from the neighbouring heights, dotted with
-a fixed sun direction, scaled and clamped to `[128, 239]`. The original computes it in floating
-point. Because it only affects shading, a renderer may compute it any way that looks the same.
-It does not need to be bit-exact.
+After the tile choice (same routine, `004492d0`) every cell gets its `light` byte from its four
+direct neighbours. The light depends on heights only, so the visiting order does not matter (the
+original happens to visit every column twice). Neighbours wrap like every other grid access.
+
+**Inputs** (heights are the raw uint16 values, differences are signed integers):
+
+- `D1 = height(x-1, y) - height(x+1, y)` (left minus right along the x axis)
+- `D2 = height(x, y+1) - height(x, y-1)` (along the y axis)
+
+The horizontal distance between the two neighbours (two cells) counts as **32 height units**.
+The original builds two tangents, (2 cells, 0, -D1) and (0, 2 cells, D2) scaled to length 1,
+takes their cross product as the surface normal and dots it with a sun direction of
+(0, 1/sqrt 2, 1/sqrt 2) in its normal space. Written out:
+
+    light = trunc( (1024 + 32 * D1) / ( sqrt(D1^2 + 1024) * sqrt(D2^2 + 1024) ) * sqrt(1/2) * 320 - 64 )
+
+then clamped: below **128** becomes 128, **240 and above** becomes 239. (The lower bound is the
+global `0x4AFAA0`, value 128, never written; Gold `0x4BCB3C`, also 128.)
+
+Consequences: only the x slope decides bright or dark. Ground that falls towards +x (left
+neighbour higher) is lit, ground that rises towards +x is dark. Any y slope only divides by
+`sqrt(D2^2 + 1024)` and so always darkens, symmetric in its sign. Flat ground is **162**.
+
+**Exact evaluation** (x87, 53-bit precision: the game uses only DirectDraw, so the C runtime's
+default precision stays in force). Steps in the original's order, "f32" meaning a value stored
+to a 32-bit float and read back, everything else in double precision:
+
+1. `s1 = sqrt(D1^2 + 1024)`; `p = f32(-32 / s1)`; `u = D1 / s1`.
+2. `s2 = sqrt(D2^2 + 1024)`; `q = f32(-32 / s2)`.
+3. Normal components used: `Y = f32(-(q * u))` (= 32 D1 / (s1 s2)) and `Z = q * p`
+   (= 1024 / (s1 s2); a product of two f32 values, exact in double). The third component
+   (built from `D2 / s2`) is multiplied by a sun component of 0 and drops out.
+4. `r = f32(sqrt 2)` (1.41421353816986…); `kd = 1 / r` in double, `kf = f32(kd)`.
+5. `v = (Z * kd + 0) + kf * Y`, then `v = v * 320 - 64`.
+6. Convert with truncation towards zero (the runtime's float-to-int sets round-to-zero, 64-bit
+   result, low 32 bits used), then clamp as above.
+
+The f32 roundings matter only exactly at integer boundaries. Over all `D1` in -300..300 and
+`D2` in 0..300 the plain double formula differs once: `D1 = 224, D2 = 0` gives 191.99999… here
+(light 191) but 192.0 in plain double arithmetic.
+
+Worked values (`D2 = 0` unless given):
+
+| D1 | D2 | raw value before truncation | light |
+|---|---|---|---|
+| 0 | 0 | 162.27 | 162 |
+| 1 | 0 | 169.23 | 169 |
+| -1 | 0 | 155.10 | 155 |
+| 2 | 0 | 175.95 | 175 |
+| -2 | 0 | 147.72 | 147 |
+| 4 | 0 | 188.59 | 188 |
+| -4 | 0 | 132.46 | 132 |
+| 8 | 0 | 210.40 | 210 |
+| -8 | 0 | 100.64 | 128 (clamp) |
+| 16 | 0 | 239.58 | 239 |
+| 32 | 0 | 255.99999 | 239 (clamp) |
+| 100 | 0 | 220.47 | 220 |
+| -100 | 0 | -210.55 | 128 (clamp) |
+| 224 | 0 | 191.99999 | 191 |
+| 0 | ±4 | 160.53 | 160 |
+| 0 | 8 | 155.52 | 155 |
+| 0 | ±16 | 138.39 | 138 |
+| 0 | 32 | 96.0 | 128 (clamp) |
+| 8 | 8 | 202.20 | 202 |
+| -4 | 4 | 130.94 | 130 |
+| 20 | 20 | 200.41 | 200 |
+
+**Where it is stored, when it changes.** The result is the cell's light byte (cell offset +6).
+Nothing else is cached: no table and no per-frame recomputation (the generator's routine also
+fills two temporary per-column arrays it never reads). The light is computed with this same
+function by the full pass above, by the lake fill (`00448d90`, overwritten by the full pass
+afterwards) and by a building foundation (`00448210`, see below). The frame builder copies it
+into each vertex (terrain-drawing.md, "Brightness"); sprites use it too (fog-of-war.md 5.3).
+It never feeds a game rule. The minimap's slope shading is a separate integer rule
+(around `0044ccf0`: 192 + 8 times one height difference, clamped to the same 128..239
+bounds; side-panel.md 6.1), not this function.
 
 ## Changes during play
 
@@ -125,7 +197,8 @@ save game stores the whole cell array (heights, tiles, light and flags; `0044acd
 - **Foundation** (`units-and-jobs.md` 6.6): every building, from the moment it is created (site,
   map-loaded building, founded town hall), levels its footprint plus a one-cell ring to the
   average height of that ring and gives every cell there a weg tile (class 10, tile
-  `rand() mod 8`) and the path flag. Light is recomputed two cells around the footprint. Nothing
+  `rand() mod 8`) and the path flag. Light (step 5 formula) is recomputed for the levelled pad
+  grown by one cell on every side, i.e. two cells around the footprint. Nothing
   is restored when the building is destroyed.
 - **Worn paths** (`units-and-jobs.md` 4.5): a step of a porter, hunter, woodcutter, stonemason,
   trader or soldier turns the destination cell into a weg tile with the path flag, with
