@@ -785,10 +785,11 @@ export class Ai {
     if (!targets.length) return this.endArmy(ps);   // success
     // members without an attack job (2.5 step 6): one with another job (walking, waiting for or
     // walking to a ship) is taken only within 40 cells of the target point or inside the target
-    // town's territory, otherwise left alone; an idle one is taken wherever it stands, except
-    // that ours first walks it in legs while it is that far (deviation T); a warship is always
-    // taken. Members aboard a transport are skipped and not counted (Gold); members inside
-    // another building are skipped too (ours).
+    // town's territory, otherwise left alone; an idle one (no job, not walking) gets its attack
+    // job wherever it stands, its own walk takes it to the target (0x46dd07; the former leg walk
+    // of deviation T is gone: a leg ending in the sea left landed members idle for good).
+    // Members aboard a transport are skipped and not counted (Gold); members inside another
+    // building are skipped too (ours).
     const far = (u: Entity): boolean => {
       const [ux, uy] = this.cell(u);
       if (this.dist(ux, uy, x, y) < R || this.w.territory.ownerAt(ux, uy) === tt.id) return false;

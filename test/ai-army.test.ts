@@ -95,6 +95,36 @@ test('an ending army draws rand() once per living member (the walk-home delay, 2
   assert.ok(members.every(u => u.group === Grp.None));
 });
 
+test('an idle army member far from the target point gets its attack job at the army run wherever it stands; a walking one that far is left alone (2.5 step 6)', { skip }, () => {
+  // regression (add-on save, Amazon army landed 70 cells from the human town hall): ours walked
+  // such members in legs first, and a leg ending in the sea left the whole army idle for good
+  const { world: w } = loadMission('Pimmons.mdb', 7, DATA, false);
+  const tt = w.economy.towns[0];
+  const ra = 1;
+  w.economy.players[ra]!.relations[tt.race] = 0; w.economy.players[tt.race]!.relations[ra] = 0;
+  const [fx, fy] = cells(w, tt.x, tt.y, 4, 12, 1)[0];
+  w.spawnUnit(tt.race, 29, fx, fy, tt.id);   // a fighter near the town hall: bucket 0 of the skirmish
+  const far: [number, number][] = [];
+  for (const c of cells(w, tt.x, tt.y, 45, 70, 200)) {
+    if (w.territory.ownerAt(c[0], c[1]) === tt.id) continue;
+    far.push(c);
+    if (far.length === 2) break;
+  }
+  assert.equal(far.length, 2, 'two free cells far from the target and outside its territory');
+  const [idle, walking] = far.map(([x, y]) => w.spawnUnit(ra, HUNTER, x, y, -1));
+  const [wx, wy] = cellOf(walking);
+  assert.ok(w.walk(walking, wx + 3, wy, 2000) && walking.path, 'the second member walks');
+  for (const u of [idle, walking]) u.group = Grp.Army;
+  const job = w.sched.create(AiJob.Army, ra, 1, [tt.id, tt.x, tt.y, 1]);
+  const ps = player(ra, 0);
+  Object.assign(ps, { army: job.id, armyTown: tt.id, armyMembers: [idle.id, walking.id] });
+  w.ai.players[ra] = ps;
+  assert.equal(w.ai.runJob(job), 50, 'the skirmish ran');
+  assert.equal(jobKind(w, idle), 0x08, 'the idle member attacks at once, from where it stands');
+  assert.notEqual(jobKind(w, walking), 0x08, 'the walking member is left alone');
+  assert.ok(walking.path, 'and keeps walking');
+});
+
 /** island free play, all three races computer players (as in ai-navy.test.ts) */
 function islandFreePlay(seed: number): World {
   const read = dataReader(GOLD);

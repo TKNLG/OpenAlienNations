@@ -31,11 +31,12 @@ const M = {
 /** errand job data slots */
 const ER = { Phase: 0, Target: 1, State: 2, Home: 3, Dest: 4, Size: 5 } as const;
 /**
- * errand phases: to the foreign embassy, inside it, back home; `Remote`: add-on, the target race's
+ * errand phases: to the foreign embassy, inside it (`Entered`: not decided yet, `Inside`: decided),
+ * back home; `Remote`: add-on, the target race's
  * embassies are all on other islands, so the offer is decided on the first run outside and he goes
  * straight back in (docs/game/addon.md 9.3, ai-diplomacy-trade.md 3.4 step 2)
  */
-const PH = { Start: 0, ToDest: 1, Inside: 2, Home: 3, ToHome: 4, Remote: 5 } as const;
+const PH = { Start: 0, ToDest: 1, Inside: 2, Home: 3, ToHome: 4, Remote: 5, Entered: 6 } as const;
 /** errand Dest slot: target not chosen yet (saves from before the choice moved to sending) / none found */
 const DEST_UNCHOSEN = -1, DEST_NONE = -2;
 
@@ -276,7 +277,7 @@ export class Diplomacy {
       const j = this.errandJob(u);
       if (!j) continue;
       const ph = j.data[ER.Phase];
-      return { diplomat: u.id, target: j.data[ER.Target], state: j.data[ER.State], decided: ph >= PH.Inside && ph !== PH.Remote };
+      return { diplomat: u.id, target: j.data[ER.Target], state: j.data[ER.State], decided: ph === PH.Inside || ph === PH.Home || ph === PH.ToHome };
     }
     return null;
   }
@@ -319,10 +320,14 @@ export class Diplomacy {
           if (!dest || !dest.active || !nearEntity(this.w, u, dest)) { leaveQueues(this.w, u); d[ER.Phase] = PH.Home; continue; }
           const e = enterDoor(this.w, u, dest);
           if (e) return e;
+          // in: the go-to succeeded; the offer is decided on the errand's next run (3.4 step 3)
+          d[ER.Phase] = PH.Entered;
+          return 1;
+        }
+        case PH.Entered:
           this.decide(u.owner, d[ER.Target], d[ER.State]);
           d[ER.Phase] = PH.Inside;
-          return 10;
-        }
+          continue;
         case PH.Inside:
           d[ER.Phase] = PH.Home;
           if (exitBuilding(this.w, u)) return 1;

@@ -866,7 +866,16 @@ Notes:
   than 50 requests, and it never forgets a served one (`addon.md` 8.4 "New request"), so from
   about the 51st transport request a nation has made, no army request is accepted any more and
   every army member on another island waits (job 0x3E) until its army ends; after the end it
-  walks home, and the next army that takes it makes it wait again *(quirk)*. Before that, the
+  walks home, and the next army that takes it makes it wait again *(quirk)*. The wait job
+  itself never ends: its run (Gold `0x488790`) is a bare "return 500", it keeps the request id
+  (+0x24, 0 when refused) but never looks at it. Only a cancel ends it: the army's end (the
+  destructor gives every living member a walk home), the boarding step (a ship takes the
+  unit), an army run that finds the member within 40 cells of the target point or in the target
+  town's area (step 6), the defence response (2.2 phase 1 cancels any job of a defender that is
+  not an attack), or a retaliation, which only suspends it (`combat.md` 7.4). Waiting members
+  are not excluded from the help rule: `combat.md` 7.1 / 7.2 test only race, weapon, priest,
+  the attack-job tier and the player-order flag (+8), and the wait job is made with flag 0
+  (Gold `0x468ee0`, `0x46b210`), so a waiting member answers a strike like an idle one. Before that, the
   ships follow the planner's rules (`addon.md` 8.4): each ship works for one request per trip;
   a ship the request service assigns sends every waiting unit (five get in, the rest are
   dropped), a ship that was idle when the request was made sends at most its counter (the units
@@ -930,6 +939,14 @@ Notes:
        unit) gets no attack job and is **not counted**. Members waiting for a ship (job 0x3E) or
        walking to one are members "with another job": left alone unless within 40 cells of the
        target point or in the target town's area.
+     - Instruction level (Gold skirmish, `0x46dc2b..0x46dd30`; the assault has the same
+       branch): a member whose job pointer (+0x30) is null jumps straight to the aboard test
+       and the attack check (`0x46dc2e` `je 0x46dd07`); **no distance or territory test** is
+       made for it. The distance (`00459a80` / Gold `0045fa10`, `jl` against the radius at
+       `0x46dc72`) and territory tests are only on the path of a member with a job other than
+       an attack. So a member put ashore 70 cells from the target town hall gets its attack job
+       at the next run and walks there with the attack's own walk (`combat.md` 3.3). There is
+       no other path to the target: the join's walk is made only at the join (above).
   7. The next tactic is rand() & 1.
 - **Tactic 1 (skirmish, `00466e20`)**, re-read in the third pass (C): no power check. Same
   circle scan and race filter. Buckets: 0 = units whose type is 17 (hunter), 21 (police) or

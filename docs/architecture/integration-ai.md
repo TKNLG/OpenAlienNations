@@ -236,8 +236,8 @@ sensibly:
    target, the keep rule compares with the bucket (7b O..R). Members without an attack job
    follow spec 2.5 step 6: one with another job (walking, waiting for or walking to a ship) is
    taken only within 40 cells of the target point or inside the target town's territory; an
-   idle one far from both walks on in legs of 32 cells first (7b T, cost); warships are taken
-   wherever they are; members inside a building other than a transport are skipped (the
+   idle one (no job, not walking) gets its attack job wherever it stands, warships included
+   (7b T, fixed in 7f); members inside a building other than a transport are skipped (the
    original hands them the attack through `00465650`, which sends them out first; rare).
 10. **Ending armies:** as specified, tactic 1 finds only units outside buildings, and an army with
     no target "ends as a success". Against a town whose people are indoors, armies therefore end
@@ -388,7 +388,7 @@ supposedly never does this. Result of the code search (spec 1.15 table, 2.4, 2.5
 | Q | **Town halls in the assault.** Ours drops every town hall, the important one included, while the army has fewer than 10 members (so an army facing only a town hall "succeeds" and ends). Original: only town halls among the circle candidates are set aside; the important town hall (the last fallback type) is attacked by any army, so the army never ends in an assault run while the town stands | `ai.ts` `runArmy` | medium: changes how long raids last and how often new armies form | fixed |
 | R | **Skirmish keep rule.** Ours uses the army keep rule with its rand() mod 10 draw. Original (re-read, C): a member already attacking is re-assigned only when bucket 0 (fighters) is taken and its target's class is above 0; otherwise it keeps its target; no rand() draw; refused attacks count as in P | `ai-town.ts` `assignAttackers` call from `runArmy` (d[3] = 1) | medium (behaviour) and rand() order | fixed |
 | S | **Anchor snapping** (spec 1.5): every explicit anchor is replaced by the nearest border block of the town's territory (cell = 2 x block), also when it lies inside; ties: first in the border list; no territory: (-1, -1). Ours leaves inside points where they are. Warehouse with an empty region list: the original's anchor is cell (0, 0) before snapping; ours uses the town centre | `ai-town.ts` `snap`, `queueBuild` | low-medium: outposts, towers and warehouses of the original sit at the territory edge | fixed: `snap` always, `anchor`; the sign draw of outposts / towers now comes before the menu-state and "already queued" tests |
-| T | Idle army members far from the target: the original gives an idle member (no job) an attack job directly, wherever it stands; ours walks it in legs first (section 7 item 7). Members with another job are assigned when within 40 cells or inside the target town's area, as ours | `ai.ts` `runArmy` `far` | low | keep (cost) |
+| T | Idle army members far from the target: the original gives an idle member (no job) an attack job directly, wherever it stands; ours walked it in legs first (section 7 item 7). Members with another job are assigned when within 40 cells or inside the target town's area, as ours | `ai.ts` `runArmy` `far` | **high** (7f: a leg ending in the sea left a whole landed army idle for good) | fixed in 7f: the attack job at once, as the original |
 
 Not deviations (checked): the attack gate (relation human / attacker), the target loop (first
 other living player with a town, race order, profile 0 strength x 0.5 or tick < 54,000), the
@@ -526,8 +526,9 @@ Deviations of our army code found and fixed (rand() order changes):
 | Y | no draw when an army ends | the destructor draws rand() mod 10 + 2 for every living member (walk-home delay) |
 
 Not changed (original behaviour): the threshold, single-unit and empty ship trips, stale
-requests, retreats at the first assault run, no scanning on the way. Kept deviation: idle
-members far from the target walk in legs before they get an attack job (7b T).
+requests, retreats at the first assault run, no scanning on the way. The deviation kept then
+(idle members far from the target walked in legs before they got an attack job, 7b T) was
+removed in 7f.
 
 ## 7e. Sixth audit (2026-10): one hunter per ship trip, and landed units ignoring the player
 
@@ -575,9 +576,9 @@ the skirmish tactic (or a struck raider) followed by an assault run, when the la
 within 40 cells of the town hall; units of the player farther than 40 cells from his town hall
 are never chosen by the army. Ours does the same (verified in the harness below: landed members
 attack the victim's barracks, hunters and soldiers near his town hall, and retaliate when
-struck); the only difference left is the kept deviation T (a jobless member farther than 40 cells
-from the target point and outside its territory walks in 32-cell legs before it gets its attack
-job; the original gives the attack job at once). No change for (2).
+struck); the only difference left was deviation T (a jobless member farther than 40 cells
+from the target point and outside its territory walked in 32-cell legs before it got its attack
+job; the original gives the attack job at once), removed in 7f. No change for (2).
 
 **Reproduction** (harness: island free play, all three races computer players, one race
 standing in for the human with profile 4, logging requests, boarding steps, trips and the next

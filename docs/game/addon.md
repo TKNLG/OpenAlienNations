@@ -541,12 +541,8 @@ that delivered in a row stand on neighbouring shore cells, one per cell, in spir
   The patrol and guard jobs are unchanged.
 - Ships **never enter buildings** except to dock (5.8). Class-5 buildings refuse them. The
   builder entry rule refuses them too (`00466cd0`).
-- **No healing, no repair, no rank**:
-  - a priest may not heal a ship (`0046b9a0`: the target must not be class 14, own race and
-    foreign);
-  - builders repair only buildings;
-  - experience is kept only by types 17, 21 and 29..36 (`combat.md` 5.3). A damaged ship stays
-    damaged.
+- **No healing, no repair, no rank**: a damaged ship stays damaged until it sinks. 4.3 lists
+  every path checked. Experience is kept only by types 17, 21 and 29..36 (`combat.md` 5.3).
 - **Vision** is the record's sight radius, like any unit (`fog-of-war.md` 3).
 - **Unit info page** (`0045b9a0`): the passenger count (+0x5C) is sent with the unit data (it
   drives `AUSSTEIGEN`, 5.6). A unit inside a ship shows T280 "in <name of the ship type>", like a
@@ -563,6 +559,48 @@ that delivered in a row stand on neighbouring shore cells, one per cell, in spir
 
 Fishing boats are armed (weapon 27). They may attack foreign units and buildings, and they join
 fights through the help rule (`combat.md` 7.1) *(by reading)*.
+
+### 4.3 Ship HP is never restored (C, checked at instruction level, October 2026)
+
+Gold has **no way to raise a ship's HP**: no builder repair, no priest healing, no repair while
+docked at a harbour or in the shipyard, no upgrade, no regeneration. Every path:
+
+| path | what the code does | result for a ship |
+|---|---|---|
+| builder repair command `Restaurieren` (command class 0x54, run `004585d0` = AN `00452a70`) | files a builder request (`00465750` = AN `0045f4b0`) for the first selected object. The command is built only by the **building** info page (page 1, `0041beb0`, button at (40,135), `0041c285`) and by the message factory (`00459b75`). A selected ship shows the **unit** page (page 0: the unit info message `0045b9a0` writes page 0 for every unit, ships included), which has no repair button | not offered |
+| builder right-click on a ship (`004567a0` = AN `00450bb0`, `456b??` branch) | the builder branch (job 0x0C) is taken only when the target's object category (+0x08) is 1, a building. A ship is a unit (category 0), so a builder gets the plain go-to (0x07) | the builder walks toward the ship (it cannot reach it, 2.3) |
+| builder requests from elsewhere | the only other filers of a builder (type 11) request are the construction order (`0047f465`) and the builder destructor (`00481651`), both for building sites, as in AN | none |
+| repair tick (builder job, `00481d12`..`00481d55` = AN `004782b3`) | +20 HP on the builder job's building | buildings only |
+| priest heal, automatic scan (heal job run `0048c450`, scan `0048c140` -> may-act `0046b9a0` with the ally flag) | may-act refuses a class-14 target for a priest, own race (`46babc`) and foreign at peace (`46ba7f`) | a ship is never picked |
+| priest right-click on an own damaged ship (`456c7f`..`456ca8`) | **no class test**: priest (type 22), target a unit (record +0xA4 = 0), HP < max, same race → heal job 0x29 with auto-continue, as in AN. This test comes before the go-to branch | a heal job is created, see below |
+| help rule, priest branch (`00468f94`..`004690fb` = AN `00462ab0`) | **no class test**: victim a unit, X a priest, victim HP < max, X ≠ victim, same race or peace (state 3), X not on a heal job or player order → X's job is cancelled, heal job 0x29 for the victim | a heal job is created when a ship is hit within 12 cells of a priest |
+| heal impact (kind 3, `0048ed64`) | HP += 7..12, clamped | never reached for a ship: see below |
+| docking at a harbour (5.8, entered handler `004671b0`) | sets "inside", runs the goods handler, ejects. No HP write | none |
+| shipyard | class-5 buildings refuse ships (`00466cd0`), so no retraining (which would reset HP, `combat.md` 13); the shipyard only builds new ships | none |
+| HP-delta message (handler `004574e0` = AN `00451a70`: HP += a signed amount from the message, clamped, death at 0) | built only by the message factory (`00459345`); no page, hotkey, AI or job constructs it | unreachable |
+| regeneration | none: every HP write next to a max-HP read (record +0xAC) in `dvge.exe` matches one in AN.exe one to one (29 sites: unit / nature / retype constructors, building decay, construction and completion, repair tick, the impacts, the HP-delta message), and no Gold-only code that tests class 14 writes HP (the class-14 tests are the masks, may enter, may act, entered, eject, leave job and the passengers page) | none |
+
+**Why the heal job can never heal a ship.** The heal job strikes through an attack child with
+the heal weapon (range 0, `combat.md` 13), which needs a firing position in the 8-neighbourhood
+of the target (`combat.md` 3.4). A ship never stands on coastal water, so every cell around it is
+water (2.3), and the priest's path mask forbids water. The firing-position search (`combat.md`
+3.5) therefore always fails. The heal child has no auto-retarget, so after the fifth failed
+search it ends (3.6); the heal job releases the patient and, with auto-continue, scans its sight
+for the next patient through may-act, which skips ships. The priest heals a wounded land unit in
+sight if there is one, otherwise the job ends and he stands idle. He does not move toward the
+ship (a failed search writes no path).
+
+Visible quirks of this (C):
+
+- **A priest cannot board a damaged own transport ship by right-click.** The heal branch comes
+  before the go-to (boarding, 5.2) branch, so the order becomes the futile heal job; the priest
+  stays on shore. An undamaged transport is boarded normally.
+- **The help rule takes priests off their work for a damaged ship.** A ship of the priest's race
+  (or of a race at peace) hit within 12 cells of a priest cancels the priest's current job
+  (unless it is a heal job or a player order) and gives him the futile heal job; with
+  auto-continue he then heals wounded land units in sight, or stands idle.
+- The cursor gives no hint: a priest is not a fighter, so its cursor is the arrow everywhere
+  (`ui/cursors.md`).
 
 ---
 

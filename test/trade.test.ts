@@ -83,7 +83,9 @@ test('diplomat carries a peace offer; refusal; war is always accepted', { skip }
   assert.equal(pe.active, true, 'an errand does not deactivate the embassy');
   assert.deepEqual(dip.errand(PIMMONS), { diplomat: diplomat.id, target: AMAZONS, state: Rel.Peace, decided: false });
   stepUntil(w, () => diplomat.inside === ae.id, 6000);
-  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Peace, 'decided on entering');
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Ceasefire, 'in, not decided yet');
+  w.step();
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Peace, 'decided on the errand run after entering (3.4 step 3)');
   assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 47 + AMAZONS), 'mentor#47+target');
   stepUntil(w, home, 6000);
 
@@ -94,6 +96,7 @@ test('diplomat carries a peace offer; refusal; war is always accepted', { skip }
   dip.setRelation(PIMMONS, AMAZONS, Rel.Ceasefire);
   offer(Rel.Peace);
   stepUntil(w, () => diplomat.inside === ae.id, 6000);
+  w.step();
   assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Ceasefire, 'peace refused');
   assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 44 + AMAZONS));
   stepUntil(w, home, 6000);

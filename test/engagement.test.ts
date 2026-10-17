@@ -216,3 +216,31 @@ test('ships: a warship that sinks a land unit retargets to the next one of that 
   assert.equal(target(w, ship), b.id, 'the ship goes on with the next one');
   assert.equal(Kind.Unit, b.kind);
 });
+
+test('an attack on a target on another island never ends: 5 failed searches, then the retarget takes it again (3.5, 3.6); an equal-tier attacker is ignored meanwhile (7.2) (Gold)', { skip: skipGold }, () => {
+  // the original's rules (C, Gold 0x47bc00, 0x46b32c): what kept the Sajiki defenders of a
+  // play-test save from fighting back; see combat.md 7.2 "Attacks across the water"
+  const { world: w, mission: m } = loadAddonMission('AmazonsAO.mdb', 5, undefined, false);
+  const h = m.humanRace, en = m.races.find(r => r.present && r.race !== h)!.race;
+  const n = w.size;
+  const land = (X: number, Y: number) => !w.blocked[(Y << w.bits) | X] && !w.occupied(X, Y) && w.territory.ownerAt(X, Y) < 0 && w.islandAt(X, Y) > 0;
+  const lonely = (X: number, Y: number) => w.combat.scan(X, Y, 14).every(e => e.kind === Kind.Nature || (e.oid >>> 16) > 2);
+  let P: [number, number] | undefined, Q: [number, number] | undefined;
+  for (let i = 0; i < n * n && !(P && Q); i += 7) {
+    const X = i & (n - 1), Y = i >> w.bits;
+    if (!land(X, Y) || !land((X + 1) & (n - 1), Y) || !lonely(X, Y)) continue;
+    if (!P) P = [X, Y];
+    else if (w.islandAt(X, Y) !== w.islandAt(...P)) Q = [X, Y];
+  }
+  assert.ok(P && Q, 'two quiet land cells on different islands');
+  const sword = w.spawnUnit(h, 31, P[0], P[1], -1);                 // melee, tier 0
+  const far = w.spawnUnit(en, 17, Q[0], Q[1], -1);                  // a hunter over the water, tier 0
+  w.combat.startAttack(sword, far, true, false, 1, false);
+  for (let i = 0; i < 400; i++) w.step();
+  assert.equal(target(w, sword), far.id, 'still attacking the unreachable hunter (retargeted onto it again)');
+  assert.deepEqual(cell(sword), P, 'without moving');
+  // a tier-0 striker next to it: 7.2 keeps the current target (its tier 0 <= 0)
+  const striker = w.spawnUnit(en, 31, (P[0] + 1) & (n - 1), P[1], -1);
+  w.combat.attacked(sword, striker);
+  assert.equal(target(w, sword), far.id, 'no answer to the striker, not even as the victim');
+});

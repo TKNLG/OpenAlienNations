@@ -58,7 +58,7 @@ function world() {
   const dip = w.spawnInside(SAJIKI, DIPLOMAT, sjEmb, sajTown.id);
   w.logistics.unitEntered(dip, sjEmb);
   assert.ok(sjEmb.active, 'the Sajiki embassy is active with its diplomat inside');
-  assert.notEqual(w.islandAt(...cell(amEmb)), w.islandAt(...cell(sjEmb)), 'the embassies are on different islands');
+  assert.ok(w.islandAt(...cell(amEmb)) !== w.islandAt(...cell(sjEmb)), 'the embassies are on different islands');
   return { w, amEmb, sjEmb, amDip: w.get(amEmb.operatorId)!, sjDip: dip };
 }
 
