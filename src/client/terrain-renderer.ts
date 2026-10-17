@@ -1,6 +1,7 @@
 // Draws the terrain heightfield. Spec: docs/rendering/terrain-drawing.md
 // One quad per map cell, built in 32x32-cell chunks. Every tile is one layer of a
 // TEXTURE_2D_ARRAY; mixed-ground quads blend their four corner tiles per pixel on the GPU.
+// Brightness and the vanilla texel rules: terrain-shade.ts (reference) and the shaders below.
 // Corner layout, left-right split and the per-quad choice: terrain-quads.ts.
 
 import { compileProgram, uniforms } from './gl.ts';
@@ -21,39 +22,71 @@ export const TERRAIN_SET_ORDER = [
   'transition1', 'transition2', 'transition3', 'transition4',
 ];
 
+// Brightness (terrain-drawing.md "Brightness", fog-of-war.md 5.1): each corner gets its grey level
+// g = L (in sight or fog off), L >> 1 (explored, not in sight) or 0 (never explored) BEFORE
+// interpolation; g is interpolated across the two triangles (Gouraud) and out = tile x g / 256.
+// The fog shade is fetched per vertex from the fog texture, so fog changes need no chunk rebuild.
 const VS = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
 in vec2 a_pos; in float a_h; in float a_light; in vec2 a_uv; in vec4 a_layers; in vec4 a_anim;
 uniform vec2 u_cam; uniform vec2 u_offset; uniform vec2 u_scale; uniform float u_frame;
-out vec2 v_uv; out float v_light; out vec2 v_cell; flat out vec4 v_layers;
+uniform sampler2D u_fog;
+out vec2 v_uv; out float v_g; flat out vec4 v_layers;
 void main() {
-  v_cell = a_pos;
   vec2 w = a_pos + u_offset - u_cam;
   vec2 s = vec2((w.y - w.x) * ${CELL_W / 2}.0, (w.x + w.y) * ${CELL_H / 2}.0 - (a_h - 128.0));
   gl_Position = vec4(s * u_scale, 0.0, 1.0);
-  v_uv = a_uv; v_light = a_light / 162.0; v_layers = a_layers + a_anim * u_frame;
+  v_uv = a_uv; v_layers = a_layers + a_anim * u_frame;
+  // fog shade of this vertex: 255 in sight (or fog off: a 1x1 texture), 128 explored, 0 unexplored
+  ivec2 fs = textureSize(u_fog, 0);
+  float shade = texelFetch(u_fog, ivec2(a_pos) % fs, 0).r * 255.0;
+  v_g = shade > 191.0 ? a_light : shade > 64.0 ? floor(a_light * 0.5) : 0.0;
 }`;
 
 const FS = `#version 300 es
-precision mediump float; precision mediump sampler2DArray;
-uniform sampler2DArray u_tiles;
-uniform sampler2D u_fog; uniform float u_fogInv;
-in vec2 v_uv; in float v_light; in vec2 v_cell; flat in vec4 v_layers;
+precision highp float; precision highp int; precision highp sampler2DArray;
+uniform sampler2DArray u_tiles; uniform int u_smooth;
+in vec2 v_uv; in float v_g; flat in vec4 v_layers;
 out vec4 o;
+ivec3 nib(ivec2 st, float layer) {
+  return ivec3(texelFetch(u_tiles, ivec3(st, int(layer + 0.5)), 0).rgb * 255.0 + 0.5) >> 4;
+}
+// one 5- or 6-bit screen level of p = c x s, shown in 8-bit terms
+vec3 q565(vec3 p) { return floor(p / vec3(32.0, 16.0, 32.0)) * vec3(8.0, 4.0, 8.0); }
 void main() {
-  vec3 c;
-  if (v_layers.x == v_layers.y && v_layers.y == v_layers.z && v_layers.z == v_layers.w) {
-    c = texture(u_tiles, vec3(v_uv, v_layers.x)).rgb;
-  } else {
-    float u = v_uv.x, v = v_uv.y;
-    c = texture(u_tiles, vec3(v_uv, v_layers.x)).rgb * (1.0 - u) * (1.0 - v)
-      + texture(u_tiles, vec3(v_uv, v_layers.y)).rgb * u * (1.0 - v)
-      + texture(u_tiles, vec3(v_uv, v_layers.z)).rgb * (1.0 - u) * v
-      + texture(u_tiles, vec3(v_uv, v_layers.w)).rgb * u * v;
+  bool single = v_layers.x == v_layers.y && v_layers.y == v_layers.z && v_layers.z == v_layers.w;
+  if (u_smooth == 1) {
+    // "Glattes Gelaende" (enhanced): full 8-bit texels, mipmapped bilinear, same brightness rule
+    vec3 c;
+    if (single) {
+      c = texture(u_tiles, vec3(v_uv, v_layers.x)).rgb;
+    } else {
+      float u = v_uv.x, v = v_uv.y;
+      c = texture(u_tiles, vec3(v_uv, v_layers.x)).rgb * (1.0 - u) * (1.0 - v)
+        + texture(u_tiles, vec3(v_uv, v_layers.y)).rgb * u * (1.0 - v)
+        + texture(u_tiles, vec3(v_uv, v_layers.z)).rgb * (1.0 - u) * v
+        + texture(u_tiles, vec3(v_uv, v_layers.w)).rgb * u * v;
+    }
+    o = vec4(c * (v_g / 256.0), 1.0);
+    return;
   }
-  // fog of war (docs/game/fog-of-war.md): 0 = never explored (black), 0.5 = explored, 1 = in sight;
-  // one texel per map vertex, sampled bilinearly so the borders are soft
-  float fog = texture(u_fog, (v_cell + 0.5) * u_fogInv).r;
-  o = vec4(c * v_light * fog, 1.0);
+  // vanilla = the original's software renderer: nearest texel (positions 0..63 x 0..63.75),
+  // 4-bit channels, transitions blended from the 4-bit corner texels and stored as 4 bits
+  ivec2 st = clamp(ivec2(floor(v_uv * vec2(63.0, 63.75))), ivec2(0), ivec2(63));
+  ivec3 c;
+  if (single) {
+    c = nib(st, v_layers.x);
+  } else {
+    int s = st.x, t = st.y;
+    c = (nib(st, v_layers.x) * ((63 - s) * (63 - t)) + nib(st, v_layers.y) * (s * (63 - t))
+       + nib(st, v_layers.z) * ((63 - s) * t) + nib(st, v_layers.w) * (s * t)) / 3969;
+  }
+  // 6-bit light s = g / 4 on average (the horizontal dither alternates floor(g/4) and +1 with that
+  // mean); p = c x s; the 5-6-5 screen keeps the top bits of the 10-bit p (truncation). Drawn is the
+  // run average of the dithered result (terrain-shade.ts softwareChannel).
+  float sf = v_g * 0.25, s0 = floor(sf), ph = sf - s0;
+  vec3 cf = vec3(c);
+  o = vec4(mix(q565(cf * s0), q565(cf * (s0 + 1.0)), ph) / 255.0, 1.0);
 }`;
 
 interface Chunk { vao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number; cx: number; cy: number; }
@@ -68,11 +101,14 @@ export class TerrainRenderer {
   private indexBuf: WebGLBuffer;
   private fogTex: WebGLTexture;
   private fogSize = 0;
+  /** enhanced option "Glattes Gelände" (settings smoothTerrain): 8-bit filtered texels; off = the
+   *  original's software look (4-bit texels, nearest, 5-6-5) */
+  smooth = false;
 
   constructor(gl: WebGL2RenderingContext, sets: Map<string, TerrainSet>) {
     this.gl = gl;
     this.prog = compileProgram(gl, VS, FS);
-    this.u = uniforms(gl, this.prog, ['u_cam', 'u_offset', 'u_scale', 'u_frame', 'u_tiles', 'u_fog', 'u_fogInv']);
+    this.u = uniforms(gl, this.prog, ['u_cam', 'u_offset', 'u_scale', 'u_frame', 'u_tiles', 'u_fog', 'u_smooth']);
 
     let layers = 0;
     for (const name of TERRAIN_SET_ORDER) {
@@ -121,10 +157,9 @@ export class TerrainRenderer {
     } else {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, size, size, gl.RED, gl.UNSIGNED_BYTE, data);
     }
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    // read per vertex with texelFetch (no filtering)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   }
 
   private terrain: Terrain | null = null;
@@ -233,7 +268,7 @@ export class TerrainRenderer {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.fogTex);
     gl.uniform1i(this.u.u_fog, 1);
-    gl.uniform1f(this.u.u_fogInv, 1 / this.fogSize);
+    gl.uniform1i(this.u.u_smooth, this.smooth ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(this.u.u_cam, cam.x, cam.y);
     gl.uniform2f(this.u.u_scale, (2 * cam.zoom) / cam.viewW, (-2 * cam.zoom) / cam.viewH);

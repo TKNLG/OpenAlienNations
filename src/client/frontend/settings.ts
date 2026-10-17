@@ -36,10 +36,15 @@ export interface Settings {
    * playback differs: which lines the simulation says (120 s per-line cooldowns, arming, line 28
    * never, line 80 only at the end of a collapse) is the same in both modes */
   advisorQueue: boolean;
+  /** enhanced mode, "Glattes Gelände": terrain tiles at full 8-bit colour with bilinear/mipmap
+   * filtering, instead of the original's software renderer look (4-bit texels, nearest texel,
+   * 5-6-5 truncation; docs/rendering/terrain-drawing.md "Brightness"). The brightness rule
+   * (tile x g / 256, fog folded into the corners) is the same in both modes */
+  smoothTerrain: boolean;
 }
 
 /** defaults of a new configuration (3.9; music = the GOG sample value) */
-const DEFAULTS: Settings = { alphaShadows: true, soundOn: true, effects: 100, music: 67, speech: 100, eax: false, menuScroll: false, autosave: 1, hd: true, selectionRings: false, smoothMovement: false, cursorHints: false, advisorQueue: false };
+const DEFAULTS: Settings = { alphaShadows: true, soundOn: true, effects: 100, music: 67, speech: 100, eax: false, menuScroll: false, autosave: 1, hd: true, selectionRings: false, smoothMovement: false, cursorHints: false, advisorQueue: false, smoothTerrain: false };
 
 export function loadSettings(): Settings {
   try {

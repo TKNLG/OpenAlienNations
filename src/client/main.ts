@@ -78,6 +78,8 @@ class Game implements HudHost {
   private loadingLooks = false;
   /** enhanced option: smooth constant-speed movement instead of the original's step drawing (cached from the settings) */
   private smooth = { at: -1e9, on: false };
+  /** enhanced option "Glattes Gelände": filtered 8-bit terrain texels (cached from the settings) */
+  private smoothGround = { at: -1e9, on: false };
   /** fog of war of the local player (docs/game/fog-of-war.md); display only */
   vision: Vision | null = null;
   /** per-vertex light of the current terrain (updated where the ground changes) */
@@ -604,6 +606,8 @@ class Game implements HudHost {
     gl.clearColor(0.05, 0.05, 0.08, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (this.terrain && w) {
+      if (t - this.smoothGround.at > 1000) this.smoothGround = { at: t, on: loadSettings().smoothTerrain };
+      this.terrainR.smooth = this.smoothGround.on;
       this.terrainR.draw(this.cam, t);
       // territory border stones: ground decals after the terrain, before every object (rendering/territory.md 3)
       this.stones.refresh(w.territory);

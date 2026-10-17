@@ -561,20 +561,21 @@ export class FrontEndApp {
   private enhanced(from: From): void {
     const st = this.settings, again = () => this.enhanced(from), back = () => this.settingsMenu(from);
     const onOff = (v: boolean) => this.s(v ? 80 : 81);
-    const rows: [string, 'selectionRings' | 'smoothMovement' | 'cursorHints' | 'advisorQueue'][] = [
+    const rows: [string, 'selectionRings' | 'smoothMovement' | 'cursorHints' | 'advisorQueue' | 'smoothTerrain'][] = [
       ['Auswahlringe:', 'selectionRings'],
       ['Flüssige Bewegung:', 'smoothMovement'],
       ['Cursor-Hinweise:', 'cursorHints'],
       ['Berater-Warteschlange:', 'advisorQueue'],
+      ['Glattes Gelände:', 'smoothTerrain'],
     ];
     const w: Widget[] = [
       this.title('Erweitert'),
       this.label(R(230, 300, 585, 329), 'Abweichend vom Original, wirken sofort. Aus = Original.', 'C', 'dv7pts2'),
     ];
     rows.forEach(([text, key], i) => {
-      const y = 330 + i * 30;
-      w.push(this.label(R(230, y, 539, y + 29), text));
-      w.push(this.value(R(540, y, 585, y + 29), onOff(st[key]), () => { st[key] = !st[key]; this.changed(); again(); }));
+      const y = 330 + i * 28;
+      w.push(this.label(R(230, y, 539, y + 27), text));
+      w.push(this.value(R(540, y, 585, y + 27), onOff(st[key]), () => { st[key] = !st[key]; this.changed(); again(); }));
     });
     w.push(this.back(R(340, 470, 460, 490), back));
     this.show(w, back);
