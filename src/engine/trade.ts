@@ -147,11 +147,25 @@ export class Trade {
     });
   }
 
-  /** the panel lists: per race, up to 10 partner towns (`00456fc0`) */
-  partnerLists(t1: Town, trader?: Entity): Town[][] {
+  /**
+   * The trade route page's lists (`00456fc0`, ui/side-panel.md 5.5 class 13): per race, up to 10
+   * towns of the own race or of a race at peace with an active market (harbour for ships), in the
+   * player's town-list order. No town is excluded (the trader's own town is listed too) and there
+   * is no flag test. Add-on merchants only see towns on their island (addon.md 5.7).
+   */
+  partnerLists(race: number, trader?: Entity): Town[][] {
     const out: Town[][] = [[], [], []];
+    const eco = this.w.economy;
     const term = trader ? this.terminal(trader) : MARKET, isl = trader ? this.islandFilter(trader) : -1;
-    for (const t of this.partners(t1, false, term, isl)) if (out[t.race] && out[t.race].length < 10) out[t.race].push(t);
+    for (let r = 0; r < out.length; r++) {
+      if (!this.open(race, r)) continue;
+      for (const id of eco.players[r]?.towns ?? []) {
+        const t = eco.town(id);
+        if (!t || !t.alive || t.race !== r || !this.hasActiveMarket(t, term)) continue;
+        if (isl >= 0 && this.w.islandAt(t.x, t.y) !== isl) continue;
+        if (out[r].length < 10) out[r].push(t);
+      }
+    }
     return out;
   }
 
@@ -161,8 +175,10 @@ export class Trade {
     if (cmd.type === 'market') {
       const t = this.w.economy.town(Math.trunc(cmd.town));
       const f = FIELD_INDEX[cmd.field];
-      if (!t || !t.alive || t.race !== cmd.player || f === undefined) return;
-      this.set(t.id, Math.trunc(cmd.good), f, cmd.value);
+      const good = Math.trunc(Number(cmd.good));
+      // the market pages offer goods 1..8 only; good 0 (raw material / crop) is never traded (4.2)
+      if (!t || !t.alive || t.race !== cmd.player || f === undefined || !(good >= 1 && good < GOODS)) return;
+      this.set(t.id, good, f, cmd.value);
       return;
     }
     const u = this.w.get(cmd.unit);
@@ -376,7 +392,11 @@ export class Trade {
 
   snapshot(): TradeSnapshot { return { markets: this.table.map(m => (m ? [...m] : null)) }; }
 
-  restore(s: TradeSnapshot | undefined): void { this.table = s ? s.markets.map(m => (m ? [...m] : null)) : []; }
+  /** saves from before good 0 was locked may hold its flags set: cleared (4.2 "Rebuild") */
+  restore(s: TradeSnapshot | undefined): void {
+    this.table = s ? s.markets.map(m => (m ? [...m] : null)) : [];
+    for (const m of this.table) if (m) { m[MF.Buy] = 0; m[MF.Sell] = 0; }
+  }
 
   digest(mix: (v: number) => void): void {
     mix(this.table.length);

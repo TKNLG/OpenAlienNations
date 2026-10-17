@@ -148,7 +148,12 @@ hears them only if it is human.
 | 28 | Deine Bevölkerung ist unzufrieden! | **never said**. Its branch requires the happiness to be both changed and unchanged, so it cannot be reached (machine code at 0x45A9E2..0x45AAC2). It is only armed | | | | `0045a7c0` |
 | 29..38 | … wünscht sich ein(e) X! | needs re-evaluation: each open need building (good record +0x130) | Q | rand() mod 2 D + 2 D | | `0045a2c0` (economy.md 5.4) |
 | 39..41 | … verlangt mehr X! | needs re-evaluation: each open luxury | Q | same | | `0045a2c0` |
-| 44..67 | diplomacy answers and declarations | the diplomacy exchange completes, to sender and target (ai-diplomacy-trade.md 3) | Q | 0 | | `00478910` |
+| 44..46 | Dein Friedensangebot wurde von den X abgelehnt. | **sender** of a peace offer, when the target refuses it (line 44 + target race). Said once, at the decision (the errand run after the diplomat entered the target's embassy, or at once for a Gold cross-water offer). The target hears nothing (its index 85 + sender has no text) | Q | 0 | | `00478910` (`0x47897f`, `0x478a57`) |
+| 47..49 | … Friedensangebot … angenommen. | sender of an accepted peace offer (47 + target) | Q | 0 | | same |
+| 50..52 | Dein angebotener Waffenstillstand wurde von den X abgelehnt. | **sender** of a refused ceasefire offer (50 + target); refused = the target's "accept ceasefire" flag for the sender is 0 and the two are not at peace. Receiver: index 82 + sender, no text | Q | 0 | | `0x4789ee`, `0x478a05` |
+| 53..55 | … Waffenstillstand … angenommen. | sender of an accepted ceasefire offer (53 + target) | Q | 0 | | same |
+| 56..58 | Du hast den X Krieg erklärt. | sender of a war declaration (56 + target; never refused) | Q | 0 | | same |
+| 59..61 / 62..64 / 65..67 | Frieden geschlossen / Waffenstillstand angenommen / … Krieg erklärt! | **receiver** (target) of an accepted peace (59 + sender) / ceasefire (62 + sender) offer, or of a war declaration (65 + sender) | Q | 0 | | same |
 | 68..70 | Die X haben eine Botschaft errichtet. | an embassy activates. Sent to every nation except its owner | Q | 0 | | `0045fa40` |
 | 71 / 72 | Städte verfallen … Motivation / … Geld fehlt | the 600-tick condition run of a human town (economy.md 5.8): money = 0 → 72, otherwise happiness ≤ 49 → 71 | Q | 2 D | | `0045ab60` |
 | 79 | Gebäude wird errichtet. | the simulation executes the player's place-building command (0x17, after the lockstep round trip, not on the click). Placement is re-checked OK (build-menu state 1 or 3, footprint and height range), then the line is said, then the site is created. Only the placing nation hears it | no | 0 | | `00451780` |
@@ -163,6 +168,28 @@ enemy unit seen. Events of computer players never reach a human, except these:
 - the defeat lines 23..25;
 - the embassy lines 68..70;
 - the diplomacy lines 44..67, which each concern the hearer's own relation.
+
+**Diplomacy lines in detail (C, instruction level `0x478935`..`0x478a87`; Gold `004825c0`,
+`0x482620`..`0x482737`, identical line numbers).** At the decision the errand job makes exactly
+two say calls, both queued (flag 1) with interval 0, so no slot ever drops them in the filter:
+first the **sender's** nation (the diplomat's owner) gets its line, then the **target's** nation
+gets its line; both calls pass the diplomat's position as the message cell. Line numbers:
+
+| offer | outcome | sender hears | target hears |
+|---|---|---|---|
+| peace (3) | accepted | 47 + target | 59 + sender |
+| peace | refused | **44 + target** | 85 + sender (no text, see below) |
+| ceasefire (2) | accepted | 53 + target | 62 + sender |
+| ceasefire | refused | **50 + target** | 82 + sender (no text) |
+| war (1) | always accepted | 56 + target | 65 + sender |
+
+A computer nation has no advisor object, so its say calls do nothing: a human sender always gets
+the line for his offer, whoever the target is; a human target gets its line only for accepted
+offers and war (82..87 are past the end of `Mentor.tdb`, which has entries 0..81; what the
+client does with them is uncertain, U). There is no extra message for a refusal (no dialog, no
+sound effect), and no line when the errand fails (target embassy gone, no way in, diplomat dead,
+recalled). Each errand decides at most once, so each line is said at most once per offer. Like
+every queued line, it is still lost in the voice player if another voice is playing (1.1.2).
 
 Lines are per nation, not per town. A human's other towns all feed the same advisor.
 
@@ -1203,13 +1230,65 @@ owner's race; the same for an own or a foreign market.
 For a foreign market the sliders are read-only and the start/stop buttons are absent. Only one
 of the two start/stop buttons is enabled at a time (the one that changes the current state).
 
+**Which goods are listed (C, instruction level: `0041d1b1`..`0041d2a1` selling, `0041e1b1`..
+`0041e2a1` buying; Gold `00420881`..`00420971`, `00421881`..`00421971`, identical).** The grid
+is one loop over the goods **1..8** (counter starts at 1, runs while ≤ 8): wood, stone, iron,
+food, weapons, Schokotörtchen, Pilzschnaps, Zigarillos, placed **in good-number order** (good 1
+at (5,160), 2 at (50,160), 3 at (95,160), 4 at (140,160), 5 at (5,205) … 8 at (140,205)), not
+in the stock page's list order (+0x124). **Good 0 (Rohstoff, shown elsewhere as the race's crop
+Kakao / Pilze / Maden, T220..T222) is never listed**, on either page, for every race, own or
+foreign market, and in the Gold Edition for harbours too. All three luxuries are listed for
+every race (also the ones the viewer's or the market's race does not consume). Per button:
+
+- icon: the good's interface icon (icon table indexed by good number);
+- tooltip: the good's name (goods record +0x14C);
+- drawn "off" (button flag 0x20) when that page's flag of the good is 0 (selling: sale enabled,
+  record +0x14; buying: purchase enabled, record +0x08); it can still be clicked to select it;
+- text: the town's stock of the good (`%d`, see above), at (x+30, y)-(x+60, y+30), bottom-left.
+
+The two slider values are drawn as numbers right of the bars: (130,83)-(150,113) for the stock
+setting and (130,123)-(150,153) for the price setting. The stock slider runs 0..the town's
+storage capacity, the price slider 0..2 x the good's base price (record +0xD4).
+
+**Selected good.** Each page keeps its own selected good in a client global: selling
+`0x4AF490`, buying `0x4AF488`, both **initially 1 (wood)** (data section). They survive closing
+the page and selecting another market (never reset; a different market only rebuilds the detail
+part). A click on a grid button selects that good (`0041c700` → `0041cac0`). So good 0 can never
+be selected, shown or changed from the panel.
+
+Read-only test: the sliders are enabled and the start/stop buttons exist only when the market's
+race (data byte +0x117, the town owner's race) equals the local player's race (`0x4AF3CC`).
+
 #### Class 13: trade route (logical 11, trader selected; `0041eba0`)
 
 Header `HANDEL`, T50 "Handelsroute". `HANDELSTART` (10,35) T51 "Handelsroute starten",
 `HANDELSTOP` (40,35) T52 "Handelsroute stoppen". T255 "Von Stadt" at (110,55) and a town list
 in a `LISTBOX` at panel (1,401); T256 "Zu Stadt" at (110,155) and a second list in a `LISTBOX`
-at panel (1,501) (lists at (8,11)-(154,59) inside each box, with `RING` scrollbars). A row of
-good toggle buttons on y = 140 picks the good to carry (tooltip = good name).
+at panel (1,501) (lists at (8,11)-(154,59) inside each box, with `RING` scrollbars).
+
+**There is no row of good buttons** (C, instruction level `0041f013`..`0041f0ec`; Gold
+`004226e7`..`004227b2`, identical; an earlier version of this section misread it). The row at
+y = 140 is a set of **race tabs**:
+
+- the page's data message (`00456fc0`) carries, per race 0..2, up to 10 town ids (0xFF = none):
+  the trade partner list `0045de40` of the merchant's player for that race, **without** excluding
+  any town (the merchant's own town is in it) and without the AI's flag test. So per race: the
+  towns of the own race, or of a race at peace (3), that have an active market (Gold ships: harbours,
+  `addon.md` 5.7), up to 10, in the player's town-list order;
+- one image button per race whose list is not empty (first entry ≠ 0xFF), in race order, at
+  x = 10 + 30 x (number of tabs before it), y = 140; sprites `AMAZONEN` / `PIMONS` / `SAJIKI`
+  (table at `0x4AF4B8`), tooltips T53..T55 "Städte der Amazonen / Pimmons / Sajiki"; the shown
+  race's tab is pressed;
+- "Von Stadt" lists the **local race's** list (own towns with an active market); "Zu Stadt" lists
+  the list of the race of the pressed tab (town names only). A tab click (`0041e720`) only
+  changes which race's list "Zu Stadt" shows (client state `0x4AF4A8`); nothing is sent. When the
+  page is built the shown race is taken from the data message (the merchant's race), so it
+  starts at the own race;
+- picking a row stores that end (0x46 command with the other end 0xFF); when both ends are set
+  and differ, `HANDELSTART` is enabled.
+
+No good is chosen by the player anywhere: the merchant picks his goods himself
+(`ai-diplomacy-trade.md` 4.4).
 
 #### Class 14: diplomacy (logical 12, embassy selected; `0041f2d0`, `0041f8f0`)
 

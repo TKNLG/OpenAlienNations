@@ -9,10 +9,9 @@ import type { Town } from '../engine/economy.ts';
 import type { BitmapFont, FontName } from './ui-assets.ts';
 import { MF, type Trade, type TradeCommand, type MarketField } from '../engine/trade.ts';
 import { Rel, type Diplomacy, type DiplomacyCommand } from '../engine/diplomacy.ts';
-import { isMarketLike, terminalOf } from './addon-ui.ts';
+import { isMarketLike } from './addon-ui.ts';
 
 const GOODS_GROUP = 6;
-const GOODS = 9;
 const WHITE = '#ffffff', SELECTED = '#ffff00', RED = '#ff0000';
 const RACE_TAB = ['AMAZONEN', 'PIMONS', 'SAJIKI'];
 const STATE_ICON = ['', 'KRIEG', 'WAFFENSTILLSTAND', 'FRIEDE'];
@@ -91,15 +90,8 @@ function frame(pc: PageCtx, x: number, y: number, w: number, h: number): void {
 const goodName = (pc: PageCtx, g: number, race: number) =>
   g === 0 ? pc.hud.str(220 + race) : pc.world.rules.get(((GOODS_GROUP << 16) | g) >>> 0)?.name ?? '';
 const goodIcon = (pc: PageCtx, g: number) => pc.hud.uiIcon(((GOODS_GROUP << 16) | g) >>> 0);
-function bubble(pc: PageCtx, g: number): HTMLCanvasElement | undefined {
-  const name = pc.hud.uiOd.get(((GOODS_GROUP << 16) | g) >>> 0)?.slots.find(s => s);
-  return name ? pc.hud.ui!.get(name.replace(/^RS\\/, 'BUBBLE\\')) : undefined;
-}
-/** goods in their list order (record +0x124), as on the stock page */
-function goodsInSlotOrder(pc: PageCtx): number[] {
-  const slot = (g: number) => pc.world.rules.get(((GOODS_GROUP << 16) | g) >>> 0)?.slot ?? g;
-  return Array.from({ length: GOODS }, (_, g) => g).sort((a, b) => slot(a) - slot(b) || a - b);
-}
+/** the market pages list goods 1..8 in good-number order; good 0 (raw material) never (5.5) */
+const MARKET_GOODS = [1, 2, 3, 4, 5, 6, 7, 8];
 const townName = (pc: PageCtx, t: Town) => pc.hud.str(142 + t.race * 10 + (t.nameIndex % 10));
 const raceName = (pc: PageCtx, race: number) => pc.hud.str(116 + race);
 
@@ -110,7 +102,7 @@ function valueSlider(pc: PageCtx, id: string, x: number, y: number, value: numbe
   const travel = 91 - 21;
   const pct = max > 0 ? Math.max(0, Math.min(100, (value * 100) / max)) : 0;
   img(pc, ring ? pc.hud.tint(ring, set && pc.hud.isHover(id) ? 'hover' : 'normal') : undefined, x + 10 + (travel * pct) / 100, y + 4);
-  text(pc, String(value), x + 118, y, { h: 28, valign: 4 });
+  text(pc, String(value), x + 120, y, { h: 28, valign: 4 });
   if (!set) return;
   pc.hud.addButton({ x: pc.x0 + x, y: pc.y0 + y, w: 113, h: 28, id, tip: '',
     onDrag: px => {
@@ -147,9 +139,12 @@ export function marketPage(pc: PageCtx, selling: boolean): void {
   const m = pc.sel[0], tr = tradeOf(pc.world);
   const t = m && pc.world.economy.town(m.town);
   if (!m || !tr || !t) return;
-  const own = m.owner === pc.host.player;
-  const order = goodsInSlotOrder(pc);
-  const good = pc.hud.pageState['mkt:good'] ?? order[0];
+  // read-only unless the market's race is the viewer's race (5.5)
+  const own = t.race === pc.host.player;
+  // each page keeps its own selected good, initially 1 (wood), kept across markets (5.5)
+  const selKey = selling ? 'mkt:sellGood' : 'mkt:buyGood';
+  const stored = pc.hud.pageState[selKey];
+  const good = stored !== undefined && MARKET_GOODS.includes(stored) ? stored : 1;
   const flagF = selling ? MF.Sell : MF.Buy, stockF = selling ? MF.MinStock : MF.MaxStock, priceF = selling ? MF.MinPrice : MF.MaxPrice;
   const flagName: MarketField = selling ? 'sell' : 'buy';
   const stockName: MarketField = selling ? 'minStock' : 'maxStock';
@@ -175,11 +170,11 @@ export function marketPage(pc: PageCtx, selling: boolean): void {
   valueSlider(pc, 'mkt:price', 10, 125, price, 2 * tr.basePrice(good), own ? v => setField(priceName, price, v) : null);
   sep(pc, 152);
 
-  // goods grid: click selects; goods not enabled for this side are drawn "off"
-  order.forEach((g, i) => {
+  // goods grid: goods 1..8 in number order; click selects; goods not enabled for this side are drawn "off"
+  MARKET_GOODS.forEach((g, i) => {
     const x = 5 + 45 * (i % 4), y = 160 + 45 * Math.floor(i / 4);
     button(pc, goodIcon(pc, g), x, y, { id: `mkt:g${g}`, tip: goodName(pc, g, t.race), w: 30, h: 30, off: tr.get(t.id, g, flagF) === 0,
-      onClick: () => { pc.hud.pageState['mkt:good'] = g; } });
+      onClick: () => { pc.hud.pageState[selKey] = g; } });
     if (g === good) frame(pc, x, y, 30, 30);
     text(pc, String(t.stock[g]), x + 30, y, { h: 30, valign: 5 });
   });
@@ -196,34 +191,35 @@ export function tradeRoutePage(pc: PageCtx): void {
   header(pc, 'HANDEL', pc.hud.str(50));
   const u = pc.sel[0], tr = tradeOf(pc.world);
   if (!u || !tr) return;
-  const me = pc.host.player, eco = pc.world.economy;
+  const me = pc.host.player;
   const route = tr.routeOf(u);
   const from = route?.from ?? -1, to = route?.to ?? -1;
-  const ready = from >= 0 && to >= 0;
+  const ready = from >= 0 && to >= 0 && from !== to;
   const cmd = (action: 'start' | 'stop') => send(pc, { type: 'route', player: me, unit: u.id, action });
   button(pc, 'HANDELSTART', 10, 35, { id: 'rt:start', tip: pc.hud.str(51), disabled: !ready || route?.paused === false, onClick: () => cmd('start') });
   button(pc, 'HANDELSTOP', 40, 35, { id: 'rt:stop', tip: pc.hud.str(52), disabled: !route || route.paused, onClick: () => cmd('stop') });
 
-  // origin: own towns with an active market (merchants) or harbour (ships)
+  // per race, up to 10 towns of the own race or a race at peace with an active market (harbour
+  // for ships); "Von Stadt" shows the own race's list, "Zu Stadt" the list of the pressed tab
+  const lists = tr.partnerLists(me, u);
   text(pc, pc.hud.str(255), 110, 55);
-  const terminal = terminalOf(u);
-  const own = eco.towns.filter(t => t.alive && t.race === me && tr.hasActiveMarket(t, terminal));
-  listBox(pc, 'rt:from', 401 - 335, own.map(t => ({ id: t.id, text: townName(pc, t) })), from,
+  listBox(pc, 'rt:from', 401 - 335, lists[me].map(t => ({ id: t.id, text: townName(pc, t) })), from,
     id => send(pc, { type: 'route', player: me, unit: u.id, action: 'set', from: id, to: -1 }));
 
-  // the carried good (the original's good buttons have no effect in the simulation, 4.5)
-  for (let g = 0; g < GOODS; g++) {
-    const bi = bubble(pc, g);
-    button(pc, bi ? pc.hud.tint(bi, u.carryAmount > 0 && u.carryGood === g ? 'normal' : 'off') : undefined, 5 + 20 * g, 140,
-      { id: `rt:g${g}`, tip: goodName(pc, g, me), w: 15, h: 15 });
+  // race tabs at y 140, one per race with a non-empty list; a click only changes the shown list
+  // (client state); a newly selected trader starts at his own race (5.5 class 13)
+  if (pc.hud.pageState['rt:unit'] !== u.id) { pc.hud.pageState['rt:unit'] = u.id; pc.hud.pageState['rt:race'] = u.owner; }
+  const shown = pc.hud.pageState['rt:race'] ?? u.owner;
+  let tx = 10;
+  for (let r = 0; r < lists.length; r++) {
+    if (!lists[r].length) continue;
+    button(pc, RACE_TAB[r], tx, 140, { id: `rt:tab${r}`, tip: pc.hud.str(53 + r), off: r !== shown,
+      onClick: () => { pc.hud.pageState['rt:race'] = r; } });
+    tx += 30;
   }
 
-  // destination: partners of the origin (own race or at peace), up to 10 per race; harbour towns
-  // on any island for a ship, market towns on the merchant's island in add-on games
   text(pc, pc.hud.str(256), 110, 155);
-  const base = eco.town(from) ?? eco.town(u.town);
-  const partners = base ? tr.partnerLists(base, u).flat() : [];
-  listBox(pc, 'rt:to', 501 - 335, partners.map(t => ({ id: t.id, text: t.race === me ? townName(pc, t) : `${townName(pc, t)} (${raceName(pc, t.race)})` })), to,
+  listBox(pc, 'rt:to', 501 - 335, (lists[shown] ?? []).map(t => ({ id: t.id, text: townName(pc, t) })), to,
     id => send(pc, { type: 'route', player: me, unit: u.id, action: 'set', from: -1, to: id }));
 }
 

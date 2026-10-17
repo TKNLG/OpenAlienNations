@@ -1188,7 +1188,10 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    **automatically**, by the target player's acceptance flags (3.5), not by a dialog. The receiver
    sees no offer to answer: a human target only hears the receiver line below when the offer was
    accepted (or war declared), and the diplomacy page shows the new state; a computer target's
-   flags are its answer. A refusal leaves the receiver silent (no text exists for 82..87):
+   flags are its answer. A refusal leaves the receiver silent (no text exists for 82..87), but
+   the **sender is always told**: a human who offered peace or a ceasefire hears "… abgelehnt"
+   (44 + target / 50 + target) when it is refused. All these lines are said queued, interval 0,
+   sender first, once per decided errand (`ui/side-panel.md` 1.1.3 "Diplomacy lines in detail"):
 
    | offer | accepted when | messages (sender / receiver) |
    |---|---|---|
@@ -1367,6 +1370,20 @@ Base prices (`odb.md` A.3): raw material 0, wood 5, stone 5, iron 25, food 5, we
 luxury 20. Initialised in the town constructor (`00458cd0`). So a new market buys and sells
 nothing until the owner enables goods.
 
+**Good 0 (raw material, the race's crop: Kakao / Pilze / Maden) is never traded** (C): the
+records exist for all nine goods and the merchant's loading loop (4.4) runs over goods 0..8, but
+good 0's purchase and sale flags stay 0 for the whole game, because nothing that can set them
+reaches good 0: the market pages list and select only goods 1..8 (`ui/side-panel.md` 5.5,
+instruction level), and the computer's market job writes goods 1..8 only (4.6). The settings
+command (`00452290`) itself copies the record for whatever good number the message carries,
+without a range test; only the panel never sends 0. So no route, human or computer, ever loads,
+unloads, buys or sells good 0 (its base price is 0 as well). The luxuries 6..8 are tradeable for
+every race, whichever race consumes them.
+
+Rebuild (I): the settings command is validated in the simulation (it also arrives from network
+peers), so it accepts goods 1..8 only, which is everything the original's panel can send. Saves
+made while our panel still offered good 0 have good 0's two flags cleared on load.
+
 Prices are **static settings**; there is no supply/demand price model (C by absence). The panel
 sliders cover 0..capacity for the stock fields and 0..2 x base for the price fields
 (`ui/side-panel.md`). Commands: set all six fields of one good (`00452290`), set the purchase flag
@@ -1437,8 +1454,9 @@ Money flow summary (`0047d4d0`, `0045dab0` add, `0045db60` subtract):
 | peace with the partner ends | the merchant returns to A and the route ends (C) |
 | the merchant is attacked | I: the flee job of an unarmed unit replaces the route (`units-and-jobs.md` kind 0x26); not traced |
 
-The trade route panel's row of good buttons (`ui/side-panel.md`) has no counterpart in the
-simulation; the merchant chooses goods himself (U what the buttons do).
+The trade route panel has **no good buttons** (an earlier reading mistook its race tabs for
+them; `ui/side-panel.md` 5.5 class 13): the player only picks the two towns, and the merchant
+chooses the goods himself (4.4).
 
 ### 4.6 Computer markets and merchants (C, `0046dd50`, every 150 ticks)
 
