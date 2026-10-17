@@ -1166,7 +1166,8 @@ not the nearest or the weakest.
 
 Outposts broadcast their territory (radius +0xB0) on completion and withdraw it on destruction
 (message (0x55,24) with the radius, `0045f5a0`; rules in `economy.md` 11). In combat, territory is read only by the AI
-alert (7) (C).
+alert (7) (C). Losing an outpost destroys nothing else: buildings left outside the shrunken area
+stand and work on (`economy.md` 11.5.1, C).
 
 ### 9.5 Garrison range (C, `004709b0` called with a building id)
 

@@ -793,10 +793,7 @@ export class Ai {
       const [ux, uy] = this.cell(u);
       if (this.dist(ux, uy, x, y) < R || this.w.territory.ownerAt(ux, uy) === tt.id) return false;
       const j = u.job ? this.w.sched.get(u.job) : undefined;
-      if ((j && !j.cancelled) || u.path) return true;
-      if (this.w.isShip(u)) return false;
-      this.walkToward(u, x, y);
-      return true;
+      return (!!j && !j.cancelled) || !!u.path;
     };
     assignArmy(this, members.filter(u => u.inside < 0), targets, perTarget, reassign, far);
     d[3] = this.rand() & 1;

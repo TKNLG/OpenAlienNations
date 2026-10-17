@@ -127,7 +127,7 @@ Build menu: harbour and shipyard come from `menuState` like every building. With
 | `combat.ts` | ships' firing-position search on the sea, fishing boat may act on fish, no healing of ships, no rubble of 62/63 |
 | `economy.ts` | goals 17..20; storage capacity by flag 0x10 in add-on games |
 | `trade.ts`, `visit.ts` | traders by flag 0x40, harbour as terminal, island filter for merchants, docking |
-| `diplomacy.ts` | diplomats only walk to embassies on their island (9.3) |
+| `diplomacy.ts` | diplomats only walk to embassies on their embassy's island; across water the offer is decided as he steps out, then he goes back in (9.3) |
 | `ai.ts`, `ai-town.ts` | targets 62/63, priorities, fishing / warship gangs, AI fishing, wandering warship (0x28), harbour/transport market pass, training hook, planner users (founding, army), capacity skip, 68-type tables |
 
 Speed (Node 22, this container): AmazonsAO 4 with computer players **0.01..0.05 ms/tick** (was

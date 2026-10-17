@@ -10,7 +10,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { RaceSetupLite } from './economy.ts';
-import { cellOf, enterDoor, exitBuilding, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkToEntity } from './visit.ts';
+import { cellOf, enterDoor, exitBuilding, leaveQueues, nearEntity, setIdle, stopWalking, walkToEntity } from './visit.ts';
 
 /** relation states (3.1); hostile in AI and patrol code: 0 and 1 */
 export const Rel = { None: 0, War: 1, Ceasefire: 2, Peace: 3 } as const;
@@ -30,8 +30,14 @@ const M = {
 
 /** errand job data slots */
 const ER = { Phase: 0, Target: 1, State: 2, Home: 3, Dest: 4, Size: 5 } as const;
-/** errand phases: to the foreign embassy, inside it, back home */
-const PH = { Start: 0, ToDest: 1, Inside: 2, Home: 3, ToHome: 4 } as const;
+/**
+ * errand phases: to the foreign embassy, inside it, back home; `Remote`: add-on, the target race's
+ * embassies are all on other islands, so the offer is decided on the first run outside and he goes
+ * straight back in (docs/game/addon.md 9.3, ai-diplomacy-trade.md 3.4 step 2)
+ */
+const PH = { Start: 0, ToDest: 1, Inside: 2, Home: 3, ToHome: 4, Remote: 5 } as const;
+/** errand Dest slot: target not chosen yet (saves from before the choice moved to sending) / none found */
+const DEST_UNCHOSEN = -1, DEST_NONE = -2;
 
 export type DiplomacyCommand =
   /** send the embassy's diplomat with an offer of state 1 war / 2 ceasefire / 3 peace to a race (3.4) */
@@ -210,9 +216,37 @@ export class Diplomacy {
     if (!d) return false;
     if (d.inside >= 0 && d.inside !== b.id) this.w.logistics.leave(d);   // recalled from inside a foreign embassy
     const data = new Array<number>(ER.Size).fill(0);
-    data[ER.Phase] = PH.Start; data[ER.Target] = target; data[ER.State] = state; data[ER.Home] = b.id; data[ER.Dest] = -1;
+    data[ER.Target] = target; data[ER.State] = state; data[ER.Home] = b.id;
+    // the target embassy is chosen now, when the errand is created (3.4 step 2)
+    this.choose(d, b, data);
     this.w.logistics.assign(d, DiplomacyJob.Errand, 1, data);
     return true;
+  }
+
+  /**
+   * Choose the errand's target (3.4 step 2): for each town of the target player in town-list
+   * order, the town's first embassy, if active; the nearest to the diplomat wins (earlier town on
+   * a tie). Island maps: only candidates on the home embassy's island; candidates elsewhere only
+   * make the errand a remote one (decided at once, addon.md 9.3). Sets the Phase and Dest slots.
+   */
+  private choose(u: Entity, home: Entity, data: number[]): void {
+    const eco = this.w.economy;
+    const isl = this.w.islandAt(...cellOf(home));
+    const [x, y] = cellOf(u);
+    let any = false, best: Entity | null = null, bd = Infinity;
+    for (const tid of eco.players[data[ER.Target]]?.towns ?? []) {
+      const t = eco.towns[tid];
+      if (!t) continue;
+      const first = this.w.entities.find(e => this.isEmbassy(e) && e.alive && e.town === t.id && e.owner === t.race);
+      if (!first || !first.active) continue;
+      any = true;
+      const [ex, ey] = cellOf(first);
+      if (this.w.islandAt(ex, ey) !== isl) continue;
+      const dist = this.w.logistics.dist(x, y, ex, ey);
+      if (dist < bd) { bd = dist; best = first; }
+    }
+    data[ER.Phase] = best || !any ? PH.Start : PH.Remote;
+    data[ER.Dest] = best ? best.id : DEST_NONE;
   }
 
   /** "Diplomat zurückbeordern": the errand stops and he walks home (3.4 step 6) */
@@ -242,7 +276,7 @@ export class Diplomacy {
       const j = this.errandJob(u);
       if (!j) continue;
       const ph = j.data[ER.Phase];
-      return { diplomat: u.id, target: j.data[ER.Target], state: j.data[ER.State], decided: ph >= PH.Inside };
+      return { diplomat: u.id, target: j.data[ER.Target], state: j.data[ER.State], decided: ph >= PH.Inside && ph !== PH.Remote };
     }
     return null;
   }
@@ -256,24 +290,28 @@ export class Diplomacy {
     for (;;) {
       switch (d[ER.Phase]) {
         case PH.Start: {
-          // leave the own embassy (resumed outside), then head for the target race's nearest active embassy
+          // leave the own embassy (resumed outside), then head for the target chosen at sending
           if (exitBuilding(this.w, u)) return 1;
-          const [x, y] = cellOf(u);
-          let list = this.embassies(d[ER.Target]);
-          if (this.w.addon) {
-            // add-on: only embassies on his own island (docs/game/addon.md 9.3); none there: home
-            const isl = this.w.islandAt(x, y);
-            const own = list.filter(e => this.w.islandAt(...cellOf(e)) === isl);
-            if (list.length && !own.length) { d[ER.Phase] = PH.Home; continue; }
-            list = own;
+          if (d[ER.Dest] === DEST_UNCHOSEN) {
+            // an errand from an older save: choose now
+            const home = this.w.get(d[ER.Home]);
+            if (home) this.choose(u, home, d); else d[ER.Dest] = DEST_NONE;
+            if (d[ER.Phase] === PH.Remote) continue;
           }
-          const dest = nearestTo(this.w, list, x, y);
-          if (!dest) return this.finish(u);   // none: the errand ends, he stays outside (3.4 step 2)
-          d[ER.Dest] = dest.id;
-          if (!walkToEntity(this.w, u, dest)) { d[ER.Phase] = PH.Home; continue; }
+          if (d[ER.Dest] === DEST_NONE) return this.finish(u);   // none: the errand ends, he stays outside (3.4 step 2)
+          const dest = this.w.get(d[ER.Dest]);
+          // gone since sending, or no way there: the go-to fails, nothing changes, back home (3.4 step 5)
+          if (!dest || !walkToEntity(this.w, u, dest)) { d[ER.Phase] = PH.Home; continue; }
           d[ER.Phase] = PH.ToDest;
           return 1;
         }
+        case PH.Remote:
+          // add-on, target embassies only on other islands: decided on the first run, once he is
+          // out of his door, then straight back in (addon.md 9.3)
+          if (exitBuilding(this.w, u)) return 1;
+          this.decide(u.owner, d[ER.Target], d[ER.State]);
+          d[ER.Phase] = PH.Home;
+          continue;
         case PH.ToDest: {
           if (u.path) return 1;
           const dest = this.w.get(d[ER.Dest]);

@@ -245,6 +245,65 @@ test('world: town halls claim at map load; outposts on completion; withdrawn aft
   assert.ok(owned(ter, t.id) <= before + 1);
 });
 
+test('world: a lost outpost destroys nothing; buildings left outside the area stand and work on (11.5.1)', { skip }, () => {
+  const { world: w } = loadMission('Pimmons.mdb', 1, DATA, false);
+  const ter = w.territory;
+  const t = w.economy.towns.find(x => x.alive)!;
+  t.stock.fill(99);
+  const p = w.economy.players[t.race]!;
+  const post = w.rules.get(((t.race << 16) | 53) >>> 0)!;
+  if (post.invention >= 0) p.progress[post.invention] = p.costs[post.invention];
+  const house = w.rules.get(((t.race << 16) | 37) >>> 0)!;
+  // a large outpost far out at the edge of the town's area
+  let site: [number, number] | null = null;
+  for (let d = 34; d >= 4 && !site; d--) for (const [dx, dy] of [[d, 0], [-d, 0], [0, d], [0, -d], [d, d], [-d, -d], [d, -d], [-d, d]]) {
+    if (w.logistics.canPlace(t, post, t.x + dx, t.y + dy)) { site = [(t.x + dx) & (w.size - 1), (t.y + dy) & (w.size - 1)]; break; }
+  }
+  assert.ok(site, 'a site for the outpost');
+  const op = w.logistics.placeBuilding(t, 53, site![0], site![1])!;
+  w.logistics.complete(op);
+  // the territory as it will be once the outpost's circle has gone
+  const after = new Territory(w.size);
+  after.restore(JSON.parse(JSON.stringify(ter.snapshot())));
+  after.remove(t.id, site![0], site![1]);
+  // houses (one completed, one a site) on spots that only the outpost's disc makes buildable
+  const placed: Entity[] = [];
+  for (let y = 0; y < w.size && placed.length < 2; y += 2) for (let x = 0; x < w.size && placed.length < 2; x += 2) {
+    if (!w.logistics.canPlace(t, house, x, y) || after.inTown(t.id, x, y, house.sizeX, house.sizeY)) continue;
+    const b = w.logistics.placeBuilding(t, 37, x, y);
+    if (b) placed.push(b);
+  }
+  assert.equal(placed.length, 2, 'two spots in the outpost-only area');
+  const [built, pending] = placed;
+  w.logistics.complete(built);
+  assert.ok(built.complete && built.active);
+  let free: [number, number] | null = null;   // a third spot, left empty
+  for (let y = 0; y < w.size && !free; y += 2) for (let x = 0; x < w.size; x += 2) {
+    if (w.logistics.canPlace(t, house, x, y) && !after.inTown(t.id, x, y, house.sizeX, house.sizeY)) { free = [x, y]; break; }
+  }
+  assert.ok(free);
+  const buildings0 = w.entities.filter(e => e.kind === Kind.Building && e.town === t.id).length;
+  // the outpost is destroyed: its circle goes at the end of its collapse, nothing else happens
+  w.combat.collapse(op, true);
+  for (let i = 0; i < 60 && w.get(op.id); i++) w.step();
+  assert.equal(w.get(op.id), undefined);
+  assert.deepEqual(ter.owner, after.owner, 'the area shrank as on the removal');
+  for (const b of placed) {
+    assert.ok(!ter.inTown(t.id, Math.floor(b.x / SUB), Math.floor(b.y / SUB), house.sizeX, house.sizeY), 'now outside the area');
+    assert.equal(w.get(b.id), b, 'still standing');
+    assert.ok(b.alive);
+    assert.equal(b.town, t.id, 'still the same town');
+  }
+  assert.ok(built.complete && built.active, 'the completed house still works');
+  assert.ok(!pending.complete, 'the site stays a site');
+  for (let i = 0; i < 700; i++) w.step();   // past a decay and a round: nothing re-tests the area
+  for (const b of placed) assert.equal(w.get(b.id), b);
+  assert.equal(w.entities.filter(e => e.kind === Kind.Building && e.town === t.id).length, buildings0 - 1);
+  // only placement follows the new area
+  assert.equal(w.logistics.canPlace(t, house, free![0], free![1]), false);
+  assert.ok(w.logistics.canPlaceSite(t, house, free![0], free![1]), 'the spot itself is still free');
+});
+
 test('world: the simulation does not test territory; the UI/AI test does; mine exempt', { skip }, () => {
   const { world: w } = loadMission('Pimmons.mdb', 1, DATA, false);
   const t = w.economy.towns.find(x => x.alive)!;

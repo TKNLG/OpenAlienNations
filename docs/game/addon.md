@@ -296,7 +296,7 @@ themselves and any land cell, diagonals included.** No land unit can stand next 
 | **Follow path (0x06)**: on every run, if the island of the destination cell differs from the island of the unit's current cell, the job **fails at once** | `0048b230` |
 | **Go to object (0x07)**: if the target's island differs from the unit's and the target's cell is land (id ≠ 0), fail at once. The transport-ship target is special (5.2) | `00485750` |
 | trade partners for **merchants** must be on the merchant's island; ships trade with any harbour | `00463ef0`, 5.7 |
-| a diplomat only walks to embassies on his own island | `004821c0`, 9.3 |
+| a diplomat only walks to embassies on his embassy's island; across water the offer is decided at once and he goes back in | `004821c0`, 9.3 |
 | AI: founding and army use ships across water; fishing picks water cells | 8.4, 8.3 |
 | mission goal 19 counts per island | 9.2 |
 
@@ -1190,13 +1190,30 @@ Parameters p1, p2 and p3 are as in `mdb.md`. The file side belongs to `docs/form
 
 ### 9.3 Diplomacy (C)
 
-- **Diplomat errand** (`004821c0` = AN `00478650`): the diplomat chooses the nearest active
-  embassy of the target race **on his own island**.
-  - If the target race has active embassies, but none on his island, he walks back into his own
-    embassy and the errand ends without an offer.
-  - With no embassy at all, the errand ends at once (base).
-
-  So cross-sea diplomacy only works after a diplomat has been shipped over by hand.
+- **Diplomat errand** (constructor `004821c0` = AN `00478650`, run `004825c0` = AN `00478910`;
+  re-derived at instruction level 2026-10-17, correcting an earlier reading): the target is chosen
+  when the errand is created, among the target player's towns' first embassies that are active
+  (`ai-diplomacy-trade.md` 3.4 step 2), and only those on the island of the **sending embassy**
+  (island byte at the home embassy's position, `00482239`..`0048229f`; candidates compared at
+  `00482363`). Distance is still measured from the diplomat.
+  - A candidate on that island: he walks there and the offer is decided after he has entered,
+    as in the base game.
+  - Candidates exist, but none on that island (`004824c9`..`00482507`): the errand's child is a
+    go-to back into his own embassy and its state is set to 1. The run (`004825db`: state 1 is
+    tested before the child runs) then decides the offer on the errand's **first run**, i.e. as
+    soon as he is out of his door, with the normal acceptance rule, messages and relation
+    broadcast (`0048260c`..`004827b9`), and he walks straight back in. **Cross-sea diplomacy
+    therefore works**: the diplomat steps out for a moment, goes back in, and the offer has been
+    delivered and answered. No ship carries him; neither the errand nor the naval planner (8)
+    moves diplomats.
+  - No candidate at all: the errand has no child and ends on its first run (base).
+  - Contact (`00465d00` = AN `0045fa40`, `ai-diplomacy-trade.md` 3.3) has no island test: an
+    embassy becoming active anywhere gives first contact (war) with every player that has an
+    active embassy anywhere. Both players need an active embassy: the sender to send, the target
+    to be a candidate.
+  - Computer offers (`0046fd60` = AN `004687a0`, 3.5) are unchanged, with no island test: the AI's
+    diplomat crosses water the same way (out of his door and back in). Acceptance flags sit at
+    player +0x295 + race (peace) and +0x298 + race (ceasefire) in the Gold exe (AN +0x261/+0x264).
 - **Peace side effects** (`0045e100`): entering or leaving peace sends the building-visibility
   message for markets **and harbours** (fog 3.3).
 
@@ -1245,7 +1262,7 @@ checked in game.)*
 | mountain threshold 290 instead of 250; high band 250 instead of 200. The mine needs height > 290; flag 0x100 and the worn-path limit move with it | `0044ef50`, `0044c020`, `0044c7d0` |
 | island tests in follow-path and go-to | 2.5 |
 | merchants trade only with towns on their island | 5.7 |
-| diplomats walk only on their island | 9.3 |
+| diplomats walk only on their embassy's island; offers across water are decided at once | 9.3 |
 
 ### 10.4 Fixes and other changes (all modes)
 

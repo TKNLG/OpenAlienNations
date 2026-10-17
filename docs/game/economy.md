@@ -1165,6 +1165,49 @@ Consequences:
   value (11.7). A faithful rebuild reproduces it; a corrected one recounts. Offer both behind a
   fidelity switch.
 
+#### 11.5.1 What a shrinking territory does *not* do (C, both editions, instruction level)
+
+Question settled (play-test report "buildings left outside the area after an outpost is destroyed
+collapse in the original"): **the original does nothing to buildings, sites, units or goods when
+a territory shrinks or a record is deleted.** No building is tested against the new area, none is
+destroyed, collapsed, deactivated, damaged or handed to another town, no occupant is ejected,
+no stock is touched and no advisor line is said. This holds for the town's own buildings that
+end up outside its area, for buildings that now lie inside another town's (also an enemy's)
+area after that town took the freed blocks over, and for every building type alike (so there is
+no list of exempt types: mine, harbour, shipyard, town hall, outposts and ordinary buildings are
+all simply left alone). It is the same in AN.exe and Gold `dvge.exe`.
+
+Evidence (each point checked in the disassembly, not only the decompiler output):
+
+| what | AN.exe | Gold `dvge.exe` | finding |
+|---|---|---|---|
+| message handler (0x55,24) | `004572c0` | `0045cfc0` | Calls only the record lookup/creation `0044e280` and either add (`0044e920`, `0044e9a0`, `0044e7c0`) or remove (`0044e830`), then returns. No other call |
+| remove | `0044e830` (0x44E830..0x44E91C) | `00454150` | Calls only the recompute `0044e9a0` (for T with clearing, then every record), list helpers (`00412800`, free `00490680`) and the stone clearer `0044e4b0`. No virtual call, no access to any building, unit or town list |
+| recompute | `0044e9a0` | `004542c0` | Reads and writes only the block ownership map, the record (circles, border, count) and the cells' stone bits (11.4, 11.6) |
+| ownership map users | global `0x4B4FAC`: 23 instructions, all in the territory module (0x44E3C7..0x44F49D) plus map reset `0040e970` and allocation `00449dc0` | global `0x4C22D4`: 23 instructions, territory module plus `00411aa0`, `0044ef50` | Nothing outside the module reads the map directly |
+| record table users | `0x4B4BA0`: territory module and map reset only | `0x4C1EC8`: the same | |
+| area lookups | `0044e3b0` (11 call sites), `0044e610` (4), `0044e3e0` (2) | `00453cd0` (11), `00453f30` (4), `00453d00` (2) | Callers are exactly the readers of 11.7: the placement test `00447cd0` (from the UI `004404a0`/`00441e80`, the free-spot search `00449840` used by planting, world populate/setup and the AI, and the AI `00467e10`), the minimap `0044d230`, and AI routines (`004621c0`, `00462e30`, `00463d00`: intruder detection; `0046cf30`, `0046d3a0`: idle AI units outside the area are walked back; `0046ac30`, `0046b490`, `00466020`, `00466e20`: planner and military searches). None of them destroys a building (`ai-diplomacy-trade.md`: no AI routine destroys or cancels a building) |
+| building die method | `0045f5a0` | `00465800` | Sends the remove message in phase 2 and continues with rubble (`combat.md` 10.3). It does not look at other buildings; the same call sequence in both editions |
+| texts | `Mentor.tdb`, `DV.tdb` (base and Gold) | | No line about lost territory or buildings outside the area; the building-loss lines are only mentor#80 (a building collapsed), #21 (a town destroyed) and #71/#72 (decay) |
+
+Consequences:
+
+- A building that ends up outside its town's area keeps working exactly as before: production,
+  housing, storage, operators, training, upkeep, tax, decay and repair are unchanged. It can be
+  demolished normally (mentor#80 at the end of its collapse, like any demolition).
+- Its town still owns it, even if the block under it now belongs to another town (own or
+  foreign). Ownership of buildings never follows the territory.
+- What the shrink does change is only what reads the area (11.7): new buildings can no longer
+  be placed there by the player or the AI (the four-corner test), a town hall may now be founded
+  nearby, the minimap tint and the stones move, the AI's outpost wish (count rule) and intruder
+  detection follow the new area.
+- Buildings disappear around a lost outpost in the original only through ordinary causes: the
+  attackers going on to the next targets (combat), decay (5.8), or the loss of the **town hall**,
+  which destroys the whole town (`combat.md` 10.4).
+
+A rebuild must not remove or deactivate buildings when a territory shrinks. If the remembered
+behaviour is wanted, it can only be an enhanced option (off by default).
+
 ### 11.6 Border stones in the map cells (C, `0044e7c0`, `0044f0b0`, `0044f0f0`)
 
 - For each border block (bx, by) the **cell (2bx, 2by)** (the even/even cell of the block, which
@@ -1241,6 +1284,10 @@ with the 0x1000 rule), the AI (`ai.ts`, `ai-town.ts`), `src/client/border-stones
   happens *(I: the original's behaviour for a missing record is not documented)*.
 - **Count quirk** (11.5): reproduced by default; `WorldSetup.fidelity.territoryCountQuirk =
   false` recounts on the clearing recompute.
+- **Shrinking territory** (11.5.1): no difference. Ours, like the original, leaves every
+  building standing and working when an outpost or town hall collapses and its circle goes
+  (`World.destroyBuilding` only calls the removal); buildings outside the new area are not
+  touched. Do not add a collapse or deactivation to vanilla.
 - **Current-town switch** (11.7): the client sets its current town directly; there is no
   "set current town" network command, because our current town is client state.
 - **Stones and territory on water** (11.6): no difference. Our territory and stones cover lakes

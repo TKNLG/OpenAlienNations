@@ -1110,11 +1110,38 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    be inside or out on an errand). A diplomat already on an errand is recalled first
    (`00478bd0`) and his current job is cancelled (see 7 for what that does to the embassy). The
    diplomat leaves with a new errand job (kind 0x38).
-2. He walks to the **nearest active embassy** of the target race (wrapped distance from his
-   position). If the target race has none, the errand ends at once (I: the diplomat, already sent
-   out of his embassy, is then left standing outside it).
-3. When he has entered it, the offer is decided **immediately and automatically**, by the target
-   player's acceptance flags (3.5), not by a dialog:
+2. The target embassy is chosen **when the errand is created** (its constructor, i.e. at the
+   moment of sending, before he has left the building; C, `00478650`, Gold `004821c0`):
+   - candidates: for each town of the target player, in the player's town-list order (player
+     +0x234, Gold +0x268), only the **first** embassy of that town's embassy list (town
+     +0x2AC..+0x2B4), and only when it is active (state 2). A second embassy of the same town is
+     never considered;
+   - the nearest candidate by wrapped distance from the diplomat's position wins; ties go to the
+     earlier town (strict `<`);
+   - the errand's child is a go-to into that embassy (`0047ac60`, Gold `00485670`).
+   - If the target race has no candidate, the errand has **no child** and its first run ends it
+     (I: the diplomat, already sent out of his embassy, is then left standing outside it).
+   - **Gold Edition, island maps:** only candidates on the island of the **sending embassy** (the
+     island byte under the home embassy's position, not the diplomat's own position) count. When
+     candidates exist but none is on that island, the errand's child is a go-to back into the home
+     embassy and the errand's state is set to 1 ("decide now") right away: on its first run (after
+     the eject, so he is just outside his door) the offer is **decided at once, by remote**,
+     exactly as in step 3 (same acceptance rule, same messages, same relation broadcast), then he
+     walks straight back in. So across water the diplomat only steps out of his door and back in,
+     and the offer is still delivered. No ship is involved, and the naval planner never carries
+     diplomats (C, `004825c0` first test `state == 1` before the child is run; `004821c0`
+     `00482507`). On maps without an island table (base maps) every position reads island 0, so
+     the base rule applies unchanged.
+   The errand job's run (`00478910`, Gold `004825c0`) has three states at +0x2C: 0 = on the way to
+   the foreign embassy, 1 = decide the offer now, 2 = decided (or failed), on the way home. Each
+   run first decides when the state is 1 (then sets 2), then runs the child; when the child ends
+   in state 0, the state becomes 1 if the go-to succeeded (child +0x19) or 2 if it failed, and a
+   go-to home becomes the new child; when it ends in state 2 the errand ends.
+3. When he has entered it (go-to succeeded), the offer is decided on the errand's next run,
+   **automatically**, by the target player's acceptance flags (3.5), not by a dialog. The receiver
+   sees no offer to answer: a human target only hears the receiver line below when the offer was
+   accepted (or war declared), and the diplomacy page shows the new state; a computer target's
+   flags are its answer. A refusal leaves the receiver silent (no text exists for 82..87):
 
    | offer | accepted when | messages (sender / receiver) |
    |---|---|---|
@@ -1129,7 +1156,9 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    no separate capture rule, I).
 6. "Diplomat zurückbeordern" (T254) recalls him (`00478bd0`): the errand's current child is
    replaced by a walk home (go-to his embassy); the errand job itself goes on and ends when he is
-   inside.
+   inside. The recall does not touch the errand's state, so a cross-water errand (state 1, step 2)
+   is still decided; in practice it is decided on the first run anyway, before a recall is
+   possible (he is still inside his embassy until then).
 7. **Link to the embassy** (C, `units-and-jobs.md` 8.5): during the errand he stays the embassy's
    stored operator and the embassy stays active. Back inside, the entry restarts the embassy's
    operator job (first run after 100 ticks). If the errand is destroyed under way (it has a walk
@@ -1326,7 +1355,8 @@ route from this town to the **first** partner in the list.
   (C)
 - Relations start at 0; contact (embassies on both sides) sets war; offers between humans are
   decided automatically by the receiver's check boxes at the moment the diplomat arrives (both
-  default to "accept"). A player who wants to refuse peace must untick the box beforehand. (C)
+  default to "accept"; across water in the Gold Edition: the moment he steps out of his own
+  embassy, 3.4 step 2). A player who wants to refuse peace must untick the box beforehand. (C)
 - Relation changes are broadcast as message 0x5B to all connections and applied on every machine;
   the decision itself is made where the diplomat's job runs (I: the hosting machine, consistent
   with the handbook's remark that the server does more computing).
