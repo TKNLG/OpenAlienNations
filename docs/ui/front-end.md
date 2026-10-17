@@ -369,7 +369,7 @@ Ring travel on the sound sliders is 161 px (track 197 px wide - ring 36 px), rin
 
 | option | values | default (new config) | effect |
 |---|---|---|---|
-| hardware acceleration | on / off | off | renderer choice in the original (3D blits, faster zoom). Rebuild: ignore or map to a renderer switch |
+| hardware acceleration | on / off | off | Direct3D instead of software terrain renderer (`docs/rendering/terrain-drawing.md` "Brightness": bilinear texture, about 6 % brighter ground; sprites unaffected). Rebuild: ignore or map to a renderer switch |
 | alpha shadows | on / off | on | draw building/unit shadows (manual) |
 | resolution | 800 x 600, 1024 x 768 | 800 x 600 | game resolution; changes the playfield size and the side-panel art set (`INTERFACE800` / `INTERFACE1024`) |
 | hardware scrolling | on / off | on | scrolling method of the original renderer (I). Rebuild: ignore |

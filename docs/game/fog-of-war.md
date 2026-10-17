@@ -359,9 +359,11 @@ Since only static objects ever get the seen flag:
 
 ### 5.3 Sprite brightness (C, `00435850`)
 
-A drawn object's brightness comes from its cell's light value. With fog on, it is halved when the
-object's cell counter is 0, unless the object has the never-dim flag (+0xA8). Remembered
-buildings and nature in the fog thus appear at half brightness, matching the terrain.
+A drawn object's brightness value is 64 + its cell's light value (capped at 255). With fog on, it
+is halved when the object's cell counter is 0, unless the object has the never-dim flag (+0xA8).
+Only bit 7 of the value is used, so in effect the terrain light never shades sprites: an object is
+drawn at full colour, or at exactly half colour when halved. Remembered buildings and nature in
+the fog thus appear at half brightness. Details: `docs/rendering/objects.md` 2.2.
 
 ### 5.4 Minimap (C, `0044c060`, `0044a400`, `0044d230`)
 

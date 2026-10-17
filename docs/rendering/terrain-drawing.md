@@ -25,7 +25,8 @@ corner and v towards the left corner. This is a mirror image (not a rotation) of
 matters for the look of the art: the shoreline and water tiles have direction-dependent detail
 (ripples, foam texture), and a rotated mapping shows every coast mirrored.
 
-**Two triangles, split left–right (C+I).** The Direct3D path of dvge.exe draws each quad as a
+**Two triangles, split left–right (C+I).** The Direct3D path (AN.exe `0043d220`, dvge.exe
+`004412a0`, the same code) draws each quad as a
 triangle fan of the four corners in the order left, top, right, bottom (`004412a0`, primitive type
 6, vertex format 0x1C4), i.e. the triangles (left, top, right) and (left, right, bottom): the
 diagonal joins the **left and right** corner. The software path (AN.exe `0043e4c0`, dvge.exe
@@ -145,16 +146,22 @@ screen, each quad with the rule above; shorelines are ordinary terrain quads, no
 Identical drawing code (same instructions at shifted addresses: AN.exe `0043e4c0` = dvge.exe
 `00442540`, `00445920` = `00449a40`, `00445e40` = `00449f60`, `00486050` = `00492960`; shoreline
 table and loader the same).
-Gold differs only in what it feeds in: the add-on class tables, water class 10 instead of 11, the
-open-sea class 9 drawn as an ordinary land set, and the extra Direct3D path, which maps textures
-and splits quads exactly like the software path.
+Gold differs only in what it feeds in: the add-on class tables, water class 10 instead of 11, and
+the open-sea class 9 drawn as an ordinary land set. **Both** executables have the Direct3D path
+(an earlier version of this page said only Gold had it); it maps textures and splits quads exactly
+like the software path, and it is off by default in both (see "Brightness").
 
 ## Sources
 
 | what | AN.exe | dvge.exe |
 |---|---|---|
 | quad loop, software | `0043e4c0` | `00442540` (texture position per corner, in texels: left (0, 63.75), top (63, 63.75), right (63, 0), bottom (0, 0)) |
-| quad loop, Direct3D | - | `004412a0` (fan left, top, right, bottom with uv (0,1), (1,1), (1,0), (0,0)) |
+| quad loop, Direct3D | `0043d220` (full redraw), `0043d700` (scroll) | `004412a0` (fan left, top, right, bottom with uv (0,1), (1,1), (1,0), (0,0)), `00441780` |
+| quad loop, software, full redraw | `0043dc70` | `00441cf0` |
+| Direct3D device and stage setup | `0043ca00` (states at `0x43CCA4..0x43CCF9`) | `00440a60` (`0x440D04..0x440D59`) |
+| tile texels 32-bit → 12-bit | `0043b900` | `0043f960` |
+| Direct3D texture upload (A4R4G4B4) | `0043b130` | `0043f190` |
+| renderer choice (config byte, caps test) | `00488280`, flag `0x4B393C` | `00495010`, flag `0x4C0C64` |
 | polygon rasteriser | `0043dfb0` | `00442030` |
 | blend + cache lookup | `00445920` | `00449a40` |
 | tile sets, shoreline table | `00486050` | `00492960` (table loop `00492ff4`) |
@@ -188,26 +195,80 @@ completely on the next frame. **Our renderer**: rebuild every 32 × 32 chunk tha
 touching a changed vertex: the pad grown by one cell for a foundation (because of light), the
 four quads around the vertex for a worn path.
 
-## Brightness
+## Brightness (C+I, confirmed at instruction level in both executables)
 
-Each vertex's light value (128..239; formula and worked values in terrain-gen.md step 5)
-modulates the tile colour like a grey vertex colour, interpolated across the quad. The light is
-computed once at generation and recomputed locally after a foundation changes heights (same
-function, `00447b90`); the frame builder just copies the stored byte, nothing is cached or
-recomputed per frame.
+### What goes in
 
-Scale of the modulation (C+I):
+- **Light byte L** per vertex (128..239 for all ground, flat 162; formula in terrain-gen.md step
+  5). Computed at generation and recomputed locally after a foundation (`00447b90`). The frame
+  builder (`00445e40` / `00449f60`) copies the cell's raw byte into the vertex record every frame;
+  there is no per-frame transform, table or cache.
+- **Fog** (option bit 0x08, on by default; only MAGICEYE clears it): each of the quad's four
+  corners gets its own grey level g before anything is interpolated:
 
-- Direct3D path (dvge.exe `004412a0`): the vertex diffuse colour is the grey (L, L, L) with L the
-  light byte (halved per channel for fogged vertices, see below), so with the default
-  texture-modulate stage the pixel is **tile colour × L / 255**: flat ground (162) at about 0.635
-  of the tile colour, the brightest slope (239) at 0.937, the darkest (128) at 0.502. The
-  stage-0 blend mode itself was not traced; this assumes Direct3D's default (modulate).
-- Software path (AN.exe `0043dfb0`): light is interpolated in 16.16 fixed point, and per pixel
-  its top six bits (L >> 2) multiply each 4-bit channel of the 12-bit (4:4:4) texel; the
-  product is shifted into the screen's pixel format. Net effect ≈ tile colour × L / 256, the
-  same as the Direct3D path within rounding.
+  | vertex | g |
+  |---|---|
+  | fog off, or cell currently visible (viewer counter > 0) | L |
+  | explored (flags bit 0x02), not visible | L >> 1 (integer halving: 162 → 81) |
+  | never explored | 0 |
 
-So the light byte is an absolute brightness (255 would be the unshaded tile), not a factor
-relative to flat ground. In the original, areas a player hasn't explored are drawn black,
-and explored areas outside current sight at half brightness (fog of war).
+  So fog edges are linear ramps across one quad, exactly like slope shading.
+- **Tile colour.** At load every tile texel (32-bit B,G,R,x) is cut to **4 bits per channel**,
+  the top nibble: c = v >> 4 (0..15) (`0043b900` / `0043f960`). Both renderers and the bilinear
+  transition blends (section "Choosing what to draw") work on these 12-bit texels. The terrain
+  therefore never shows more than 16 levels per channel per tile.
+- **Nothing else**: no gamma ramp (AN.exe links the DirectDraw gamma-control interface id but
+  never references it; dvge.exe does not contain it), no brightness or gamma option in the
+  graphics menu (its four entries are hardware acceleration, alpha shadows, resolution, hardware
+  scrolling; `docs/ui/front-end.md`), no colour lookup tables.
+
+### The two renderers
+
+The option **"Hardwarebeschleunigung"** (`an.cfg` byte 0, `docs/ui/front-end.md` 4.1) picks the
+renderer. **Default: off = software** in both editions (new config writes 0: AN.exe flag
+`0x4B393C`, Gold `0x4C0C64`). Even when on, the game falls back to software when the DirectDraw
+driver caps lack the 3D bit *(I: bit 0 of the caps word)* or in the 640-wide mode (`00488280` /
+`00495010`), and Direct3D
+device creation tries HAL, then MMX, then RGB (software emulation) devices. Most players therefore
+saw the software terrain.
+
+| step | software (default) | Direct3D ("Hardwarebeschleunigung: Ein") |
+|---|---|---|
+| code | `0043dc70` full / `0043e4c0` scroll, rasteriser `0043dfb0` (Gold `00441cf0`, `00442540`, `00442030`) | `0043d220` full / `0043d700` scroll (Gold `004412a0`, `00441780`), states in `0043ca00` (Gold `00440a60`) |
+| light across the quad | g of each corner, interpolated linearly in 16.16 fixed point along the polygon edges and then along each scanline (Gouraud) | vertex diffuse colour (g, g, g) with alpha 0, specular 0 (format 0x1C4: XYZRHW, diffuse, specular, one uv; drawn with "do not light"); Direct3D interpolates it (Gouraud) |
+| light precision per pixel | **6 bits**: s = bits 18..23 of (interpolated light + carried remainder), i.e. about g / 4 (0..59). The remainder (low 18 bits) is carried from pixel to pixel along the scanline and restarts at 0 at each scanline's left end: a horizontal error-diffusion dither, so the run average of s is exactly g / 4 | 8 bits |
+| texel | the 4-bit channels c, nearest texel (no filtering) | the same 12-bit texels uploaded as a 64 × 64 **A4R4G4B4** texture (alpha nibble 0); MAGFILTER and MINFILTER **linear** (bilinear) |
+| combine | each channel: p = c × s (0..945, 10 bits); the channel of the 16-bit screen gets the **top n bits** of p (n = 5 or 6 for 5-6-5; truncation) | stage 0: COLOROP = **MODULATE** (not 2X/4X), ARG1 = TEXTURE, ARG2 = DIFFUSE; DITHERENABLE on; no other stage, no other render state |
+| net, in 8-bit terms (v = tile byte) | **≈ (v & 0xF0) × g / 256**, truncated to 5-6-5 | **≈ (c × 17) × g / 255**, i.e. (c / 15) × (g / 255), dithered to the 16-bit screen |
+| white texel (v = 255) on flat ground (g = 162) | ≈ 152 | 162 |
+| factor of the tile colour at g = 128 / 162 / 239, fogged flat 81 | 0.500 / 0.633 / 0.934 / 0.316 (× the 4-bit tile) | 0.502 / 0.635 / 0.937 / 0.318 (× the 4-bit tile, expanded c × 17) |
+
+The Direct3D picture is about 6–7 % brighter (17/16 from the nibble expansion, 256/255) and
+smoother (bilinear texture, hardware dither); the light curve is the same.
+
+**So the light byte is an absolute brightness**: 256 (software) or 255 (Direct3D) would be the
+unshaded tile. Flat ground shows about 0.63 of its tile colour, the darkest slopes half, the
+brightest 0.93. Light is not relative to flat ground (162 is not "1.0").
+
+### Rule for the rebuild (vanilla = the software default)
+
+Per pixel and channel: **out = tile × g / 256**, with g interpolated linearly (Gouraud, over the
+two triangles split left–right) from the four corners' g values, and g per corner = L, L >> 1 or
+0 by the fog table above. Fold the fog into the corner value *before* interpolating (the original
+interpolates the product, not light and fog separately).
+
+Optional finer fidelity, in order of visibility: quantise the tile to its top nibble per channel
+(v & 0xF0) before multiplying (the original's 16-level terrain banding); nearest-texel sampling;
+truncate the result to 5-6-5. The 6-bit dither is invisible at normal zoom. A "Direct3D look"
+(optional, never default) would be (v >> 4) × 17 × g / 255 with bilinear sampling.
+
+### Our build (October 2026, for the implementer)
+
+`src/client/terrain-renderer.ts` divides by **162**: out = tile × (L / 162) × fog, with fog a
+separate bilinear per-vertex texture (0, 0.5, 1). Differences to the original:
+
+- Flat ground shows the full tile colour instead of 0.633 of it: everything is **1.58× (256/162)
+  too bright**; slopes above 162 exceed the tile colour (up to 1.475×) and clip to white.
+- Fog and light are interpolated separately and multiplied (tiny difference at fog edges); fog
+  halving is exact (0.5 vs L >> 1).
+- Tiles at full 8-bit precision with trilinear mipmapping instead of 4-bit, nearest texels.

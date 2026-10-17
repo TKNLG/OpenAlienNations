@@ -194,8 +194,76 @@ Consequences:
     school) is an almost empty 9-pixel stub, and the whole building is its work layer `PE0`.
   - Drawing the layers with normal alpha blending gives the same picture **as long as every
     layer is drawn**.
-- The picture is then scaled to the zoom, brightened by the cell light (`fog-of-war.md` 5.3) and,
-  if selected, tinted (section 7.1). It is blitted with the normal sprite blend (section 6.2).
+- The picture is then scaled to the zoom, given its brightness (section 2.2: in practice full or,
+  in the fog, half; the terrain light does **not** shade sprites) and, if selected, tinted
+  (section 7.1). It is blitted with the normal sprite blend (section 6.2).
+
+### 2.2 Brightness: light and fog (C, confirmed at instruction level; AN.exe `00435850`, `00438f40`, `004391a0`; Gold `00439830`, `0043cf50`, `0043d1b0`, identical)
+
+**Brightness value.** Whenever an object's picture is (re)built, the game computes a brightness
+B from the **light byte of the object's current cell** (display +0x78, +0x7C; terrain-gen.md step
+5):
+
+- B = 64 + L, capped at 255 (the 64 is a constant global, AN.exe `0x4AFA9C`, Gold `0x4BCB38`,
+  never written).
+- B is halved (B >> 1) when **all** of: fog is on (option bit 0x08), the object does not have the
+  never-dim flag (+0xA8, set only by the projectile/effect constructor `00436970`), and the cell's
+  viewer counter is 0 (not currently visible).
+
+Which cell: a building's or nature object's anchor cell; a unit's current cell, which while
+walking is the **destination** of the current step from the start of the step (step handler
+`00455720` writes +0x78/+0x7C); a garrison unit keeps the cell it stood on before entering
+(`004351d0` does not change it).
+
+**How B is applied.** B is only ever tested through **bit 7**. The compositor's final copy of the
+picture (the zoom-scaled copy in `00438f40` for a single-layer picture; for a multi-layer picture
+the layers are first copied raw at 1:1 and then the final scaled copy in `004391a0` does this
+step) writes every 16-bit pixel as:
+
+- the pixel with the **lowest bit of each colour channel cleared** (5-6-5: red keeps 4 of 5
+  bits, green 5 of 6, blue 4 of 5), then
+- shifted right by one (each channel exactly halved) **if B < 128**, unchanged if B ≥ 128.
+
+The 8-bit alpha plane is copied unchanged. Colour is premultiplied (gd.md), so a halved pixel is
+simply drawn at half colour with its original opacity.
+
+**Consequence.** Ground light is 128..239, so B = 192..255 when not halved (bit 7 always set) and
+96..127 when halved (bit 7 always clear). The light value never changes a sprite's colour:
+
+| sprite brightness | factor on the sprite colour |
+|---|---|
+| on a visible cell, or fog off, or never-dim object | **1** (each channel's lowest bit cleared: ≤ 1/16 darker for red/blue, ≤ 1/32 for green; negligible) |
+| fog on, cell not visible, normal object | **1/2** (after the same bit clearing) |
+
+There is no per-sprite colour multiply, no slope shading, no shade lookup table, and nothing
+depends on the terrain renderer: sprites are composed in software in both the software and the
+Direct3D mode, and Base and Gold are identical. (The "+64" exists only to keep bit 7 set.)
+
+**Per object kind**
+
+| kind | brightness source | can be halved | as seen in play |
+|---|---|---|---|
+| units, animals, ships | own cell | yes, but they are never drawn on a cell that is not visible (`fog-of-war.md` 5.2) | always full |
+| buildings, construction sites, trees, stones, bushes, crops, rubble | anchor cell | yes | full in sight, **half** when drawn in explored fog |
+| garrison units on an outpost (section 13) | the unit's own last cell | yes | in practice with their building: full / half |
+| projectiles, impacts, death effects (group 7, `00436970`) | own cell | **no** (never-dim) | always full |
+| border stones (`territory.md`; picture class `00432b60`, compose `00432e20`) | none: fixed B = 255 | no | always full (and only drawn on visible cells) |
+| placement ghost (section 6; `00433160`) | none: fixed B = 255 | no | full, then the green/red recolour of 6.2 |
+
+**Order.** Brightness (halving) first, then the selection tint (7.1), which uses the undimmed
+alpha; then the normal blit (6.2).
+
+**Refresh.** B is baked into the cached picture, so it changes only when the picture is rebuilt:
+frame change, selection change, zoom change, coming on screen, and when the frame builder finds
+the object's cell marked dirty (flags bit 0x40, `00445e40`), which the vision update sets on
+every cell whose viewer counter changes between 0 and non-zero (`0044a250`, `0044a6e0`). So the
+dimming follows visibility on the next frame; a rebuild need not model the cache.
+
+**Our build (October 2026).** Sprites ignore the terrain light (correct). Static objects in
+explored fog get a 0.5 tint on premultiplied colour (`main.ts`, `drawState` 1): correct, the
+original's extra channel-bit clearing is not reproduced (negligible). Selection boost after the
+tint (correct). Garrison units take their building's dim (original: their own last cell;
+practically the same). Effects, border stones and the ghost are never dimmed (correct).
 
 ---
 

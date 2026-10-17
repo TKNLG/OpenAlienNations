@@ -148,9 +148,9 @@ front of a stone covers it. Stones are not depth-sorted with objects and not wit
   block's top cell.
 - The picture is scaled with the current zoom like every sprite: the three shared objects are
   rescaled when the zoom changes (`00422fe0`).
-- Brightness: the stone is drawn with its own picture, not with the cell light *(uncertain:
-  no light value is passed for it; since stones appear only on visible cells, fog dimming
-  never applies)*.
+- Brightness: the stone is drawn with its own picture, not with the cell light (C: its picture
+  class `00432b60` composes with a fixed brightness of 255, `00432e20`; since stones appear only
+  on visible cells, fog dimming never applies). See `objects.md` 2.2.
 
 ## 4. Rebuild notes
 
