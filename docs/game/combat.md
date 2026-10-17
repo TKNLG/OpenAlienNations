@@ -796,6 +796,32 @@ the flag ends with the walk, and an idle unit standing at its goal reacts again.
 patrol job is not a player order: a patrolling soldier answers the help rule with a top-level
 attack (its guard job waits behind it, 7.4) and resumes the patrol afterwards.
 
+**Attacks across the water (consequence of 3.5, 3.6 and the tier test; C, Gold).** An attack
+with the retarget flag on a target the attacker can never reach (the target stands on another
+island, or a melee unit is after a ship) does not end by itself: every search fails, the 6th
+attempt retargets (3.6, Gold `0x47bc00`), and the retarget's scan around the target (sight + 3,
+the target's race, chooser `0046aa70`) finds the same object again, or another object of that
+race next to it, which is usually just as unreachable. Neither the chooser nor the attack check
+(2.1, Gold `0046b9a0`) has an island or reachability test. The anchor never moves, so only the
+leash (the target walking more than 29 from the anchor), the target's death or another job
+maker (army run, defence response, an order) ends it. Meanwhile the unit has a top-level attack
+on an object of that object's tier, so under the rule above (Gold `0x46b32a` `cmp`, `jle
+0x46b376`) it **ignores every striker of an equal or less important tier**: with a far target
+of tier 0 (hunter, police, soldier, outpost), every soldier that attacks it or a friend within
+12 cells, the unit itself included. A computer town's defence response keeps such a defender
+too (`ai-diplomacy-trade.md` 2.2: a running attack on a class at most the bucket's is kept). In
+the add-on this happens after a fight in a strait: units that attacked a ship or a unit at sea
+retarget, once their target is out of reach, onto the enemy's units on the opposite shore, and
+stay on them. Play-test case (island free play): every Sajiki hunter and soldier of a town held
+such an attack on a human hunter standing 15 cells across the water (their anchors were sea
+cells, the positions of the ships they first fought) and none of them answered the player's
+landing party; the human archers on the other shore were locked the same way onto a Sajiki
+soldier. *(quirk, kept in vanilla; an enhanced option could end attacks on a target on another
+island.)* *Our build: the same. Our search toward another island fails at once (no search is
+made, `World.planPath`), the original's 2000-node search is spread over frames, so a cycle of
+five searches and a retarget takes about 10 ticks in ours and longer in the original; the
+outcome is the same (test `test/engagement.test.ts`).*
+
 ### 7.3 Flee job (0x26) (C, ctor `0047d9a0`, run `0047da50`)
 
 Fields: home cell (V's cell at creation), attacker A, "returning" flag.
