@@ -142,13 +142,18 @@ The state of a race pair is held in the relation table (mdb.md): 0 no contact, 1
 | decision | rule |
 |---|---|
 | explicit attack order by the player (3.1) | 2.1 only. Ordering an attack on a ceasefire or peace race is allowed |
-| retaliation and help (7.2) | 2.1 only (the attacker has already caused war, 6) |
+| retaliation and help (7.2) | 2.1 only. The help rule runs at the **strike** (4.1), before the impact that causes war (5.1 step 6), so a strike by a ceasefire or peace race is answered at once while the state is still 2 or 3 |
 | guard/patrol automatic targets (8.2) | 2.1 **and** state 0 or 1 |
 | outpost garrison targets (9) | state 0 or 1 (2.1 is not consulted) |
-| retarget after a kill (3.6) | 2.1 and same race as the previous target |
+| retarget after a kill (3.6) | 2.1 and same race as the previous target (no relation test) |
+| a **running** attack, strike, guard attack child, garrison-fire job, or a scheduled impact | **never**: none of them reads the relation (`ai-diplomacy-trade.md` 3.8) |
+| the impact (5.1 step 6) | state 2 or 3 → the pair goes to war |
 
 So patrols and towers ignore ceasefire and peace nations (handbook p. 39 agrees), but a direct
-order does not.
+order does not. Only the **choice** of new targets by guards, outposts and the computer player's
+routines looks at the relation; nothing that is already fighting does, and a relation change
+cancels nothing (`ai-diplomacy-trade.md` 3.8). A ceasefire or peace set during a fight is
+therefore broken again by the first impact of either side that lands after it (5.1 step 6, 11).
 
 ---
 
@@ -430,6 +435,12 @@ Other things that follow:
 Animals are never found by this scan, which collects only units and buildings. A hunter's attack
 therefore always ends after the kill (section 14).
 
+The retarget has **no relation test** (the chooser's relation filter applies only to the race
+filter -1, 8.3; here the race is given) and does not move the anchor (no write to +0x4C/+0x50 in
+`00472190`). So an attack keeps going through the dead target's race, units and buildings, also
+after a ceasefire or peace between the two races, until nothing of that race is within sight + 3
+of the last body or the leash (29 from the first target's cell) ends it.
+
 **A dead target still has a position and a race** (C, instruction level `0x472219..0x47227f`;
 Gold `0x47bc89..0x47bcef` identical). The attack job holds a counted reference to its target
 (+0x2C of the object, taken at creation, released when the job lets go of it), so a unit or
@@ -561,8 +572,17 @@ tick. It is saved with the game.
    entry exists and the state is 2 (ceasefire) or 3 (peace), broadcast "set state = 1 (war)"
    (`004583f0`, applied by `004584e0`). Section 11 has the side effects.
 
+Steps 3 to 6 run after **every** weapon routine, whatever it did (C, instruction level
+`0x481c97..0x481d55`: the routine's result is not looked at; step 6 is `cmp state,1; jle`
+skip, Gold `0x48cfe1` the same). So a **miss** declares war as well as a hit, the blow that kills
+the target declares it too, and so does a **bomb whose carrier has died** (its routine does
+nothing, 5.2, but the job goes on to steps 3..6: no damage, no experience, but the building
+advisor line of step 5 and the war of step 6). The relation in force **at the impact** counts,
+not the one at the strike: a projectile fired at war that lands after a ceasefire or peace was
+agreed declares war again (`ai-diplomacy-trade.md` 3.8).
+
 The attacker does not have to be alive at impact: arrows already in flight still land after
-the archer dies (C). Only bombs check that their carrier is alive.
+the archer dies (C). Only bombs check that their carrier is alive (for the damage only).
 
 ### 5.2 Weapon routines (C, `00483930`, `00483a10`, `00483a80`)
 
@@ -630,7 +650,8 @@ Example: an archer (H = 100) needs more than 200 experience for bronze, which is
   in the simulation and no collision.
 - The flight time is fixed when the shot fires (4.1). The impact lands on the target wherever
   the target is by then (**perfect homing**). If the target has died, entered a building or been
-  removed, nothing happens.
+  removed, nothing happens. Nothing else stops it: a relation change while the projectile flies
+  does not, and its impact then declares war again (5.1 step 6, `ai-diplomacy-trade.md` 3.8).
 - At the end of the flight the display spawns the projectile record's **impact effect** (+0x148)
   at the aim cell: 17 `expl1` (alchemy 1, catapult, magic 1, fire) or 18 `expl2` (alchemy 2,
   magic 2). Arrows, bolts and acid have none (`00434840`).
@@ -776,6 +797,11 @@ suspended behind it) unless one of these holds:
 
 Hunters on an automatic harvest and police on an arrest are not "attacking" at top level, so
 they do switch (I, from the rule).
+
+**No relation test** (C, `00464ce0` and the help loop `00462ab0`: the only relation read in the
+help loop, `0x462ba0`, is inside the priest branch). A strike by a unit of a race at ceasefire or
+peace is answered like any other, at the strike, before its impact has turned the state back to
+war; and an attack started this way does not stop when a ceasefire or peace is agreed later.
 
 Instruction-level reading (`0x464d22..0x464e0b`): the tier test is `jle` on (current target's
 tier, A's tier), so equal tiers keep the old target. The current target's tier is read from the
@@ -1023,9 +1049,16 @@ Notes:
 - **Visibility plays no part** anywhere: the area scan (`0044a7c0`) takes no player and no fog
   test, so units in the black or grey fog are found and targeted by every row above.
 - **Diplomacy**: only the guard, the outposts and the computer player's routines test the
-  relation. The help rule and the retarget never do: a unit of a nation at peace that strikes
-  (which itself causes war at the impact, 5.1) is answered at once, and a retarget picks any unit
-  of the dead target's race.
+  relation, and only when they **choose** a new target. The help rule and the retarget never do:
+  a unit of a nation at peace that strikes (which itself causes war at the impact, 5.1) is
+  answered at once, and a retarget picks any unit of the dead target's race. A guard's attack
+  child (8.1: while it runs there is no scan) and a garrison-fire job (9.6: target alive and in
+  range are its only tests) keep a target whose race has meanwhile agreed a ceasefire or peace,
+  and their next impact restores war (`ai-diplomacy-trade.md` 3.8).
+- **Two nations at ceasefire or peace standing next to each other** do nothing to each other:
+  idle units do not scan, guards and outposts skip them, the computer player's army and defence
+  skip them. Only an attack already under way or a new order starts anything, and its first
+  impact turns the pair to war.
 - **Ships** follow the same rules: they are armed units of their race (help rule, retarget, patrol
   for 65/66). Their weapons and reach are in `addon.md` 7; a melee land unit never reaches a ship
   and gives up after its 5 searches (3.5, then 3.6).
@@ -1238,7 +1271,9 @@ Each run:
 
 1. **Target dead** (its alive flag is the only test): the job ends with success. A target that
    has gone into a building is still "alive" and keeps being shot while in range (I: rare, the
-   scan never picks units inside, only a running job keeps one).
+   scan never picks units inside, only a running job keeps one). There is no relation test
+   (`004736c0` does not read the table): a target whose race has agreed a ceasefire or peace
+   after the job was made is shot on, and the impact restores war (5.1 step 6).
 2. **Range**: the same garrison test (9.5), but from the **soldier's own stored cell**, not the
    outpost's anchor. For a unit that walked in that is the cell it entered from (normally the
    entrance); for a map-load garrison it is the anchor.
@@ -1550,6 +1585,25 @@ good after ten failed foundings); they are cleaned up on load.
 - The 120-s advisor lines (#20, #22) are UI-only.
 - No combat code reads ceasefire specially. It behaves like peace, except that leaving it does
   not touch the trade flag.
+- **Who declares the war, and when** (C, `0x481d04..0x481d93`): the impact job, at the moment
+  the blow or projectile lands, for the pair (attacker's race, target's race); either side's
+  impact does it, there is no "aggressor" bookkeeping and no advisor line or message for the war
+  itself (only the building-attacked line of 5.1 step 5 when a building was hit). A strike alone
+  (4.1) does not: it only triggers flight and the help rule (7).
+- **A ceasefire or peace agreed during a fight cancels nothing** (`ai-diplomacy-trade.md` 3.8):
+  running attacks of both sides, the help rule, retargets, guard attack children, garrison fire
+  jobs and impacts in flight all go on, and the first of their impacts restores war. A fight
+  ends quietly only when no blow lands after the change: the computer army ends at its next run
+  (0..50 ticks later, `ai-diplomacy-trade.md` 2.5) and its members walk home; other attacks run
+  out by themselves.
+- *Our build: the same rules (relation change = table write only; war at the impact for every
+  weapon routine, misses and heals included). Checked October 2026 against the play-test report
+  "units go on attacking after a ceasefire / peace": that is the original's behaviour as coded.
+  Fixed in the same pass: the impact of a bomb whose carrier had died ended early in ours without
+  the advisor line and the war (5.1); the computer town's defence response dropped intruders of a
+  ceasefire / peace race from its list instead of keeping them for a later war
+  (`ai-diplomacy-trade.md` 2.2); the members of an ended army walked only one 32-cell leg toward
+  home and then stood (`ai-diplomacy-trade.md` 2.5). Tests: `test/ceasefire.test.ts`.*
 
 ---
 

@@ -506,12 +506,15 @@ export class Combat {
     if (wpn.kind === WeaponKind.Heal) {
       t.hp = Math.min(maxHp, t.hp + wpn.min + this.w.rand.next() % Math.max(1, wpn.max - wpn.min));
     } else if (wpn.kind === WeaponKind.Bomb) {
-      if (!attacker || !attacker.alive) return 0;
-      if (this.w.rand.next() % 100 < wpn.hit) {
-        t.hp -= wpn.min + this.w.rand.next() % (wpn.max - wpn.min + 1);
-        if (t.hp < 1) { t.hp = 0; this.die(t); }
+      // a dead carrier's bomb does nothing itself, but the impact goes on: the advisor line and
+      // the war of steps 5 and 6 still come (5.1)
+      if (attacker && attacker.alive) {
+        if (this.w.rand.next() % 100 < wpn.hit) {
+          t.hp -= wpn.min + this.w.rand.next() % (wpn.max - wpn.min + 1);
+          if (t.hp < 1) { t.hp = 0; this.die(t); }
+        }
+        this.die(attacker);
       }
-      this.die(attacker);
     } else {
       if (this.w.rand.next() % 100 < wpn.hit) {
         let dmg = wpn.min + this.w.rand.next() % (wpn.max - wpn.min + 1);

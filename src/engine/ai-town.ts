@@ -776,7 +776,9 @@ function respond(ai: Ai, t: Town, s: AiTown): void {
   }
   // intruders: dropped when dead or when they fail the test (no attack job: standing in the town's
   // area, not a diplomat or merchant; with an attack job: attacking an object of this town's race);
-  // the hostile ones are sorted into three buckets by their target class
+  // the rest stay in the list, and the hostile ones are sorted into three buckets by their target
+  // class. One of a race at ceasefire or peace is kept, not bucketed (2.2): it counts again as
+  // soon as the relation is back at war.
   const buckets: Entity[][] = [[], [], []];
   const keep: number[] = [];
   for (const id of s.intruders ?? []) {
@@ -786,8 +788,9 @@ function respond(ai: Ai, t: Town, s: AiTown): void {
     const tg = attackTarget(ai, e);
     const ok = tg ? tg.kind !== KIND_NATURE && (tg.oid >>> 16) === t.race
       : e.inside < 0 && ai.inTerritory(e, t) && ty !== U.Diplomat && ty !== U.Merchant;
-    if (!ok || race > 2 || !ai.hostile(t.race, race)) continue;
+    if (!ok) continue;
     keep.push(id);
+    if (race > 2 || !ai.hostile(t.race, race)) continue;
     if (w.combat.valid(e)) buckets[Math.min(2, w.combat.tier(e))].push(e);
   }
   s.intruders = keep;

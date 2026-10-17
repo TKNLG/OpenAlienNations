@@ -703,15 +703,23 @@ export class Ai {
 
   /**
    * Every surviving member is released and walks home; the player's army slot is cleared
-   * (`004657c0`, spec 2.5 last bullet). The original's walk starts after rand() mod 10 + 2 ticks:
-   * one draw per living member, in member order (ours walks at once).
+   * (`004657c0`, spec 2.5 last bullet): group 0, its current job cancelled, one follow-path walk
+   * to the first free cell of a spiral around its home town, however far (not a leg: no job would
+   * issue the next one). The original's walk starts after rand() mod 10 + 2 ticks: one draw per
+   * living member, in member order (ours walks at once).
    */
   private endArmy(ps: AiPlayer): number {
     for (const id of ps.armyMembers) {
       const u = this.w.get(id);
       if (!u || u.group !== Grp.Army) continue;
       if (u.alive) this.rand();
-      this.release(u, true);
+      this.release(u, false);
+      this.w.logistics.cancelJob(u);
+      const t = this.w.economy.town(u.town);
+      if (!t || u.inside >= 0) continue;
+      const [gx, gy] = this.w.freeSpiral(t.x, t.y, 24, u) ?? [t.x, t.y];
+      this.w.follow(u, gx, gy);
+      if (u.path && u.action !== 0) { u.action = 0; u.actionTick = this.w.tick; }
     }
     ps.armyMembers = [];
     ps.army = 0;

@@ -689,9 +689,15 @@ town's military job (`004621c0` -> `0046cab0`). (C)
   outside buildings (any job), then its **free** group-0 units (section 0).
 - Intruders are dropped when dead, or when they fail this test: a unit without an attack job
   (kind 8) must stand in the town's area and not be a diplomat or merchant; a unit with an attack
-  job must be attacking an object of this town's **race** (any town of it). The rest are kept
-  only if their race is hostile to this town's race (relation 0 or 1, section 3), and are sorted
-  into three buckets by their target class (object +0x20, the same field as in 2.5).
+  job must be attacking an object of this town's **race** (any town of it). The rest stay in the
+  list; those whose race is hostile to this town's race (relation 0 or 1, section 3) are sorted
+  into three buckets by their target class (object +0x20, the same field as in 2.5). An intruder
+  of a race at ceasefire or peace (or without a relation entry) is **not removed**: it is only
+  left out of the buckets, and is taken again at the first response after the relation is back
+  at 0 or 1, as long as it still passes the test (C, instruction level `0x46d468..0x46d58f`: only
+  the dead-or-failed path `0x46d534` unlinks the node and releases its reference; the relation
+  miss at `0x46d4eb` and the state test at `0x46d4fa..0x46d504` just advance to the next node).
+  *Our build: until October 2026 ours dropped the non-hostile ones too; fixed.*
 - No hostile intruder: the "under attack" flag (job +0x3C) is cleared; one rand() mod 10; on 0,
   every defender that is alive, outside buildings, without a job and **not** inside the town's
   area gets a walk job (kind 6) to the town centre + (rand() mod 41 - 20, rand() mod 41 - 20),
@@ -888,6 +894,14 @@ Notes:
   victim's island (candidates of the next think).
 - Every run: if the relation between the army's race and the target town's race is no longer 0 or
   1, the army ends. Otherwise the current tactic runs; afterwards a new random tactic is chosen.
+  (C, instruction level `0x4673d0..0x46744d`, Gold `0x46dfa0..0x46e01d`: the pair is the army's
+  player race and the target town's player race; a state other than 0/1, or no entry, returns 0
+  before either tactic runs, so the cooldown stamp is not written; the job's end runs the
+  destructor below.) This test, at the army's own 50-tick rhythm, is the **only** way a ceasefire
+  or peace stops an army: the relation change itself touches no job (3.8). Between the change and
+  the next army run (0..50 ticks) the members go on fighting, and if one impact of either race on
+  the other lands in that window the pair is at war again (`combat.md` 5.1 step 6) and the army
+  carries on.
 - Both tactics first write the tick into the think job's +0x2C (the cooldown stamp) and end the
   army at once when it has no members left. Dead members are dropped from the army (group 0) as
   the member list is walked.
@@ -988,7 +1002,13 @@ Notes:
   the run that ended the army, so after a retreat (step 4, which first gave every member outside
   a building a direct walk home with delay 1, no draw) these walks replace the retreat's. A
   member that was waiting for a ship keeps its place in the request's waiting list (`addon.md`
-  8.4): the ship still fetches it later.
+  8.4): the ship still fetches it later. The walk is one ordinary follow-path job to that cell
+  (`units-and-jobs.md` 4.1, with its own re-plans), however far away home is; it is not a
+  player order, so a member on its way home still answers the help rule (`combat.md` 7.2) and
+  resumes the walk afterwards (7.4). *Our build: the walk starts at once (the draw is made, the
+  delay not applied); until October 2026 it was a single leg of at most 32 cells per axis toward
+  the town hall, after which the unit stood (no job re-issued the next leg), so members of an
+  army that ended far from home (a ceasefire, a retreat) were left standing near the enemy town.*
 
 How the attack jobs themselves move and hit is in `combat.md`.
 
@@ -1168,7 +1188,8 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
 
 4. An accepted offer becomes the new relation state (message 0x5B broadcast to all connections and
    applied on each machine, `004583f0` / `004584e0`). Then he walks back to his embassy and the
-   errand ends.
+   errand ends. Applying the state changes nothing but the table: no unit, job or army is touched
+   (3.8).
 5. If he dies or cannot enter, nothing changes (handbook: a third nation may capture him; there is
    no separate capture rule, I).
 6. "Diplomat zurückbeordern" (T254) recalls him (`00478bd0`): the errand's current child is
@@ -1242,6 +1263,72 @@ offer as soon as both embassies exist (contact gives war first). No scripted rel
 exist (C, `mdb.md`).
 
 ---
+
+### 3.8 What a relation change does, and what stops a fight (C)
+
+Every relation change goes through one message, 0x5B (race a, race b, new state): made by the
+diplomat's errand when an offer is accepted (3.4; `0x478ac3`, Gold `0x482773`), by first contact
+and embassy closure (3.3; `0x45febb`, `0x4601ac`), by an impact on a race at ceasefire or peace
+(`combat.md` 5.1 step 6; `0x481d93`, Gold `0x48d023`) and by one network/panel command
+(`0x452ad8`). The message is handed to every connection; for the local player's connection it is
+applied at once, in the same call (`004551c0`: connection's race = local race → the message's
+apply method runs immediately). So in a singleplayer game the new state is in force from the
+very tick of the errand's decision (or of the impact).
+
+**What happens (C, instruction level).**
+
+| step | where | effect |
+|---|---|---|
+| making the message | `004583f0` (Gold `0045e100`) | looks up the old state and sends interface messages 0x5C for the buildings of both players (3.4 end): leaving / entering 0 hides / shows the other's embassies, leaving / entering 3 hides / shows the other's markets (Gold also the harbours, flag 0x3E). Nothing else |
+| applying it | `004584e0` (Gold `0045e210`) | writes the new state into the pair's table entry. **It calls nothing**: it is a bare loop over the relation list (`0x4584e0..0x45852d`, no `call`; Gold the same) |
+
+**What does not happen.** Nothing in either routine, nor in the errand, cancels or inspects a job,
+an army, a defence group, an intruder list, a guard, a garrison or a pending impact. The only
+other routines that read the relation table at all are: the "may act on" rule (priest healing
+only, `combat.md` 2.1), the help rule's priest part (7.1), the guard scan and its chooser (8.3,
+filter -1 only), the outpost job (9.3), the impact job (5.1), the AI's attack decision (2.4), the
+army run (2.5), the defence response (2.2), the AI's diplomacy evaluation (3.5), contact and
+closure (3.3), trade partners, trade route and the computer market (4), the panel, save/load and
+map/free-play setup (C: every reference to the table pointer `0x4b3950` in AN.exe, and to
+`0x4c0c78` in dvge.exe, mapped to its routine; the attack job `00472b20`, its validity test
+`00472ae0`, the retarget `00472190`, the strike `00481450`, the garrison-fire job `004736c0`, the
+retaliation `00464ce0` and the AI's job hand-over `00465650` never read it).
+
+**Consequences when a ceasefire or peace is set while the two races fight** (both directions:
+human and computer, computer and computer; whoever sent or accepted the offer):
+
+- Every running attack goes on: player-ordered attacks, help/retaliation attacks (`combat.md`
+  7.2), the AI's army and defence-response attacks, a guard's attack child (8.1), a garrison's
+  fire job on its current target (9.6), and their retargets after a kill (3.6, which picks the
+  dead target's race without a relation test). Their strikes still trigger the help rule
+  (7.1), which still answers with new attacks (no relation test either).
+- Impacts already scheduled (projectiles in flight, blows under way) land as usual.
+- **The first impact of either race on the other** (hit or miss, any weapon, a priest's heal of a
+  unit of the peace partner included) sets the pair back to **war** (`combat.md` 5.1 step 6). No
+  advisor line announces it; the panel just shows war again. From then on everything is as
+  before the offer, and the computer player's own diplomacy (3.5) may offer again at the earliest
+  6001 ticks after its last mission to that player.
+- If no impact lands first:
+  - the **army** ends at its next run (0..50 ticks after the change, 2.5); its destructor cancels
+    every member's current job (its attack included) and walks it home, one rand() per living
+    member (2.5 last bullet). Members already walking home are of course not attacking, but each
+    of them still answers the help rule like any unit;
+  - the **defence response** (2.2 phase 1) no longer buckets intruders of that race (they stay
+    in the list) and gives no new attack jobs against them; defenders already attacking them go
+    on until their attack ends by itself (target dead with no other object of that race within
+    sight + 3 of the body, leash, 5 failed searches without a retarget);
+  - **guard scans** and **outposts** no longer pick objects of that race (`combat.md` 2.2), but a
+    guard's attack child or a garrison fire job that already holds such a target keeps it;
+  - the AI's **attack decision** (2.4) creates no new army while the computer player is not
+    hostile to the human (profiles 0..3, 5).
+- **Units of the two races standing side by side** after the change do nothing: no idle unit
+  scans for enemies (`combat.md` 0, 8.4), guards and towers skip the race, computer armies and
+  defence responses skip it. Peace holds as long as nobody strikes.
+
+So in the original a ceasefire or peace stops a battle only when no blow of either side lands
+after it; a fight that is actually under way (strikes or projectiles in progress, retaliations
+running) re-declares war within a few ticks, normally at once. A ceasefire reached while the
+computer army is still on its way (no contact yet) ends that army quietly at its next run.
 
 ## 4. Trade
 

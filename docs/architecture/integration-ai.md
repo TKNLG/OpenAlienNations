@@ -226,7 +226,10 @@ sensibly:
    scout explores (spec 2.3).
 7. **Long walks** (army members, founders, released units, returning defenders) go in legs of at
    most 32 cells per axis with small path searches, re-issued by the running job. Long A*
-   searches for armies were the AI's main cost.
+   searches for armies were the AI's main cost. Exception: the members of an ending army have no
+   job that could re-issue a leg, so they get one follow-path walk (`World.follow`, with its own
+   re-plans) to the first free cell of a spiral around their home town (spec 2.5 last bullet;
+   fixed October 2026, before that they stood after one leg).
 8. **Founding** (1.12): the site test is the engine's `canFound(..., territory = true)` (the four
    points outside every territory) and the disc of the town hall's radius (25: 373 blocks)
    around the site free of every territory. Sites are searched in rings of step 2 up to 20 cells around each start candidate in
