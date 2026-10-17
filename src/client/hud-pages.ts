@@ -277,8 +277,9 @@ function unitInfo(pc: PageCtx, u: Entity): void {
     x += 30;
   }
   if (type === 10) {
-    // 11.1: disabled inside a building, and at the limit of 10 towns (tooltip T172)
-    const towns = pc.world.economy.towns.filter(t => t.race === pc.host.player && t.alive).length;
+    // 11.1: disabled inside a building, and at 10 entries of the nation's town list (tooltip T172);
+    // the list still holds destroyed towns that are not freed yet (combat.md 10.4 "Lifetime")
+    const towns = pc.world.economy.players[pc.host.player]?.towns.length ?? 0;
     button(pc, 'GRUENDEN', 40, 135, { id: 'u:found', tip: pc.hud.str(towns >= 10 ? 172 : 6), disabled: u.inside >= 0 || towns >= 10 || pc.sel.length !== 1,
       onClick: () => pc.host.startFounding(u.id) });
     x = 70;
