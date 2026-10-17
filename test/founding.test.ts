@@ -114,3 +114,70 @@ test('founding: the town hall needs the site in sight (no fog exemption); the si
   }
   assert.equal(w.hash(), b.hash());
 });
+
+// Failed foundings at one spot (a play-tested add-on save had 24 dead towns at the same cell):
+// every attempt makes a new town with a new id, and a destroyed town leaves its nation's town list
+// once nothing refers to it any more (combat.md 10.4 "Lifetime"). Before snapshot version 15 they
+// stayed in the list for good, and from the tenth the training page refused founders (state 5).
+test('founding: destroyed towns leave the nation list; repeated failures do not reach the 10-town limit', { skip }, () => {
+  const { w, human } = freePlay(99);
+  const first = w.entities.find(e => e.kind === Kind.Unit && (e.oid >>> 16) === human && (e.oid & 0xffff) === 10)!;
+  const [x0, y0] = spotNear(w, human, first);
+  w.schedule({ type: 'found', player: human, unit: first.id, x: x0, y: y0 }, w.tick + 1);
+  for (let i = 0; i < 400; i++) w.step();
+  const home = w.economy.towns.find(t => t.race === human && t.alive)!;
+  const hall = w.get(home.hall)!;
+  const founder = w.spawnUnit(human, 10, Math.floor(hall.x / SUB) + 3, Math.floor(hall.y / SUB) + 3, home.id);
+  const p = w.economy.players[human]!;
+  for (let k = 0; k < 12; k++) {
+    let site: [number, number] | null = null;
+    const fx = Math.floor(founder.x / SUB), fy = Math.floor(founder.y / SUB);
+    for (let r = 12; r < 40 && !site; r++) for (let d = -r; d <= r && !site; d++) {
+      if (w.logistics.canFound(human, fx + d, fy - r, true)) site = [fx + d, fy - r];
+    }
+    assert.ok(site, `site ${k}`);
+    const n = w.economy.towns.length;
+    w.schedule({ type: 'found', player: human, unit: founder.id, x: site![0], y: site![1] }, w.tick + 1);
+    w.step(); w.step();
+    assert.equal(w.economy.towns.length, n + 1, `attempt ${k}: a new town record`);
+    const t = w.economy.towns[n];
+    assert.ok(t.alive && p.towns.includes(t.id));
+    // interrupt the walk: the site and its town are destroyed, the founder goes back home
+    w.schedule({ type: 'move', player: human, ids: [founder.id], x: fx, y: fy }, w.tick + 1);
+    for (let i = 0; i < 5; i++) w.step();
+    assert.equal(t.alive, false, `attempt ${k}: town destroyed`);
+    assert.equal(founder.town, home.id, 'founder resettled in the first town');
+    // its jobs run out (at most the consumption period): then it is freed from the list
+    for (let i = 0; i < 300 && p.towns.includes(t.id); i++) w.step();
+    assert.deepEqual(p.towns, [home.id], `attempt ${k}: only the living town is listed`);
+  }
+  assert.equal(w.economy.towns.filter(t => t.race === human && !t.alive).length, 12, 'records stay (ids are not reused)');
+  // the founder's training slot (state 5 = town limit) looks at the list, not at the records
+  const madeAt = w.rules.get(((human << 16) | 10) >>> 0)!.madeAt;
+  const state = w.logistics.trainState(home, { ...hall, oid: ((human << 16) | madeAt) >>> 0 }, 10);
+  assert.ok(state !== 5 && state !== -1, `founders can still be trained (state ${state})`);
+});
+
+test('founding: an old save with destroyed towns in the nation list is cleaned up on load', { skip }, () => {
+  const { w, human } = freePlay(99);
+  const first = w.entities.find(e => e.kind === Kind.Unit && (e.oid >>> 16) === human && (e.oid & 0xffff) === 10)!;
+  const [x0, y0] = spotNear(w, human, first);
+  w.schedule({ type: 'found', player: human, unit: first.id, x: x0, y: y0 }, w.tick + 1);
+  for (let i = 0; i < 400; i++) w.step();
+  const home = w.economy.towns.find(t => t.race === human && t.alive)!;
+  const snap = w.snapshot();
+  // a version 14 save: 11 destroyed towns nothing refers to, still in the list
+  const eco = snap.economy as { players: { towns: number[] }[]; towns: { id: number; alive: boolean }[] };
+  const base = eco.towns[home.id];
+  for (let k = 0; k < 11; k++) {
+    const id = eco.towns.length;
+    eco.towns.push({ ...JSON.parse(JSON.stringify(base)), id, alive: false, hall: -1 });
+    eco.players[human].towns.push(id);
+  }
+  snap.v = 14;
+  const r = World.restore(w.terrain, snap, w.rules, w.weapons);
+  assert.deepEqual(r.economy.players[human]!.towns, [home.id]);
+  assert.equal(r.economy.towns.length, eco.towns.length, 'the records are kept');
+  r.step();
+  assert.ok(r.economy.towns[home.id].alive);
+});
