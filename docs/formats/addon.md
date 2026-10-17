@@ -473,9 +473,10 @@ class 9 (open sea). It is the rule of the island generator (section 9.4).
 
 **Rendering note.** Class 9 is an ordinary, static tile set that happens to show water, so the
 open sea is cheap to draw; only the one-cell ring of class 10 next to the coast animates and
-gets shoreline pieces. How the original draws a quad whose corners mix class 9 and class 10 was
-not traced *(uncertain; a rebuild can treat both as water for the shoreline choice and animate
-only class 10)*.
+gets shoreline pieces. A quad whose corners mix class 9 and class 10 is not a shoreline: it is the
+bilinear blend of the static and the animated water tile (C, rendering/terrain-drawing.md, "Choosing
+what to draw for a quad"). Coast quads (beach class 0 = `weg` plus class 10) get the shoreline
+tiles exactly as lake shores do in the base game.
 
 **Cell flags in the Gold engine** (C, `0044c020`, also `004565a0`): `0x2000` land when
 tile < first tile of the "first water class" (class 9 in AO missions, 11 in base missions),

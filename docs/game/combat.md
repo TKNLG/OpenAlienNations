@@ -1860,6 +1860,10 @@ called covers 12 cells around the wounded unit.
   destructor). **Computer players never repair** (C, fourth AI audit): an AI building keeps its
   damage until it falls. Sites gain HP only through construction (units-and-jobs 6.3: start at
   HP / 10, + (HP - current) / 9 per counted work tick).
+- **Gold Edition ships** (class 14) never regain HP: `Restaurieren` exists only on the building
+  page, a builder's right-click on a ship is a go-to, may-act refuses ships for priests, and the
+  heal job that the priest's right-click and the help rule still create (neither tests the
+  class) can never reach a ship, which always has water all around (`addon.md` 4.3).
 
 ---
 

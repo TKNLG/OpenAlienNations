@@ -1,14 +1,18 @@
 // Draws the terrain heightfield. Spec: docs/rendering/terrain-drawing.md
 // One quad per map cell, built in 32x32-cell chunks. Every tile is one layer of a
 // TEXTURE_2D_ARRAY; mixed-ground quads blend their four corner tiles per pixel on the GPU.
+// Corner layout, left-right split and the per-quad choice: terrain-quads.ts.
 
 import { compileProgram, uniforms } from './gl.ts';
 import { Camera, CELL_W, CELL_H } from './camera.ts';
 import type { TerrainSet } from '../formats/os.ts';
 import { CLASS_TILESET, CLASS_WATER, type Terrain } from '../world/terrain.ts';
+import { QUAD_CORNERS, QUAD_EMIT, QUAD_TRIANGLES, SET_ID, SET_ANIMATED_WATER, chooseQuad } from './terrain-quads.ts';
 
 const CHUNK = 32;
-const F = 11; // floats per vertex: x, y, h, light, u, v, layer0..3, anim
+const F = 14; // floats per vertex: x, y, h, light, u, v, layer0..3, anim0..3
+/** the water animation advances one frame per second, four frames (terrain-drawing.md "Animated water") */
+const WATER_FRAME_MS = 1000;
 
 /** fixed layer order in the texture array (animation frames must be consecutive) */
 export const TERRAIN_SET_ORDER = [
@@ -18,7 +22,7 @@ export const TERRAIN_SET_ORDER = [
 ];
 
 const VS = `#version 300 es
-in vec2 a_pos; in float a_h; in float a_light; in vec2 a_uv; in vec4 a_layers; in float a_anim;
+in vec2 a_pos; in float a_h; in float a_light; in vec2 a_uv; in vec4 a_layers; in vec4 a_anim;
 uniform vec2 u_cam; uniform vec2 u_offset; uniform vec2 u_scale; uniform float u_frame;
 out vec2 v_uv; out float v_light; out vec2 v_cell; flat out vec4 v_layers;
 void main() {
@@ -26,7 +30,7 @@ void main() {
   vec2 w = a_pos + u_offset - u_cam;
   vec2 s = vec2((w.y - w.x) * ${CELL_W / 2}.0, (w.x + w.y) * ${CELL_H / 2}.0 - (a_h - 128.0));
   gl_Position = vec4(s * u_scale, 0.0, 1.0);
-  v_uv = a_uv; v_light = a_light / 162.0; v_layers = a_layers + vec4(a_anim * u_frame);
+  v_uv = a_uv; v_light = a_light / 162.0; v_layers = a_layers + a_anim * u_frame;
 }`;
 
 const FS = `#version 300 es
@@ -54,31 +58,12 @@ void main() {
 
 interface Chunk { vao: WebGLVertexArrayObject; buf: WebGLBuffer; count: number; cx: number; cy: number; }
 
-/** corner pattern (bit k = corner p_k is water) -> shoreline tile index, read from the tiles' pixels */
-function shorePatterns(set: TerrainSet): Map<number, number> {
-  const out = new Map<number, number>();
-  const isWater = (rgba: Uint8Array, x: number, y: number) => {
-    const i = (y * 64 + x) * 4, r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
-    return b > r + 40 && b > g + 20;
-  };
-  set.tiles.forEach((t, i) => {
-    let p = 0;
-    if (isWater(t.rgba, 4, 4)) p |= 1;     // p0 (0,0)
-    if (isWater(t.rgba, 59, 4)) p |= 2;    // p1 (1,0)
-    if (isWater(t.rgba, 4, 59)) p |= 4;    // p2 (0,1)
-    if (isWater(t.rgba, 59, 59)) p |= 8;   // p3 (1,1)
-    if (!out.has(p)) out.set(p, i);
-  });
-  return out;
-}
-
 export class TerrainRenderer {
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private u: Record<string, WebGLUniformLocation>;
   private tex: WebGLTexture;
   private layerBase = new Map<string, number>();
-  private shore: Map<number, number>;
   private chunks: Chunk[] = [];
   private indexBuf: WebGLBuffer;
   private fogTex: WebGLTexture;
@@ -96,7 +81,6 @@ export class TerrainRenderer {
       this.layerBase.set(name, layers);
       layers += set.tiles.length;
     }
-    this.shore = shorePatterns(sets.get('transition1')!);
 
     this.tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.tex);
@@ -113,7 +97,7 @@ export class TerrainRenderer {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     const idx = new Uint16Array(CHUNK * CHUNK * 6);
-    for (let q = 0; q < CHUNK * CHUNK; q++) idx.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
+    for (let q = 0; q < CHUNK * CHUNK; q++) idx.set(QUAD_TRIANGLES.map(k => q * 4 + k), q * 6);
     this.indexBuf = gl.createBuffer()!;
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
@@ -176,42 +160,45 @@ export class TerrainRenderer {
     const waterBase = this.layerBase.get('wasser1')!, shoreBase = this.layerBase.get('transition1')!;
     const waterPerFrame = this.layerBase.get('wasser2')! - waterBase;
     const shorePerFrame = this.layerBase.get('transition2')! - shoreBase;
-    const vertexLayer = (i: number) => this.layerBase.get(CLASS_TILESET[t.cls[i]])! + t.tile[i];
     const ao = (t as Terrain & { aoCls?: Uint8Array }).aoCls;
+    // set id per vertex (terrain-drawing.md "Tile sets"): the animated water class is one id; the
+    // add-on's open sea (class 9) is the ordinary static wasser1 set
+    const setOf = (i: number) => {
+      if (t.cls[i] === CLASS_WATER && !(ao && ao[i] === 9)) return SET_ANIMATED_WATER;
+      return SET_ID[CLASS_TILESET[t.cls[i]]];
+    };
+    const layerOf = (i: number) => this.layerBase.get(CLASS_TILESET[t.cls[i]])! + t.tile[i];
 
-    // quad corners p0..p3: [dx, dy, u, v]; draw order p0, p2, p3, p1 (around the quad)
-    const P: [number, number, number, number][] = [[0, 0, 0, 0], [0, 1, 1, 0], [1, 0, 0, 1], [1, 1, 1, 1]];
-    const ORDER = [0, 2, 3, 1];
-    const layers = [0, 0, 0, 0], cv = [0, 0, 0, 0];
+    const layers = [0, 0, 0, 0], anim = [0, 0, 0, 0], cv = [0, 0, 0, 0], sets = [0, 0, 0, 0];
     const data = new Float32Array(CHUNK * CHUNK * 4 * F);
     let o = 0;
     for (let y = cy; y < cy + CHUNK; y++)
       for (let x = cx; x < cx + CHUNK; x++) {
-        let water = 0;
         for (let k = 0; k < 4; k++) {
-          cv[k] = at(x + P[k][0], y + P[k][1]);
-          if (t.cls[cv[k]] === CLASS_WATER) water |= 1 << k;
+          cv[k] = at(x + QUAD_CORNERS[k].dx, y + QUAD_CORNERS[k].dy);
+          sets[k] = setOf(cv[k]);
         }
-        let anim = 0;
-        if (water === 15) {
-          layers.fill(waterBase + t.tile[cv[0]]); anim = waterPerFrame;
-          // add-on maps: the open sea (class 9) is static, only the coastal ring is animated (addon.md 8.3)
-          if (ao && ao[cv[0]] === 9 && ao[cv[1]] === 9 && ao[cv[2]] === 9 && ao[cv[3]] === 9) anim = 0;
-        } else if (water !== 0) {
-          layers.fill(shoreBase + (this.shore.get(water) ?? 0)); anim = shorePerFrame;
+        const q = chooseQuad(sets);
+        if (q.kind === 'single') {
+          // corner c0's tile, unblended (animated when it is the animated water)
+          layers.fill(sets[0] === SET_ANIMATED_WATER ? waterBase + t.tile[cv[0]] : layerOf(cv[0]));
+          anim.fill(sets[0] === SET_ANIMATED_WATER ? waterPerFrame : 0);
+        } else if (q.kind === 'shore') {
+          layers.fill(shoreBase + q.tile); anim.fill(shorePerFrame);
         } else {
-          const s0 = CLASS_TILESET[t.cls[cv[0]]];
-          if (s0 === CLASS_TILESET[t.cls[cv[1]]] && s0 === CLASS_TILESET[t.cls[cv[2]]] &&
-              s0 === CLASS_TILESET[t.cls[cv[3]]]) layers.fill(vertexLayer(cv[0]));
-          else for (let k = 0; k < 4; k++) layers[k] = vertexLayer(cv[k]);
+          for (let k = 0; k < 4; k++) {
+            const w = sets[k] === SET_ANIMATED_WATER;
+            layers[k] = w ? waterBase + t.tile[cv[k]] : layerOf(cv[k]);
+            anim[k] = w ? waterPerFrame : 0;
+          }
         }
-        for (const k of ORDER) {
-          const [dx, dy, u, v] = P[k];
+        for (const k of QUAD_EMIT) {
+          const c = QUAD_CORNERS[k];
           const vi = cv[k];
-          data[o] = x + dx; data[o + 1] = y + dy; data[o + 2] = t.height[vi]; data[o + 3] = light[vi];
-          data[o + 4] = u; data[o + 5] = v;
+          data[o] = x + c.dx; data[o + 1] = y + c.dy; data[o + 2] = t.height[vi]; data[o + 3] = light[vi];
+          data[o + 4] = c.u; data[o + 5] = c.v;
           data[o + 6] = layers[0]; data[o + 7] = layers[1]; data[o + 8] = layers[2]; data[o + 9] = layers[3];
-          data[o + 10] = anim;
+          data[o + 10] = anim[0]; data[o + 11] = anim[1]; data[o + 12] = anim[2]; data[o + 13] = anim[3];
           o += F;
         }
       }
@@ -231,7 +218,7 @@ export class TerrainRenderer {
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, F * 4, offset * 4);
     };
     attr('a_pos', 2, 0); attr('a_h', 1, 2); attr('a_light', 1, 3);
-    attr('a_uv', 2, 4); attr('a_layers', 4, 6); attr('a_anim', 1, 10);
+    attr('a_uv', 2, 4); attr('a_layers', 4, 6); attr('a_anim', 4, 10);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuf);
     gl.bindVertexArray(null);
     return { vao, buf, count: CHUNK * CHUNK * 6, cx, cy };
@@ -250,7 +237,7 @@ export class TerrainRenderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(this.u.u_cam, cam.x, cam.y);
     gl.uniform2f(this.u.u_scale, (2 * cam.zoom) / cam.viewW, (-2 * cam.zoom) / cam.viewH);
-    gl.uniform1f(this.u.u_frame, Math.floor(timeMs / 250) % 4);
+    gl.uniform1f(this.u.u_frame, Math.floor(timeMs / WATER_FRAME_MS) % 4);
     const halfW = cam.viewW / 2 / cam.zoom + CHUNK * CELL_W, halfH = cam.viewH / 2 / cam.zoom + CHUNK * CELL_H + 400;
     for (const c of this.chunks) {
       const mx = c.cx + CHUNK / 2, my = c.cy + CHUNK / 2;

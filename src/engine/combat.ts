@@ -120,7 +120,7 @@ export class Combat {
       return (ut === U.Hunter && cls === 7) || (ut === 64 && cls === 15 && this.w.isShip(u));
     }
     const ur = this.race(u), tr = this.race(t);
-    // priests never heal ships (addon.md 4.1, `0046b9a0`)
+    // priests never heal ships (addon.md 4.3, `0046b9a0`)
     if (ut === U.Priest && this.w.isShip(t)) return false;
     if (ur !== tr) {
       if (ut === U.Priest) return ally && t.kind === Kind.Unit && t.hp < (this.rule(t)?.hp ?? 0) && this.relation(ur, tr) === 3;
@@ -577,7 +577,8 @@ export class Combat {
       if (x.kind !== Kind.Unit) continue;
       const xt = this.type(x), xr = this.race(x);
       if (xr === vRace && xt !== U.Priest && this.weapon(x)) { this.retaliate(x, a); continue; }
-      if (xt === U.Priest && v.kind === Kind.Unit && !this.w.isShip(v) && v.hp < (this.rule(v)?.hp ?? 0) && x.id !== v.id &&
+      // no class test: a damaged ship calls priests too, whose heal job can never reach it (addon.md 4.3)
+      if (xt === U.Priest && v.kind === Kind.Unit && v.hp < (this.rule(v)?.hp ?? 0) && x.id !== v.id &&
           (xr === vRace || this.relation(xr, vRace) === 3)) {
         const cur = x.job ? this.w.sched.get(x.job) : undefined;
         if (cur?.kind === CJ.Heal || this.isPlayerOrder(x)) continue;
@@ -1186,7 +1187,9 @@ export class Combat {
     const ut = this.type(u);
     if (target.kind === Kind.Nature) return false;
     const sameRace = this.race(target) === this.race(u);
-    if (ut === U.Priest && target.kind === Kind.Unit && !this.w.isShip(target) && target.hp < (this.rule(target)?.hp ?? 0) && sameRace) {
+    // no class test (addon.md 4.3): on a damaged own ship this is a heal job that can never strike
+    // (no land cell touches a ship), and it comes before boarding a transport
+    if (ut === U.Priest && target.kind === Kind.Unit && target.hp < (this.rule(target)?.hp ?? 0) && sameRace) {
       this.w.logistics.cancelJob(u);
       this.startHeal(u, target, true, 1);
       return true;

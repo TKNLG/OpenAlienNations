@@ -121,7 +121,7 @@ test('an idle army member far from the target point gets its attack job at the a
   w.ai.players[ra] = ps;
   assert.equal(w.ai.runJob(job), 50, 'the skirmish ran');
   assert.equal(jobKind(w, idle), 0x08, 'the idle member attacks at once, from where it stands');
-  assert.notEqual(jobKind(w, walking), 0x08, 'the walking member is left alone');
+  assert.ok(jobKind(w, walking) !== 0x08, 'the walking member is left alone');
   assert.ok(walking.path, 'and keeps walking');
 });
 

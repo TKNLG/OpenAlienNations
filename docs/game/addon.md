@@ -568,7 +568,7 @@ docked at a harbour or in the shipyard, no upgrade, no regeneration. Every path:
 | path | what the code does | result for a ship |
 |---|---|---|
 | builder repair command `Restaurieren` (command class 0x54, run `004585d0` = AN `00452a70`) | files a builder request (`00465750` = AN `0045f4b0`) for the first selected object. The command is built only by the **building** info page (page 1, `0041beb0`, button at (40,135), `0041c285`) and by the message factory (`00459b75`). A selected ship shows the **unit** page (page 0: the unit info message `0045b9a0` writes page 0 for every unit, ships included), which has no repair button | not offered |
-| builder right-click on a ship (`004567a0` = AN `00450bb0`, `456b??` branch) | the builder branch (job 0x0C) is taken only when the target's object category (+0x08) is 1, a building. A ship is a unit (category 0), so a builder gets the plain go-to (0x07) | the builder walks toward the ship (it cannot reach it, 2.3) |
+| builder right-click on a ship (`004567a0` = AN `00450bb0`, `456ad9`..`456aeb`) | the builder branch (job 0x0C) is taken only when the target's object category (+0x08) is 1, a building, and the actor is a builder (type 11) and the building is a site or damaged. A ship is a unit (category 0), so a builder gets the go-to job (0x07) like any land unit | no repair: the builder boards a transport ship (5.2) or walks toward any other ship |
 | builder requests from elsewhere | the only other filers of a builder (type 11) request are the construction order (`0047f465`) and the builder destructor (`00481651`), both for building sites, as in AN | none |
 | repair tick (builder job, `00481d12`..`00481d55` = AN `004782b3`) | +20 HP on the builder job's building | buildings only |
 | priest heal, automatic scan (heal job run `0048c450`, scan `0048c140` -> may-act `0046b9a0` with the ally flag) | may-act refuses a class-14 target for a priest, own race (`46babc`) and foreign at peace (`46ba7f`) | a ship is never picked |
@@ -1310,7 +1310,7 @@ checked in game.)*
 | class-5 (training) buildings refuse ships; builders and other entrants unchanged | `00466cd0` |
 | shipyard goods top-up | 3.5 |
 | harbour and shipyard: no foundation, no rubble, builders stay put | 3.2, 3.6 |
-| priests cannot heal ships | 4.1 |
+| priests cannot heal ships: the may-act rule refuses class 14 (`0046b9a0`), but the right-click order and the help rule still create a heal job that can never strike | 4.3 |
 | fish die without the carcass sprite and death cry (types ≥ 41) | `00469fb0` |
 | unit death of a group-61 unit informs the naval planner | `00468790` |
 

@@ -601,6 +601,57 @@ answer strikes, and after a kill take the next of his units nearby; free ones wa
 army. Tests: `test/addon-gameplay.test.ts` (counter, dead entries, served requests kept, the
 ship coming to a boarding order), `test/ai-army.test.ts` (the 50-request cap).
 
+## 7f. Seventh audit (2026-10): a landed army that waits, defenders that never answer
+
+Two play-test saves from one add-on free-play game (Amazons and Sajiki computer players).
+
+**(1) An Amazon army of 20 hunters and soldiers stood in a blob on the human's island**, 72 cells
+(max + min / 2) from his town hall, outside his territory, for good; only a strike made them
+move (the help rule). They had been put ashore there by the transports (state: no job, army
+tactic running every 50 ticks). Cause: deviation T. The army run handed a jobless member that
+far a 32-cell leg toward the target point instead of an attack job; from that shore the leg's
+end lay in the sea, the walk was refused, and the same happened in every run. The original
+(spec 2.5 step 6, confirmed at instruction level, Gold `0x46dc2e`: a member with no job jumps
+straight to the aboard test and the attack check, with no distance or territory test) gives it
+the attack job at once, and the attack's own walk takes it to the target. Fixed: T removed
+(`ai.ts` `runArmy` `far`: only members with a job or a walk are left alone when far). On the
+save: before, 0 of 20 members had a job after 1,500 ticks (every run's leg walk failed); after,
+all got attack jobs at the first run (24 ticks after loading), the first strike on the human
+came 213 ticks later, and the army fought its way to his town hall (with the human passive in
+the harness, his town fell within 4,000 ticks).
+
+The other questions checked in the exe for this report (spec 2.5, `addon.md` 8.4):
+- The help rule and the retaliation have no exception for army members or for units waiting
+  for a ship (job 0x3E, made with player flag 0): they answer strikes like idle units (Gold
+  `0x468ee0`, `0x46b210`). Ours the same.
+- A member already on the target's island never waits for a ship: the join groups by the
+  member's island and only groups on other islands make a request (Gold `0046c050`). A member
+  waiting for a ship is a "member with another job" for the tactics (assigned only within 40
+  cells or inside the target's territory). Ours the same.
+- A request refused by the 50-request cap still gives the group the wait job, and the wait job
+  never ends by itself (its run, `0x488790`, only returns 500): the members wait until the army
+  ends (quirk, original). Ours the same.
+
+**(2) Sajiki hunters and soldiers did not answer the human's landing party**, not even when
+struck themselves. State (the first save, before the landing): all 17 armed Sajiki units outside
+buildings held top-level attacks on one human hunter standing on the human's island, 15 cells
+across the water from the nearest Sajiki land; the anchors of those attacks were sea cells, so
+their first targets had been ships (a fight in the strait). Each attack failed its 5 searches,
+retargeted onto the same hunter (3.6) and started again, every ~10 ticks. A striker of tier 0
+(any soldier) does not displace a current target of tier 0 (`combat.md` 7.2), and the defence
+response keeps such defenders (2.2). All of this is the original's rule set, re-read at
+instruction level (Gold retarget `0x47bc00` and chooser `0046aa70`: no island or reach test;
+retaliation `0x46b32a` `jle`; defence keep test in `004766a0`): `combat.md` 7.2 "Attacks across
+the water". No change in vanilla; a regression test pins it (`test/engagement.test.ts`). An
+enhanced option could end attacks on targets on another island. Reproduction on the save:
+three human soldiers placed next to the Sajiki town and ordered onto one Sajiki soldier: in 400
+ticks none of the 17 locked units answered while the soldier was killed (only a hunter that
+came out of a building meanwhile, with no such attack, did), before and after the fix of (1). The second save has no
+armed Sajiki unit left outside buildings (the landing party had killed them).
+
+Test: `test/ai-army.test.ts` (an idle member 45+ cells from the target point gets its attack job
+at the army run; a walking one that far is left alone).
+
 ## 8. Tests and cost
 
 `test/ai.test.ts` (with or without integration):

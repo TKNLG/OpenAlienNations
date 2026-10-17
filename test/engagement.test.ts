@@ -233,14 +233,15 @@ test('an attack on a target on another island never ends: 5 failed searches, the
     else if (w.islandAt(X, Y) !== w.islandAt(...P)) Q = [X, Y];
   }
   assert.ok(P && Q, 'two quiet land cells on different islands');
-  const sword = w.spawnUnit(h, 31, P[0], P[1], -1);                 // melee, tier 0
-  const far = w.spawnUnit(en, 17, Q[0], Q[1], -1);                  // a hunter over the water, tier 0
+  const [px, py] = P!, [qx, qy] = Q!;
+  const sword = w.spawnUnit(h, 31, px, py, -1);                     // melee, tier 0
+  const far = w.spawnUnit(en, 17, qx, qy, -1);                      // a hunter over the water, tier 0
   w.combat.startAttack(sword, far, true, false, 1, false);
   for (let i = 0; i < 400; i++) w.step();
   assert.equal(target(w, sword), far.id, 'still attacking the unreachable hunter (retargeted onto it again)');
-  assert.deepEqual(cell(sword), P, 'without moving');
+  assert.deepEqual(cell(sword), [px, py], 'without moving');
   // a tier-0 striker next to it: 7.2 keeps the current target (its tier 0 <= 0)
-  const striker = w.spawnUnit(en, 31, (P[0] + 1) & (n - 1), P[1], -1);
+  const striker = w.spawnUnit(en, 31, (px + 1) & (n - 1), py, -1);
   w.combat.attacked(sword, striker);
   assert.equal(target(w, sword), far.id, 'no answer to the striker, not even as the victim');
 });
