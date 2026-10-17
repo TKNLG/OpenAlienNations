@@ -52,8 +52,12 @@ produce bit-identical state everywhere:
 
 ## Movement
 
-- 8-neighbour A* on the wrapping grid. Straight step cost 10, diagonal 14, no corner cutting past
-  blocked cells. Ties are broken by insertion counter, so results are deterministic.
+- 8-neighbour A* on the wrapping grid. Straight step cost 10, diagonal 14. Diagonal steps may
+  cut corners: only the destination cell is tested, as in the original's planner and step
+  (`units-and-jobs.md` 4.1 "Diagonal steps cut corners"; until October 2026 ours forbade a
+  diagonal past a blocked orthogonal cell, which left cells next to stones and trees in dense
+  nature unreachable and gatherers walking on the spot for ever). Ties are broken by insertion
+  counter, so results are deterministic.
 - Walking follows the original's follow-path job (`units-and-jobs.md` 4.1), run by
   `src/engine/motion.ts` from `World.step` for every entity whose `moveAt` tick has come:
   - a walk (`World.walk` / `setPath`) plans at once; its first step comes 3 ticks later (the

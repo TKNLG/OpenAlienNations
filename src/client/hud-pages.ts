@@ -35,18 +35,85 @@ export function buttonTint(b: LookFlags, hover: boolean): Tint { return lookOf(b
 
 // ---------------------------------------------------------------- choosing the page (5.1)
 
+/** what the page choice knows about a selected object: its kind (1 = building) and type number */
+export interface PageObj { kind: number; type: number }
+
+/** the record fields a type page default is taken from (product, class, flags) */
+export interface TypePageRecord { product: number; cls: number; flags: number }
+
+const TRANSPORT_SHIP = 67;
+
+/**
+ * Default type page of an object type (side-panel.md 5.1 "Type page defaults"): `rec` is the
+ * local player's own race record of that type, if any.
+ */
+export function defaultTypePage(type: number, rec: TypePageRecord | undefined): number {
+  if (type === 46) return 2;
+  if (type === 48) return 9;
+  if (type < 37 || !rec) return 0;
+  if (rec.product !== -1) return 13;
+  if (rec.cls === 5) return 4;
+  return rec.flags & 0x20 ? 9 : 0;
+}
+
+/**
+ * The player's page state (side-panel.md 5.1): the town page (nothing selected), the selection
+ * page, and one remembered page per object type.
+ */
+export class PanelPages {
+  /** page while nothing is selected */
+  town = 8;
+  /** page last requested while something was selected; 2 = "use the type page" at game start */
+  selection = 2;
+  private byType = new Map<number, number>();
+  private defaults: (type: number) => number;
+
+  constructor(defaults: (type: number) => number) { this.defaults = defaults; }
+
+  typePage(type: number): number {
+    let p = this.byType.get(type);
+    if (p === undefined) { p = this.defaults(type); this.byType.set(type, p); }
+    return p;
+  }
+
+  /** the logical page for this selection (the getter) */
+  current(sel: readonly PageObj[]): number {
+    if (!sel.length) return this.town;
+    if (sel.length > 1) return this.selection === 8 ? 8 : 0;
+    const o = sel[0], s = this.selection;
+    if (o.kind === 1) return s === 0 || s === 6 || s === 8 ? s : this.typePage(o.type);
+    if (s === 0 || s === 8) return s;
+    if (s === 6 && o.type === TRANSPORT_SHIP) return 6;
+    return this.typePage(o.type);
+  }
+
+  /** "show page n" (a function bar button, the town list's research and needs icons) */
+  request(n: number, sel: readonly PageObj[]): void {
+    if (!sel.length) { this.town = n; return; }
+    this.selection = n;
+    if (sel.length === 1 && n !== 0 && n !== 6 && n !== 8) this.byType.set(sel[0].type, n);
+  }
+
+  /** the player changed the selection: a non-empty selection leaves the build menu for INFO */
+  selected(sel: readonly PageObj[]): void {
+    if (sel.length && this.current(sel) === 8) this.request(0, sel);
+  }
+}
+
+export function pageObj(e: Entity): PageObj { return { kind: e.kind, type: e.oid & 0xffff }; }
+
 export function pageFor(hud: Hud, host: HudHost, sel: Entity[]): number {
   const w = host.world!;
   const town = w.economy.town(host.currentTown);
   let p = hud.currentPage(sel);
+  // the build menu needs a current town with a finished town hall, selection or not
+  if (p === 8) { const hall = town ? w.get(town.hall) : undefined; return hall?.complete ? 8 : -1; }
   if (!sel.length) {
     if (!town) return -1;
-    if (p === 8) { const hall = w.get(town.hall); return hall?.complete ? 8 : -1; }
-    return [1, 5, 6, 7, 14].includes(p) ? p : 8;
+    return [1, 5, 6, 7, 14].includes(p) ? p : -2;
   }
-  if (sel.length > 1) return p === 8 ? 8 : 0;
+  if (sel.length > 1) return 0;
   const e = sel[0];
-  if (p === 8) return 8;
   if (p === 9 || p === 10) return marketPagesAllowed(w, host.player, e) ? p : 0;
   if (p === 11 && !isTrader(w, e)) p = 0;
   // page 6 of a unit: only a transport ship has one (its passengers, addon.md 5.6)

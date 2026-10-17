@@ -462,6 +462,12 @@ shift right by one slot if it is absent. Clicking a button sends a "show page N"
 (logical page numbers, section 5.1). When the page data that arrives is empty (page -1), all bar
 buttons are shown disabled.
 
+**No "active page" look** (C, `00423940`, `00455d00`). The bar is rebuilt from the selection
+only; the builder is never told which page is open, and nothing marks the button of the shown
+page: no frame, no pressed frame, no tint. Every bar button is a plain icon button (3.1) with
+just the hover look and, where the table says so, the disabled look. *(Our build once drew a thin
+light frame around the button of the current page; that was our own addition and is removed.)*
+
 | condition | buttons (left to right) | tooltip | logical page |
 |---|---|---|---|
 | player owns a town | `GEBAEUDEBAUEN` | T1 "Gebäudebau" | 8 |
@@ -635,24 +641,92 @@ outside the panel's scope.
 ### 5.1 Logical pages and how one is chosen
 
 The panel content is produced on the simulation side as a "page data" message and then shown by
-the UI (`0044fc20` builds it, `00455d00` displays it). The player state remembers:
+the UI (`0044fc20` builds it, `00455d00` displays it). Which logical page is built is decided
+from three pieces of player state (player object, C: base `0045cdf0` constructor, `0045d780`
+game start, `0045d5d0` set, `0045d640` get; Gold `00462e10`, `00463670`, `004636e0`, identical
+except the one Gold rule marked below):
 
-- the page used when nothing is selected;
-- the page used while something is selected;
-- **per building/unit type**, the last page used for that type (except pages 0, 6 and 8 for
-  buildings, 0 and 8 for units). Selecting an object therefore reopens the page last used for
-  its type.
+| state | player +offset | initial value | meaning |
+|---|---|---|---|
+| **town page** | +0x24 | 8 (build menu) | the page while nothing is selected |
+| **selection page** | +0x20 | **2** | the page last requested while something was selected |
+| **type page** | +0x28 + 4 × type | per-type default (below) | one entry per object type number (record +0xA8), shared by all races' objects of that type |
 
-Rules:
+**Type page defaults** (set once at game start, `0045d780`; Gold `004639c0`). All entries start
+at 0. Then, for every type number 37 and up for which the player's own race has a record:
+production page 13 if the record has a product (+0x11C ≠ -1), else training page 4 if its class
+(+0xC0) is 5, else (Gold only) selling page 9 if its flags (+0xB8) have 0x20, else 0. After that
+the laboratory (46) is set to 2 (research) and, in the base game, the market (48) to 9 (selling;
+the Gold build gets the same value from the 0x20 flag of the market and the harbour). With the
+shipped data that gives:
+
+| type | default type page |
+|---|---|
+| barracks 39, artillery factory 43, school 55, alchemist hut 56; Gold shipyard 63 | 4 training |
+| confectionery 44, mine 50, weapon factory 61 | 13 production |
+| laboratory 46 | 2 research |
+| market 48; Gold harbour 62 | 9 selling |
+| everything else (all units, ships included; all other buildings; nature) | 0 info |
+
+**Which page is shown** (the getter, `0045d640`):
+
+| selection | page |
+|---|---|
+| nothing | the town page |
+| two or more objects | 8 if the selection page is 8, else 0 |
+| one building (record +0xA4 = 1) | the selection page if it is 0, 6 or 8; otherwise **the type page of the building's type** |
+| one object of any other kind (unit, nature) | the selection page if it is 0 or 8; Gold only: 6 if the selection page is 6 and the unit is a transport ship (type 67); otherwise **the type page of its type** (so with selection page 6 an ordinary unit shows its type page) |
+
+So the selection page acts as a switch: while it is 0 (INFO was the last button pressed with
+something selected), every selection opens the info page; while it is 6 every building opens
+its inhabitants page; while it is 8 the build menu stays; while it is anything else, each
+selected object opens **the page of its own type**: the default above, or the page last chosen
+for that type. A unit, a house or a foreign object therefore falls back to the info page, a school
+reopens training, a mine production. The initial selection page 2 puts a new game in that
+per-type mode, so the very first click on a school opens its training page.
+
+**Requesting a page** ("show page N" from a function bar button, the research icon of the town
+list or the needs icons; command handler `00451ac0` → setter `0045d5d0`):
+
+| selection | effect |
+|---|---|
+| nothing | town page := N |
+| one object | selection page := N; when N is not 0, 6 or 8 the type page of the object's type := N (any kind, also units) |
+| two or more | selection page := N |
+
+Type pages are never cleared or reset during a game; pressing INFO only sets the selection page
+to 0, the type page keeps its value and comes back as soon as another type-page button is used.
+
+**Selecting** (selection command handler `00450700`): after the new selection is stored, if it is
+not empty and the page the getter now gives is 8 (the selection page is 8), the selection page is
+set to 0 through the setter (type pages untouched). So selecting anything while the build menu
+was open with a selection shows the info page. Deselecting (empty selection) changes nothing:
+the town page shows, and the selection page waits for the next selection. The page is rebuilt
+right after every selection command.
+
+**Refresh timing (quirk, C).** After a page request the page is rebuilt at once only when the
+setter reports a change: the town page changed, or (one object) a type page changed, or (two or
+more objects) always. For one selected object and N = 0, 6 or 8, or a type page that already had
+the value N, the setter reports no change and the new page appears with the player's next
+periodic refresh (every 10 ticks, `0046ed90`). *(Our build switches at once; not reproduced.)*
+
+**Validation** when the page data is built (`0044fc20`), in this order:
 
 | situation | page shown |
 |---|---|
-| nothing selected, page 8 requested | build menu if the player has a current town whose town hall is finished, else empty |
-| nothing selected | requested page (1, 5, 6, 7, 14) for the current town; empty if no town |
-| several objects selected | page 0 (group info), or 8 if the build menu was open |
-| one object selected, page 9/10 | only for a finished market of the own race or a race at peace, else page 0 |
-| one object selected, other page | page applies only to own objects (and page 6 or a finished building); else page 0 |
-| selection of a building while page 8 is open | page switches to 0 (`00450700`) |
+| page 8 (any selection) | build menu if the player has a current town whose town hall is finished, else empty (-1) |
+| nothing selected | the town page (1, 5, 6, 7, 14) for the current town; empty (-1) if there is no current town, empty (-2) for any other number |
+| several objects selected | page 0 (group info) |
+| one object selected, page 9/10 | only for a finished market (Gold: market or harbour) of the own race or a race at peace, else page 0 |
+| one object selected, other page | the page applies only to own objects, and for a building only to page 6 or a finished building (state 2); else page 0 |
+
+*Our build* (`hud-pages.ts` `PanelPages`, used by `hud.ts`): the three pieces of state above,
+reset with each new world; type page defaults are computed from the local player's race records;
+the selection rule runs when the player changes the selection (`main.ts`), not when an object
+leaves the selection by dying or boarding. Page requests take effect at once (the refresh
+quirk above is not reproduced). Extra guards in `pageFor` (page 11 only for a trader, page 6 of
+a unit only for a transport ship, page 12 only for an embassy) never change the result of the
+rules above.
 
 Logical page -> display class (the class decides the layout):
 

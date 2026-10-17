@@ -52,7 +52,7 @@ Function-bar additions:
 
 | selection | buttons / pages |
 |---|---|
-| one own transport ship (67) | `BEWOHNER` (tooltip T329 "An Bord", logical 6, **default page**): grid of passengers by type (`ship.passengers`, in boarding order), click = `unload` with that type; `HANDEL` (T50) trade-route page (flag 0x40) with `trade.partnerLists(town, ship)` (harbour towns, any island) |
+| one own transport ship (67) | `BEWOHNER` (tooltip T329 "An Bord", logical 6; shown for the ship while the selection page is 6, side-panel.md 5.1): grid of passengers by type (`ship.passengers`, in boarding order), click = `unload` with that type; `HANDEL` (T50) trade-route page (flag 0x40) with `trade.partnerLists(town, ship)` (harbour towns, any island) |
 | any trader unit (type 28 or flag 0x40) | `HANDEL` (not only type 28) |
 | one own shipyard (63, class 5) | `KAEMPFERBAUEN` training page; the unit grid is the shipyard's made-at list (64..67) with `logistics.trainState` |
 | a harbour (62, flag 0x20), own or foreign | `VERKAUF` / `EINKAUF` exactly like a market (flag 0x20 instead of type 48; foreign only at peace) |
@@ -198,8 +198,8 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   trader by flag 0x40, market-like by flag 0x20, PATROL for 65/66, passengers by type, the
   right-click intent), tested in `test/addon-client.test.ts` together with the fog rules.
   - Side panel (`hud.ts`, `hud-pages.ts`, `hud-pages-trade.ts`): `BEWOHNER` (T329, page 6) is
-    the transport's default page while no other page was chosen for the type (a ship remembers
-    every page, including 0, so INFO sticks); the info page puts `AUSSTEIGEN` / `PATROL` /
+    shown for a transport ship while the selection page is 6 (side-panel.md 5.1; the ship's type
+    page starts at 0 like every unit's); the info page puts `AUSSTEIGEN` / `PATROL` /
     `WEGWERFEN` from the first slot because ships have no `MOVEHOME`, and adds an "An Bord: n/5"
     line under the status (our addition). Trade page: origin towns with an active terminal
     (market or harbour), partners from `partnerLists(town, trader)`. Market-like buildings get

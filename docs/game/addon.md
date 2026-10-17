@@ -732,7 +732,7 @@ fails after 15 attempts (`units-and-jobs.md` 4.1), and the 0x3B job fails with i
 | page `HANDEL` | every 0x40 unit (traders, transports) | trade-route page (5.7) |
 | `PATROL` | 65, 66 (and 29..36) | patrol |
 | `VERKAUF` | buildings with 0x20 (market, harbour) | market settings |
-| default page | type 67 | the passengers page (6) |
+| page choice | type 67 | the getter keeps page 6 for a transport ship while the selection page is 6 (other units fall back to their type page); there is **no** passengers default: a ship's type page starts at 0 like every unit (side-panel.md 5.1) |
 | unit status | | T327 / T328 for fishing (6.2); "in Transportschiff" for passengers |
 
 ### 5.7 Sea trade (C, trade job `00487b90` = AN `0047ce00`)

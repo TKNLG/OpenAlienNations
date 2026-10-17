@@ -292,7 +292,8 @@ export class Motion {
    * Is the goal in a closed pocket of the grid (fewer than POCKET cells) that does not hold the
    * start? Then no search can reach it, and it fails at once (the original's planner also searches
    * from the goal's end, 4.1). Only a shortcut: the A* would fail the same way, after its whole
-   * node budget. Steps as in the A*: 8 neighbours, no diagonal past a blocked orthogonal cell.
+   * node budget. Steps as in the A*: 8 neighbours, only the destination tested (diagonals cut
+   * corners, units-and-jobs.md 4.1).
    */
   private closedAround(gi: number, si: number): boolean {
     const grid = this.w.blocked, seen = this.floodSeen, q = this.floodQueue;
@@ -307,7 +308,6 @@ export class Motion {
       for (const [dx, dy] of ASIDE) {
         const n = (((y + dy) & m) << bits) | ((x + dx) & m);
         if (seen[n] === st || grid[n]) continue;
-        if (dx !== 0 && dy !== 0 && (grid[(y << bits) | ((x + dx) & m)] || grid[(((y + dy) & m) << bits) | x])) continue;
         if (n === si) return false;
         if (tail >= POCKET) return false;
         seen[n] = st; q[tail++] = n;

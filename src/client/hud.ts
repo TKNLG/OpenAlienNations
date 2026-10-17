@@ -10,7 +10,7 @@ import type { World, Entity, Command } from '../engine/world.ts';
 import type { GameData } from './data.ts';
 import type { ObjectDesc } from '../formats/od.ts';
 import { format } from '../formats/tdb.ts';
-import { drawPage, pageFor, infoBuilding, MissingOperatorLine, MENTOR_NO_OPERATOR, type PageCtx } from './hud-pages.ts';
+import { drawPage, pageFor, infoBuilding, MissingOperatorLine, MENTOR_NO_OPERATOR, PanelPages, defaultTypePage, pageObj, type PageCtx } from './hud-pages.ts';
 import { marketPagesAllowed } from './hud-pages-trade.ts';
 import { isTransport, isTrader, isMarketLike } from './addon-ui.ts';
 import { requestHdPortrait, requestHdUiIcon } from './hd-icons.ts';
@@ -86,10 +86,9 @@ export class Hud {
   /** grid page scroll (rows) */
   scroll = 0;
   townScroll = 0;
-  /** logical page when nothing / something is selected, and per object type (5.1) */
-  pageNone = 8;
-  pageSel = 0;
-  private pageByType = new Map<number, number>();
+  /** town page, selection page and type pages (5.1); fresh for every world */
+  private pageMem: PanelPages | null = null;
+  private pageWorld: World | null = null;
   /** shown money (rolls towards the real value, 3.6) */
   private shownMoney = -1;
   private chestFrame = 0;
@@ -319,26 +318,29 @@ export class Hud {
 
   // ---------------------------------------------------------------- pages (5.1)
 
-  /** the logical page to show now */
-  currentPage(sel: Entity[]): number {
-    if (!sel.length) return this.pageNone;
-    if (sel.length > 1) return this.pageSel === 8 ? 8 : 0;
-    const remembered = this.pageByType.get(sel[0].oid);
-    // a transport ship opens on its passengers page (addon.md 5.6) until another page is chosen
-    if (remembered === undefined && this.pageSel !== 8 && this.host?.world && isTransport(this.host.world, sel[0])) return 6;
-    return remembered ?? this.pageSel;
+  /** the page state of the current world: the player object's state starts over with each game */
+  private get pages(): PanelPages {
+    const w = this.host?.world ?? null;
+    if (!this.pageMem || this.pageWorld !== w) {
+      this.pageWorld = w;
+      const host = this.host;
+      // type page defaults from the local player's own race records (5.1)
+      this.pageMem = new PanelPages(type => defaultTypePage(type, host?.world?.rules.get(((host.player << 16) | type) >>> 0)));
+    }
+    return this.pageMem;
   }
 
+  /** the logical page to show now (5.1) */
+  currentPage(sel: Entity[]): number { return this.pages.current(sel.map(pageObj)); }
+
+  /** "show page n" (5.1) */
   showPage(n: number, sel: Entity[]): void {
     this.scroll = 0;
-    if (!sel.length) { this.pageNone = n; return; }
-    this.pageSel = n;
-    const e = sel[0];
-    // transport ships remember every page: their default is the passengers page, not 0
-    const ship = !!this.host?.world && isTransport(this.host.world, e);
-    const remember = ship ? n !== 8 : e.kind === 1 ? ![0, 6, 8].includes(n) : ![0, 8].includes(n);
-    if (sel.length === 1) { if (remember) this.pageByType.set(e.oid, n); else this.pageByType.delete(e.oid); }
+    this.pages.request(n, sel.map(pageObj));
   }
+
+  /** the player changed the selection (5.1 "Selecting"): the build menu gives way to INFO */
+  selectionChanged(sel: Entity[]): void { this.pages.selected(sel.map(pageObj)); }
 
   // ---------------------------------------------------------------- drawing
 
@@ -513,17 +515,13 @@ export class Hud {
         items.push({ sprite: 'VERKAUF', tip: 46, page: 9, disabled: !ok }, { sprite: 'EINKAUF', tip: 49, page: 10, disabled: !ok });
       }
     }
-    const cur = this.currentPage(sel);
+    // no look marks the open page's button (3.4); an empty page (-1) disables the whole bar
+    const empty = pageFor(this, host, sel) === -1;
     items.slice(0, 6).forEach((it, i) => {
-      const x = 12 + 28 * i;
-      this.imageButton(ui.get(it.sprite), x, 300, {
-        id: `page:${it.page}:${i}`, tip: this.str(it.tip), disabled: it.disabled, off: false,
+      this.imageButton(ui.get(it.sprite), 12 + 28 * i, 300, {
+        id: `page:${it.page}:${i}`, tip: this.str(it.tip), disabled: it.disabled || empty, off: false,
         onClick: () => { this.showPage(it.page, sel); },
       });
-      if (cur === it.page && !it.disabled) {
-        this.ctx.strokeStyle = 'rgba(255,233,160,0.8)'; this.ctx.lineWidth = 1;
-        this.ctx.strokeRect(x + 0.5, 300.5, 29, 29);
-      }
     });
   }
 

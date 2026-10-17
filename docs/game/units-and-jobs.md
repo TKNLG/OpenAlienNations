@@ -428,6 +428,18 @@ The record's sound (+0x08) plays at frame +0x04 of action +0x134 (see odb.md).
   carries a move count (+2 straight, +3 diagonal) and the priority is move count + 4 × (cost of
   the last step + doubled distance to the other end of the search). Our A* only has to be
   deterministic and keep these preferences; it need not reproduce the order of expansion.
+- **Diagonal steps cut corners** (C, checked in the disassembly, October 2026): the planner
+  expands all 8 neighbours (`00471a80`: (+1, −1) first, then (−1, −1), (+1, +1), (−1, +1),
+  (0, −1), (0, +1), (+1, 0), (−1, 0), each through `004714e0`), and the only cell test
+  (`004717a0`, one flags read `0x471898`) is on the **destination** cell, plus the slope class
+  between the two cells. The step itself (`00480410`) also reads the flags of the next path cell
+  only (`0x480675`, tested against +0x24 at `0x48082b`). Nothing looks at the two orthogonal
+  cells beside a diagonal step, so a unit may step diagonally between two blocked cells (two
+  bushes, a stone and a crop, two building corners, a building and water). Gold is the same
+  (`0047af50`, one cell test `0047b210`). A cell whose four orthogonal neighbours are blocked is
+  therefore still reachable over a free diagonal neighbour. This matters for go-to targets and
+  the harvest spiral (4.8): they test only the target cell itself, so they often name such a cell
+  next to a stone or tree in a dense patch of nature.
 - **Arrival tolerance**: before re-planning, the job measures the distance (max + min/2) from the
   unit to its goal. If it is **not greater than the retry counter**, the job ends with success
   instead. After the first plan the counter is 1, so a unit whose last cell is taken by a busy
@@ -2508,6 +2520,16 @@ several gatherers on one object this happened within a few hundred ticks. Rules 
 5. A removed target found while the unit is delivering is replaced at that run (the delivery
    goes on); with no replacement, the job ends when the delivery is over. The trip counter
    counts failed deliveries and is reset by the approach, as in the original.
+6. Work cells reached only diagonally (October 2026). The go-to cell and the spiral cell test
+   only the cell itself (4.8), so in a dense patch of bushes, crops and stones they are often
+   cells whose four orthogonal neighbours are blocked. The original reaches them because its
+   diagonal steps cut corners (4.1). Ours did not, so every plan failed, the walk ended by the
+   arrival tolerance where the gatherer stood, and phase 1 sent him on the same walk again: he
+   stood still for ever with a job, typically on the store's door cell after a delivery (a
+   play-test save: a Pimmon stonemason blocking the town hall entrance). Fixed by cutting corners
+   as the original; saves in that state continue at their next plan. What remains is original:
+   a cell with no free neighbour at all (all eight blocked) can never be reached, and a gatherer
+   sent there keeps retrying (rule 2); seen with computer woodcutters on a tree deep in a forest.
 
 ### 7.2 Who gathers what, and how it starts
 

@@ -92,9 +92,9 @@ export function findPath(blocked: Uint8Array, bits: number, sx: number, sy: numb
     for (let d = 0; d < 8; d++) {
       const [dx, dy] = NEIGHBOURS[d];
       const ni = idx(cx + dx, cy + dy);
-      if (blocked[ni] && ni !== goal) continue;
-      if (blocked[ni] && ni === goal) continue;
-      if (dx !== 0 && dy !== 0 && (blocked[idx(cx + dx, cy)] || blocked[idx(cx, cy + dy)])) continue;
+      // only the destination cell is tested: a diagonal step may pass between two blocked
+      // orthogonal cells (units-and-jobs.md 4.1 "Diagonal steps cut corners")
+      if (blocked[ni]) continue;
       const ng = cg + (dx !== 0 && dy !== 0 ? 14 : 10);
       const old = g.get(ni);
       if (old !== undefined && old <= ng) continue;
@@ -160,8 +160,7 @@ export class PathSearcher {
       for (let d = 0; d < 8; d++) {
         const [dx, dy] = NEIGHBOURS[d];
         const ni = idx(cx + dx, cy + dy);
-        if (blocked[ni]) continue;
-        if (dx !== 0 && dy !== 0 && (blocked[idx(cx + dx, cy)] || blocked[idx(cx, cy + dy)])) continue;
+        if (blocked[ni]) continue;   // the destination only: diagonals cut corners (4.1)
         const ng = cg + (dx !== 0 && dy !== 0 ? 14 : 10);
         if (seen[ni] === st && g[ni] <= ng) continue;
         g[ni] = ng; seen[ni] = st;

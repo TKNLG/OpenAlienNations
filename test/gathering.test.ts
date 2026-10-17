@@ -97,6 +97,37 @@ test('several gatherers on one stone: none stands idle while a stone in reach st
   for (const s of all) assert.equal(w.get(s.id), undefined);
 });
 
+test('gatherer: a work cell reachable only diagonally between blocked cells is reached (corners are cut, 4.1)', { skip }, () => {
+  // the play-test save: a stone in a patch of bushes and crops; its go-to cell (north) and its first
+  // free spiral cell (east) have all four orthogonal neighbours blocked. Without corner cutting no
+  // plan reached them, and the mason walked on the spot at the town hall's door for ever
+  const { world: w, mission: m } = loadMission('Pimmons.mdb', 0, DATA, false);
+  const me = m.humanRace, t = w.economy.towns.find(x => x.race === me)!;
+  const [x, y] = clearing(w, t.x, t.y);
+  const bushType = [...w.rules].find(([oid, r]) => oid >>> 16 === 6 && r.cls === 9)![0] & 0xffff;
+  for (const [dx, dy] of [[-1, -2], [0, -2], [1, -2], [2, -2], [3, -2], [-1, -1], [1, -1], [-1, 0], [2, 0], [1, 1]])
+    w.spawn({ cls: 2, group: 6, type: bushType, owner: 0, x: x + dx, y: y + dy, z: 0 });
+  const s = stone(w, x, y, 3);
+  const m1 = w.size - 1, blocked = (cx: number, cy: number) => w.blocked[(((cy & m1) << w.bits) | (cx & m1))] !== 0;
+  for (const [cx, cy] of [[x, y - 1], [x + 1, y]]) {
+    assert.ok(!blocked(cx, cy), 'the work cell itself is free');
+    assert.ok(blocked(cx, cy - 1) && blocked(cx - 1, cy) && blocked(cx, cy + 1) && blocked(cx + 1, cy), 'all four orthogonal neighbours blocked');
+  }
+  assert.deepEqual(w.goalCell(x, y), [x & m1, (y - 1) & m1], 'the go-to cell is the enclosed north neighbour');
+  const u = w.spawnUnit(me, STONEMASON, x - 6, y + 2, t.id);
+  w.economy.joinTown(u, t);
+  t.stock[2] = 0;
+  w.schedule({ type: 'order', player: me, ids: [u.id], target: s.id });
+  let workedAt = -1;
+  for (let i = 0; i < 3000 && workedAt < 0; i++) {
+    w.step();
+    if (s.amount < 3) workedAt = w.tick;
+  }
+  assert.ok(workedAt > 0, `the mason works the stone (he stands at ${cell(u)}, stone at ${x},${y})`);
+  const [ux, uy] = cell(u);
+  assert.ok(Math.abs(ux - x) <= 1 && Math.abs(uy - y) <= 1, 'from a cell next to it');
+});
+
 test('finance page: research spending counts only while a project runs; the charge ends with the research', { skip }, () => {
   const { world: w, mission: m } = loadMission('Pimmons.mdb', 0, DATA, false);
   const me = m.humanRace, eco = w.economy, t = eco.towns.find(x => x.race === me)!, p = eco.players[me]!;

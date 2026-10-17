@@ -487,6 +487,7 @@ class Game implements HudHost {
     const sel = dbl ? combineSelection(this.currentSelection(), next, shift || ctrl, false)
       : combineSelection(this.currentSelection(), next, shift, ctrl);
     this.selected = new Set(sel.ids);
+    this.hud.selectionChanged(this.selection);   // side-panel.md 5.1 "Selecting"
     if (sel.ids.length) this.sfx.play(43, 0, 0);
   }
 
@@ -535,7 +536,7 @@ class Game implements HudHost {
     if (this.placing >= 0) void this.looks.ensureGhost(((this.player << 16) | type) >>> 0);
     this.recomputeCursor();   // placing: hidden over the world view (cursors.md 5.4); ended: the rule
   }
-  select(ids: number[]): void { this.selected = new Set(ids); }
+  select(ids: number[]): void { this.selected = new Set(ids); this.hud.selectionChanged(this.selection); }
   centerOn(x: number, y: number): void {
     const n = this.cam.mapSize;
     this.cam.x = ((x % n) + n) % n + 0.5; this.cam.y = ((y % n) + n) % n + 0.5;
