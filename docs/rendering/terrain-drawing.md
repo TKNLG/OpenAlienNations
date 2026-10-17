@@ -262,13 +262,24 @@ Optional finer fidelity, in order of visibility: quantise the tile to its top ni
 truncate the result to 5-6-5. The 6-bit dither is invisible at normal zoom. A "Direct3D look"
 (optional, never default) would be (v >> 4) × 17 × g / 255 with bilinear sampling.
 
-### Our build (October 2026, for the implementer)
+### Our build (October 2026, implemented)
 
-`src/client/terrain-renderer.ts` divides by **162**: out = tile × (L / 162) × fog, with fog a
-separate bilinear per-vertex texture (0, 0.5, 1). Differences to the original:
+`src/client/terrain-renderer.ts` (shaders) with the reference rules in
+`src/client/terrain-shade.ts` (tests: `test/terrain-shade.test.ts`):
 
-- Flat ground shows the full tile colour instead of 0.633 of it: everything is **1.58× (256/162)
-  too bright**; slopes above 162 exceed the tile colour (up to 1.475×) and clip to white.
-- Fog and light are interpolated separately and multiplied (tiny difference at fog edges); fog
-  halving is exact (0.5 vs L >> 1).
-- Tiles at full 8-bit precision with trilinear mipmapping instead of 4-bit, nearest texels.
+- Each vertex fetches its fog shade (`Vision.shade`: 255 / 128 / 0, a 1 x 1 texture of 255 when
+  fog is off) and computes its corner g = L, L >> 1 or 0 before interpolation; g is interpolated
+  over the two triangles split left-right.
+- **Vanilla (default)**: nearest texel at texel position (u x 63, v x 63.75), channels cut to the
+  top nibble, transition blends from the corners' 4-bit texels with the integer weights above
+  (4-bit result). The 6-bit light is modelled by its run average: with s0 = floor(g / 4) and
+  phase f = g / 4 - s0, each channel shows (1 - f) x level(c x s0) + f x level(c x (s0 + 1)),
+  level = the top 5 (red, blue) or 6 (green) bits of the 10-bit product in 8-bit terms (<< 3,
+  << 2). This is the mean of the original's dithered pixels; the dither pattern itself is not
+  drawn.
+- **Enhanced "Glattes Gelände"** (`smoothTerrain`, off by default): full 8-bit texels with
+  trilinear mipmapping and the continuous bilinear blend, out = tile x g / 256 (no truncation):
+  smoother, same brightness rule (about 6 % brighter on average than vanilla, from the nibble
+  cut).
+- Not reproduced: the transition cache quirk (above), the thin band where the scanline fill
+  differs from the two-triangle split.

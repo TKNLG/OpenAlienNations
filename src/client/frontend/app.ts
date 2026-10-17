@@ -577,7 +577,7 @@ export class FrontEndApp {
       w.push(this.label(R(230, y, 539, y + 27), text));
       w.push(this.value(R(540, y, 585, y + 27), onOff(st[key]), () => { st[key] = !st[key]; this.changed(); again(); }));
     });
-    w.push(this.back(R(340, 470, 460, 490), back));
+    w.push(this.back(R(340, 480, 460, 500), back));
     this.show(w, back);
   }
 

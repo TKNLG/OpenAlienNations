@@ -12,11 +12,11 @@
 ## Later: optional "enhanced" mode (player's choice, the original "vanilla" rules stay the default)
 
 Enhanced options that exist so far are stored settings, all off by default (`src/client/frontend/
-settings.ts`: `selectionRings`, `smoothMovement`, `cursorHints`, `advisorQueue`); they change only
+settings.ts`: `selectionRings`, `smoothMovement`, `cursorHints`, `advisorQueue`, `smoothTerrain`); they change only
 the client's presentation, never the simulation. Players switch them in Einstellungen ->
 "Erweitert" (main menu and in-game options; our addition, `FrontEndApp.enhanced` in
 `src/client/frontend/app.ts`): Auswahlringe, Flüssige Bewegung, Cursor-Hinweise,
-Berater-Warteschlange, each Ein/Aus, with a note that they differ from the original and Aus = the
+Berater-Warteschlange, Glattes Gelände, each Ein/Aus, with a note that they differ from the original and Aus = the
 original. They are stored in localStorage `an.settings`; the running game re-reads them within a
 second (`main.ts`, `overlay.ts`), so a change applies on resuming the game (the advisor player
 switches at the next line it gets while idle).
@@ -31,6 +31,9 @@ switches at the next line it gets while idle).
   `smoothMovement`
 - Selection circles under selected objects as an alternative to the original's blue tint.
   *Exists:* setting `selectionRings`
+- Smoother terrain: full 8-bit tile colour with bilinear/mipmap filtering instead of the original
+  software renderer's 4-bit texels, nearest texel and 5-6-5 truncation; same brightness (tile x
+  g / 256), so smoother but not brighter. *Exists:* setting `smoothTerrain` ("Glattes Gelände")
 - HD game sprites: the ~18,000 frames of dv.gd (units, buildings, nature, effects) upscaled too;
   needs a per-category look test (which method suits units vs. buildings vs. effects), ~40 min per
   pass with animevideov3 at 2x, ~60-80 MB as WebP
