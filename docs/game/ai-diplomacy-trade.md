@@ -420,6 +420,16 @@ gets a harvest job with auto-continue on the found object (`units-and-jobs.md` 7
 | food space > 5, neither hunters nor bush porters found anything | +2 food (also counted as produced this round) |
 | iron space > 5, wood >= 2, woodcutter gang not empty, the wood gift did not fire in this run | with chance 9/10: +1 iron and -2 wood |
 
+The iron conversion (confirmed at instruction level, `0046e7ca`..`0046e81d`; Gold the same in
+`00477bf0`): the iron space test is capacity - stock > 5, wood is tested as > 1, the gang test
+is the count of the woodcutter gang list (economy job +0x50), then one `rand()` % 10 != 0; iron
+is added through `0046e820` (+1) and wood removed through `0046e910` (-2). There is no test for
+an iron mine, so this is how a computer town without a mine gets iron: every 150 ticks, until
+the stock reaches capacity - 5 (20 at capacity 25, 45 at 50, 70 at 75) and stops there. The
+iron then shows on the town's market (4.6: above 20 the AI sells it). Checked against a
+play-tester's save (Pimmons and Sajiki at 66 / 70 iron, capacity 75, no mine): the conversion
+was the only iron gain of their towns over 40000 simulated ticks.
+
 Re-checked in the third pass (C, `0046e6b0`): the search routine `0046e260` returns "nothing
 found" at once when the gang is empty, so with no woodcutter (stonemason) the gift depends only
 on the stock. Wood and stone are each **set** to 2 (not raised by 2) and only when that stock is

@@ -1195,6 +1195,11 @@ at y 50 (`%dx` amount + icon per input good). `RAHMEN` at (10,110) with the prod
 | goods buttons | grid from (5,160), step 45 in x (4 per row: 5, 50, 95, 140), 45 in y | click selects the good | |
 | stock per good | (x+30, y)-(x+60, y+30), bottom-left | | |
 
+The stock numbers are the **market's town's** stock (not the nation's): the data message for the
+page (0x33 `00456e60`, 0x34 `00456f10`, one per page) copies, from the market's town (building
++0x50), the nine market records (+0x4EC), the stock array (+0x88), the capacity (+0x54) and the
+owner's race; the same for an own or a foreign market.
+
 For a foreign market the sliders are read-only and the start/stop buttons are absent. Only one
 of the two start/stop buttons is enabled at a time (the one that changes the current state).
 
