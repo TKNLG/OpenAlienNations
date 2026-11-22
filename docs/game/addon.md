@@ -1033,7 +1033,7 @@ Details (C, `004567a0`, fish branch for record type 0x40; harvest job `units-and
   (7, 12, 17, 22, 27, 27, ...), **forever**; the boat stays where it worked.
 
 The working way to fish is the move order. A rebuild should copy this for fidelity but may offer
-a fix that gives the fishing job instead.
+a fix that gives the fishing job instead. *Our build:* copied (`fishHarvestBug`, on by default).
 
 ### 6.4 Yield compared with land food
 

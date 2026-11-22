@@ -19,8 +19,8 @@ All eight batches below are done (each: spec from the exe into `docs/`, then cod
 **Deliberately open** (documented where named):
 
 - Maintainer decisions: the AI porter-shortage fix stays (policy below, `integration-ai.md` §7
-  item 2); the fishing-boat harvest bug default is still undecided (policy below; vanilla
-  currently gives the fixed job, `integration-addon-gameplay.md` §7 "Harvest-bug mode").
+  item 2); the fishing-boat harvest bug is reproduced in vanilla (decided 2026-11-22;
+  `integration-addon-gameplay.md` §7 "Harvest-bug mode").
 - Documented deviations kept: add-on land walks replace water/building goals (A11,
   `integration-addon-gameplay.md` §7); network pause (T19, `multiplayer.md` "Later");
   within one unit type our lists use creation order for the original's join order (combat.md
@@ -71,8 +71,12 @@ they are listed once below.
   but a first house until births lift its porters again, while Amazons build houses. **Maintainer
   decision (2026-11-22): keep our fix** (all races react like the Amazons), a deliberate deviation
   from the original in vanilla (`integration-ai.md` §7 item 2).
-- Fishing-boat harvest bug (addon A2): vanilla gives the fixed fishing job; the original loops.
-  Open: to be decided by the maintainer.
+- Fishing-boat harvest bug (addon A2): a right-click of a fishing boat on a fish gives the useless
+  harvest loop. **Maintainer decision (2026-11-22): vanilla copies the original** (`fishHarvestBug`
+  on by default). The working way to fish stays the move order, as in the original: a fishing
+  boat's move order to any water cell starts the fishing job there (`addon.md` 6.2), so a fishing
+  boat cannot be sent somewhere just to look around.
+- Diplomat recall: exactly as the original (decided 2026-11-22; implemented in batch 2).
 
 ## Batches
 

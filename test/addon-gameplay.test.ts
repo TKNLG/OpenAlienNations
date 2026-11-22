@@ -62,7 +62,7 @@ test('add-on mode: islands, ship grid, mountain limit, options; base maps unchan
   assert.equal(w.mountain, 290);
   assert.equal(w.typeWidth, 68);
   assert.equal(w.gold.shipyardTopUp, true);
-  assert.equal(w.gold.fishHarvestBug, false);
+  assert.equal(w.gold.fishHarvestBug, true);
   // ships may use exactly the open sea without objects
   for (let i = 0; i < t.aoCls.length; i++) {
     if (t.aoCls[i] !== AO_CLASS_SEA) assert.equal(w.shipBlocked[i], 1);
@@ -285,7 +285,7 @@ test('a sunk transport takes its passengers along; ships are never healed', { sk
 // ---------------------------------------------------------------- fishing
 
 test('fishing: a boat catches fish (each twice), delivers to the harbour, fish never return', { skip }, () => {
-  const { world: w, mission: m } = aoWorld('SajikisAO.mdb', 2);
+  const { world: w, mission: m } = aoWorld('SajikisAO.mdb', 2, { gold: { fishHarvestBug: false } });
   const h = m.humanRace;
   const harb = w.entities.find(e => e.kind === 1 && e.owner === h && (e.oid & 0xffff) === 62)!;
   const t = w.economy.town(harb.town)!;
@@ -296,7 +296,7 @@ test('fishing: a boat catches fish (each twice), delivers to the harbour, fish n
   const n0 = fishes().length;
   const fish = fishes().sort((a, b) => w.logistics.dist(...cell(a), ...cell(harb)) - w.logistics.dist(...cell(b), ...cell(harb)))[0];
   const amount = w.rules.get(fish.oid)!.amount;
-  // right-click on the fish: the fishing job (the original's harvest bug is off by default)
+  // right-click on the fish with the harvest bug switched off: the fishing job
   w.schedule({ type: 'order', player: h, ids: [boat.id], target: fish.id });
   w.step(); w.step();
   assert.equal(jobKind(w, boat), NJ.Fishing);

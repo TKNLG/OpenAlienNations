@@ -24,7 +24,7 @@ client (`src/client/*`) has to add to make it playable. Gameplay spec:
   | `aiCapacitySkip` | false | true | AI economy job skipped while capacity is 0 (10.4) |
   | `shipyardTopUp` | false | true | the shipyard's goods top-up, in the simulation only (3.5) |
   | `fishTwice` | true | true | each fish is caught twice (6.2 quirk) |
-  | `fishHarvestBug` | false | false | right-click boat on fish: original endless harvest loop (6.3) instead of the fishing job |
+  | `fishHarvestBug` | true | true | right-click boat on fish: original endless harvest loop (6.3); false gives the fishing job instead |
   | `foreignBoarding` | true | true | units of any race may board any transport (5.2 quirk) |
 
   To play a base campaign "as the Gold executable", pass `{ pathFlag: true, class0Respawn: true,
@@ -196,7 +196,8 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   the catch adds the fish record's amount without testing the fish (the job keeps the record id),
   so every boat holding a fish catches it. References (refcounts) are not modelled; "fish set and
   alive" reads "the fish object still exists".
-- **Harvest-bug mode** (`fishHarvestBug`, off by default, maintainer's decision pending): the
+- **Harvest-bug mode** (`fishHarvestBug`, on by default: maintainer decision 2026-11-22, vanilla
+  copies the original; saves made before keep the setting they were saved with): the
   boat attacks the living fish (weapon 27; the fish's die only clears its living flag), works the
   carcass (1 food per 100 ticks), and the delivery's go-to to the land store fails at once, so it
   retries after min(5 × trips, 25) + 2 ticks for ever; a boat carrying a kept catch starts in

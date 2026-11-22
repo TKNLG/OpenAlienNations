@@ -74,8 +74,8 @@ export interface GoldOptions {
   shipyardTopUp: boolean;
   /** each fish is caught twice (6.2 quirk) */
   fishTwice: boolean;
-  /** right-click of a fishing boat on a fish starts the original's endless harvest loop (6.3);
-   *  false: it starts the fishing job on that fish */
+  /** right-click of a fishing boat on a fish starts the original's endless harvest loop (6.3),
+   *  vanilla default (maintainer decision 2026-11-22); false: it starts the fishing job on that fish */
   fishHarvestBug: boolean;
   /** units of any race may board any transport ship (5.2 quirk) */
   foreignBoarding: boolean;
@@ -84,7 +84,7 @@ export interface GoldOptions {
 export function goldDefaults(addon: boolean): GoldOptions {
   return {
     pathFlag: addon, class0Respawn: addon, aiCapacitySkip: addon, shipyardTopUp: addon,
-    fishTwice: true, fishHarvestBug: false, foreignBoarding: true,
+    fishTwice: true, fishHarvestBug: true, foreignBoarding: true,
   };
 }
 
