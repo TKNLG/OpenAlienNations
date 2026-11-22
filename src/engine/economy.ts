@@ -193,7 +193,7 @@ export interface EcoEntity {
 const KIND_BUILDING = 1;
 const SUBCELL = 256;
 
-export interface EconomySnapshot { players: (Player | null)[]; towns: Town[]; network?: boolean; }
+export interface EconomySnapshot { players: (Player | null)[]; towns: Town[]; network?: boolean; noRecord?: boolean; }
 
 export class Economy {
   players: (Player | null)[] = [null, null, null];
@@ -201,6 +201,8 @@ export class Economy {
   /** a network (lockstep) game: the goal job ignores mission goals and declares the last nation
    *  alive the winner (mdb.md "Goals") */
   network = false;
+  /** single player without a mission record: the goal job only repeats (mdb.md "Goals") */
+  noRecord = false;
   private host: EconomyHost;
 
   constructor(host: EconomyHost) { this.host = host; }
@@ -953,8 +955,10 @@ export class Economy {
     if (p.outcome !== 0) return 0;
     if (this.dead(p.race)) { p.outcome = -1; return 0; }
     const wins = p.goals.filter(g => !g.defeat), losses = p.goals.filter(g => g.defeat);
+    if (this.noRecord) return 50;
     if (losses.some(g => this.goalMet(p, g))) { p.outcome = -1; return 0; }
-    if (wins.length && wins.every(g => this.goalMet(p, g))) { p.outcome = 1; return 0; }
+    // "all won" starts true: a record without win conditions is won at the first check
+    if (wins.every(g => this.goalMet(p, g))) { p.outcome = 1; return 0; }
     return 50;
   }
 
@@ -1050,17 +1054,19 @@ export class Economy {
   // ---------------------------------------------------------------- state
 
   snapshot(): EconomySnapshot {
-    return structuredCloneLite({ players: this.players, towns: this.towns, ...(this.network ? { network: true } : {}) });
+    return structuredCloneLite({ players: this.players, towns: this.towns, ...(this.network ? { network: true } : {}), ...(this.noRecord ? { noRecord: true } : {}) });
   }
 
   restore(s: EconomySnapshot): void {
     const c = structuredCloneLite(s);
     this.players = c.players; this.towns = c.towns;
     this.network = !!c.network;
+    this.noRecord = !!c.noRecord;
   }
 
   digest(mix: (v: number) => void): void {
     mix(this.network ? 1 : 0);
+    if (this.noRecord) mix(2);
     for (const p of this.players) {
       if (!p) { mix(-1); continue; }
       mix(p.money); mix(p.outcome); mix(p.defeated ? 1 : 0);

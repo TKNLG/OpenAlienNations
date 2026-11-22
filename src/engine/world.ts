@@ -215,6 +215,9 @@ export interface WorldSetup {
   /** a network (lockstep) game: mission goals are ignored, the last nation alive wins (mdb.md
    *  "Goals"); kept in the economy snapshot */
   network?: boolean;
+  /** single player without a mission record (tests, tools): the goal job only repeats; by default a
+   *  record is loaded and one without win conditions is won at the first check (mdb.md "Goals") */
+  noRecord?: boolean;
   /** add-on ("AO") mission (docs/game/addon.md); default: the terrain is an add-on terrain */
   addon?: boolean;
   /** Gold executable behaviour and add-on fidelity switches; defaults by mode (naval.ts goldDefaults) */
@@ -254,8 +257,9 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  labelled after the map objects and their foundations (`islandEdits`, addon.md 2.4; older saves
  *  keep the labels of the bare terrain); 24: the attack state's stored plan holds the firing-position
  *  search's whole path behind the state (combat.md 3.5; older plans are dropped), the towns'
- *  porter lists in join order (`Town.porters`, combat.md 12.1; older saves start from entity order) */
-export const SNAPSHOT_VERSION = 24;
+ *  porter lists in join order (`Town.porters`, combat.md 12.1; older saves start from entity order);
+ *  25: the economy's no-record flag (`noRecord`, mdb.md "Goals"; absent = a record is loaded) */
+export const SNAPSHOT_VERSION = 25;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -396,6 +400,7 @@ export class World {
     if (setup?.lists) this.lists = setup.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (setup) this.economy.setupPlayers(setup.races, setup.costs, setup.goals);
     if (setup?.network) this.economy.network = true;
+    if (setup?.noRecord) this.economy.noRecord = true;
     const bare = this.island && objects.length ? this.island.slice() : null;
     if (objects.length) this.loadMap(objects, setup);
     // add-on: the island ids are labelled after the map objects (and the free-play start town
@@ -1375,7 +1380,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23 && snap.v !== 24) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it

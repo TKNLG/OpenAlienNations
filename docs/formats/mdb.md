@@ -198,8 +198,10 @@ So the last nation alive wins, and with a nation that can never die (see above) 
 *Our build* (`economy.ts runGoals`, `Player.defeated`, `Economy.network`): as above. Every lockstep
 game is a network game (`WorldSetup.network`, `architecture/multiplayer.md`). The result is one
 value per nation, so when "lost" and "won" fall in one run the first one counts, as the client's
-first box does. A record with no win conditions is not won (deviation, kept for records built
-without goals).
+first box does. A record with no win conditions is won at the first check, as in the original
+(no shipped playable record has none: only the multiplayer records of `Infinite.mdb` /
+`InfiniteAO.mdb`, whose goals a network game never reads, and the unused `Sajiki.mdb`). A world
+set up without a mission record (`WorldSetup.noRecord`, tests and tools) only repeats the job.
 
 "City n" below is the n-th entry of the race's town list (1-based, founding order; C, every
 city-based check walks the list from its first entry n − 1 steps). The list still holds destroyed

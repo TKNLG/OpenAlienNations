@@ -77,6 +77,8 @@ they are listed once below.
   boat's move order to any water cell starts the fishing job there (`addon.md` 6.2), so a fishing
   boat cannot be sent somewhere just to look around.
 - Diplomat recall: exactly as the original (decided 2026-11-22; implemented in batch 2).
+- A single-player record without win conditions is won at the first goal check, as in the
+  original (decided 2026-11-22; `mdb.md` "Goals"; no shipped playable record is affected).
 
 ## Batches
 

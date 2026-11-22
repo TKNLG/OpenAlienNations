@@ -115,6 +115,28 @@ test('single player: the same loss condition decides', { skip }, () => {
   assert.equal(p.outcome, -1);
 });
 
+test('single player: a record without win conditions is won at the first check', { skip }, () => {
+  const w = mission();
+  const p = w.economy.players[PIMMONS]!;
+  // only a loss condition that never comes true (treasury >= 1,000,000 as a loss)
+  p.goals = [{ type: 16, defeat: true, p1: 1000000, p2: 0, p3: 0 }];
+  steps(w, 49);
+  assert.equal(p.outcome, 0, 'before the first goal run');
+  steps(w, 2);
+  assert.equal(p.outcome, 1, 'won at the first check');
+});
+
+test('single player without a mission record: the goal job only repeats', { skip }, () => {
+  const w = mission();
+  w.economy.noRecord = true;
+  const p = w.economy.players[PIMMONS]!;
+  p.goals = [];
+  steps(w, 400);
+  assert.equal(p.outcome, 0);
+  // the flag survives a save
+  assert.equal(roundTrip(w).economy.noRecord, true);
+});
+
 // ---------------------------------------------------------------- goals: city lookups
 
 test('goals naming a missing city or city 0 are false (types 12 and 15 included)', { skip }, () => {
