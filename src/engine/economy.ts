@@ -107,6 +107,12 @@ export interface Town {
    * not yet listed are appended in creation order when the list is read (Combat.criminalList)
    */
   criminals: number[];
+  /**
+   * the town's porter list in join order (combat.md 12.1 "Order of the porter list"): ids, appended
+   * when a unit becomes a porter of the town (creation, joining, retype), removed when it leaves
+   * the town or the type; dead entries are skipped by readers (Economy.porterList)
+   */
+  porters: number[];
 }
 
 export interface Player {
@@ -169,6 +175,8 @@ export interface EconomyHost {
   aiResearchDone?(t: Town): void;
   /** a computer army targets the town (it holds a reference, combat.md 10.4 "Lifetime") */
   aiHoldsTown?(id: number): boolean;
+  /** a trade route job holds the town as one of its two ends (combat.md 10.4 "Lifetime") */
+  tradeHoldsTown?(id: number): boolean;
 }
 
 /** the entity fields the economy reads and writes */
@@ -262,7 +270,7 @@ export class Economy {
       stock: new Array(GOODS).fill(0), income: 0, motivationSpent: 0, researchSpent: 0, overheads: 0,
       crime: 0, foodPct: 100, needsPct: 100, condition: 100, happiness: 100,
       needs: [], open: [], homeless: [], researchJob: 0,
-      workerReqs: [], lists: [[], [], [], []], rr: [0, 0, 0], dispatcher: 0, freePorters: [], pending: {}, criminals: [],
+      workerReqs: [], lists: [[], [], [], []], rr: [0, 0, 0], dispatcher: 0, freePorters: [], pending: {}, criminals: [], porters: [],
     };
     // building needs (5.3): every building type of the race with a need threshold
     for (const r of this.host.rules.values()) {
@@ -323,6 +331,7 @@ export class Economy {
   private referenced(t: Town): boolean {
     for (const j of this.host.sched.jobs()) if (j.owner === t.id && TOWN_JOBS.has(j.kind)) return true;
     if (this.host.aiHoldsTown?.(t.id)) return true;
+    if (this.host.tradeHoldsTown?.(t.id)) return true;
     return this.host.entities.some(e => e.town === t.id);
   }
 
@@ -338,7 +347,8 @@ export class Economy {
     if (!t || !r) return;
     b.active = true;
     t.overheads += r.money;
-    if (this.addsCapacity(r)) t.capacity += r.amount;
+    // storage capacity only in the branch for buildings that produce nothing (odb +0x11C = -1, E19)
+    if (r.product === -1 && this.addsCapacity(r)) t.capacity += r.amount;
     // a need building (tavern, news stand, police, temple, circus) closes its need when it becomes
     // active, i.e. when its operator is inside, not at completion (5.3, `00459e80`)
     if (this.isNeedBuilding(r)) this.needActivated(t, this.typeOf(b), r);
@@ -468,7 +478,36 @@ export class Economy {
   joinTown(u: EcoEntity, t: Town): void {
     u.town = t.id;
     t.population++;
+    if ((u.oid & 0xffff) === T.Porter) this.addPorter(t, u.id);
     this.evaluateNeeds(t);
+  }
+
+  /** append to the town's porter list (join order, combat.md 12.1) */
+  private addPorter(t: Town, id: number): void {
+    t.porters ??= [];
+    const i = t.porters.indexOf(id);
+    if (i >= 0) t.porters.splice(i, 1);
+    t.porters.push(id);
+  }
+
+  private dropPorter(t: Town, id: number): void {
+    const i = t.porters?.indexOf(id) ?? -1;
+    if (i >= 0) t.porters.splice(i, 1);
+  }
+
+  /**
+   * The town's porters in join order (combat.md 12.1): the stored list without the dead and those
+   * no longer porters of this town; porters missing from it (not joined through Economy) are
+   * appended in entity order. The pruned list is stored back.
+   */
+  porterList(t: Town, all: Iterable<EcoEntity>, get: (id: number) => EcoEntity | undefined): EcoEntity[] {
+    const ok = (e: EcoEntity | undefined): e is EcoEntity => !!e && e.alive !== false && e.town === t.id && (e.oid & 0xffff) === T.Porter && e.kind !== KIND_BUILDING;
+    const out: EcoEntity[] = [];
+    const seen = new Set<number>();
+    for (const id of t.porters ?? []) { const e = get(id); if (ok(e) && !seen.has(id)) { out.push(e); seen.add(id); } }
+    for (const e of all) if (ok(e) && !seen.has(e.id)) { out.push(e); seen.add(e.id); }
+    t.porters = out.map(e => e.id);
+    return out;
   }
 
   /**
@@ -478,9 +517,10 @@ export class Economy {
    */
   changeType(u: EcoEntity, oid: number): void {
     const t = this.town(u.town);
-    if (t) { t.population--; this.evaluateNeeds(t); }
+    if (t) { t.population--; if ((u.oid & 0xffff) === T.Porter) this.dropPorter(t, u.id); this.evaluateNeeds(t); }
     u.oid = oid;
-    if (t) { t.population++; this.evaluateNeeds(t); }
+    // the unit goes to the end of its new type's list (a released prisoner is the newest porter)
+    if (t) { t.population++; if ((oid & 0xffff) === T.Porter) this.addPorter(t, u.id); this.evaluateNeeds(t); }
   }
 
   leaveTown(u: EcoEntity): void {
@@ -488,6 +528,7 @@ export class Economy {
     if (!t) return;
     t.population--;
     t.homeless = t.homeless.filter(id => id !== u.id);
+    this.dropPorter(t, u.id);
     if (u.home >= 0) this.leaveHome(u);
     u.town = -1;
     this.evaluateNeeds(t);
@@ -506,7 +547,9 @@ export class Economy {
     const b = this.host.get(u.home);
     u.home = -1;
     if (!b) return;
-    b.occupancy = Math.max(0, b.occupancy - 1);
+    // only while the building is alive, and with no lower limit (`00461690`): a map house whose
+    // uncounted porter leaves goes to -1 (dvm.md "Creation order")
+    if (b.alive !== false) b.occupancy--;
     if (b.alive !== false) this.host.residentLeft?.(b);
     // a resident leaving re-arms the house job of a building that is still alive (3.2, `00461690`);
     // a running job keeps its phase
@@ -971,8 +1014,9 @@ export class Economy {
       // Gold Edition goals (docs/game/addon.md 9.2, docs/formats/addon.md 7.2). Goal object ids are
       // creation indices from 0; our entity ids start at 1, so object #p1 is entity p1 + 1.
       case 17: {
+        // "exists" is the object table only: a dead object counts until it leaves the world (9.2)
         const e = this.host.get(g.p1 + 1);
-        if (!e || (e as { alive?: boolean }).alive === false) return false;
+        if (!e) return false;
         const [x, y] = goalCell(g.p2);
         return this.torusDist(Math.floor(e.x / SUBCELL), Math.floor(e.y / SUBCELL), x, y) <= g.p3;
       }
@@ -1030,6 +1074,7 @@ export class Economy {
       mix(t.criminals.length); for (const id of t.criminals) mix(id);
       mix(t.cropPct); mix(Math.round(t.cropAcc * 4096));
       mix(t.freePorters.length); for (const id of t.freePorters) mix(id);
+      mix(t.porters?.length ?? 0); for (const id of t.porters ?? []) mix(id);
       if (t.name !== undefined) { mix(-5); mix(t.name.length); for (let i = 0; i < t.name.length; i++) mix(t.name.charCodeAt(i)); }
     }
   }

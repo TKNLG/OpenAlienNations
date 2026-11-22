@@ -1,5 +1,39 @@
 # Fidelity audit 2026-11 (work list)
 
+## Status (November 2026)
+
+All eight batches below are done (each: spec from the exe into `docs/`, then code from the specs).
+
+| batch | done | what |
+|---|---|---|
+| 1 | snapshot 18 | original path planner (two-way search, path/slope costs, 2000-iteration cap, 15 re-plans, plans end with their tick), move orders, walks without legs, asymmetric slope class, 8-connected sea bodies |
+| 2 | snapshot 18 | multiplayer win, diplomat recall, defeat by the last town, goals with missing cities, re-housing at town destruction, town rename, repeated orders, store choice |
+| 3 | snapshot 22 | transports admit 6, coastal landing, ejects through the leave job, fishing RNG order and catch, 35-tick docking hold |
+| 4 | snapshot 18 | sapling growth by sprite frames, farmer search and RNG order, construction stage, training start, production over-ordering, economy LOW items |
+| 5 | snapshot 22 | line of fire, footprint area scans, priest self-heal, patrol button, map orders in file order, diplomat decision, trader route rules, scout walks, job table |
+| 6 | snapshot 22 | AI army cut, extra scouts, founding search, intruder records, army after a fallen town, gangs in join order, research on lab activation |
+| 7 | snapshot 22 | dispatcher free-porter list, direct deliveries, source pick-up rule, trainee requests, anchor distances |
+| 8a | | combat / AI / trade leftovers: batch 5 items re-checked in the exe (F11-F13, T8 correct); exact firing-position search (C4, one forward planner search, path shift 1); criminal victims from the porter list in join order (C8); guard scan after its step (F7); foreign merchants unload into market sites (T6); diplomats not refused for an inactive embassy (D5); AI founding check and site test (A8, A16, A17), defender cancel order (A14), A15 details; destroyed-not-freed towns as targets; route jobs hold their towns; Gold gang release (snapshot 24) |
+| 8b | snapshot 23 | towns, movement, economy and add-on leftovers: order of a destroyed town's units (T5), founder order on an own town-hall site (T10), embassy lines at map load (T21), map houses (porter always born, occupancy reset to 0 by the loader, no lower limit when residents leave), SajikisAO 8 goal ids settled (original data bug), free test with the block counter, go-to walks plan 1 tick later (M14), no storage from producing buildings (E19), goal 17 counts dead objects (A16), island ids labelled after the map objects (A21); settled without change: T6, T13, E9, the boarding queue quirk of `addon.md` 5.2 (original) |
+
+**Deliberately open** (documented where named):
+
+- Maintainer decisions: the AI porter-shortage fix stays (policy below, `integration-ai.md` §7
+  item 2); the fishing-boat harvest bug default is still undecided (policy below; vanilla
+  currently gives the fixed job, `integration-addon-gameplay.md` §7 "Harvest-bug mode").
+- Documented deviations kept: add-on land walks replace water/building goals (A11,
+  `integration-addon-gameplay.md` §7); network pause (T19, `multiplayer.md` "Later");
+  within one unit type our lists use creation order for the original's join order (combat.md
+  10.4, 12.3); the founder order completes the clicked site, and building rows keep an owner
+  test (`units-and-jobs.md` 3.2); walking is a world pass outside the job wheel
+  (`units-and-jobs.md` 4.2); the island generator's re-roll escape (`integration-addon.md` 7);
+  the remaining deviation lists in `integration-*.md` §7.
+- Needs the runtime recorder (`runtime-recorder.md`): real planner latency (movement M16),
+  object lifetimes after death (when goal 17 stops seeing a dead object), and everything marked
+  *(I)* / *(uncertain)* in the specs.
+
+## Work list
+
 After the original function names were matched onto the PC executables (`game/original-names.md`),
 six areas were audited against the exes: our specs (`docs/`) and our code (`src/`) were compared
 with the original, function by function. This page is the consolidated work list. The detailed

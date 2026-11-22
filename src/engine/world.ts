@@ -20,7 +20,7 @@ import type { Weapon } from '../formats/wdb.ts';
 import type { MapOrder } from '../formats/mission.ts';
 import { BuildingFlag } from '../formats/odb.ts';
 import { Naval, isNavalJob, goldDefaults, ADDON_TYPES, type GoldOptions, type NavalSnapshot } from './naval.ts';
-import { AO_CLASS_SEA, AO_MOUNTAIN, type AddonTerrain } from '../world/addon-terrain.ts';
+import { AO_CLASS_SEA, AO_MOUNTAIN, labelIslands, type AddonTerrain } from '../world/addon-terrain.ts';
 import { Motion, isMotionJob, WS, WalkResult, type FidgetCommand } from './motion.ts';
 import { ring } from './ai-defs.ts';
 import { Territory, type TerritorySnapshot } from './territory.ts';
@@ -250,8 +250,12 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  races' "started" inventions, research chosen by events instead of polling (`AiTown.labSeen` gone);
  *  22: the trade route job's first-leg marker and first-leg destination (ai-diplomacy-trade.md
  *  4.4; older route jobs are padded on restore), a chosen-but-not-started heal patient (state 2,
- *  combat.md 13), the errand blocked inside a foreign embassy (3.4 step 3) */
-export const SNAPSHOT_VERSION = 22;
+ *  combat.md 13), the errand blocked inside a foreign embassy (3.4 step 3); 23: add-on island ids
+ *  labelled after the map objects and their foundations (`islandEdits`, addon.md 2.4; older saves
+ *  keep the labels of the bare terrain); 24: the attack state's stored plan holds the firing-position
+ *  search's whole path behind the state (combat.md 3.5; older plans are dropped), the towns'
+ *  porter lists in join order (`Town.porters`, combat.md 12.1; older saves start from entity order) */
+export const SNAPSHOT_VERSION = 24;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -273,6 +277,8 @@ export interface WorldSnapshot {
   /** terrain edits (foundations, worn paths; units-and-jobs.md 6.6, 4.5): [cell, height, class, tile, path] */
   ground?: number[][];
   groundRand?: number;
+  /** add-on island ids that differ from the bare terrain's labels, [cell, id] (version 23, addon.md 2.4) */
+  islandEdits?: [number, number][];
   /** add-on mode and options (absent in base games) */
   addon?: boolean;
   gold?: GoldOptions;
@@ -314,6 +320,8 @@ export class World {
   readonly pathFlag: Uint8Array;
   /** cells changed by foundations and worn paths (snapshot / hash) */
   private groundEdits = new Set<number>();
+  /** island ids changed by labelling after the map objects (addon.md 2.4): [cell, id], in cell order */
+  private islandEdits: [number, number][] = [];
   /** cosmetic tile picks of foundations and paths: their own stream, so they never shift gameplay draws */
   readonly groundRand: MsRand;
   /** changed areas since the client last drained them: [x0, y0, x1, y1] */
@@ -388,12 +396,24 @@ export class World {
     if (setup?.lists) this.lists = setup.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (setup) this.economy.setupPlayers(setup.races, setup.costs, setup.goals);
     if (setup?.network) this.economy.network = true;
+    const bare = this.island && objects.length ? this.island.slice() : null;
     if (objects.length) this.loadMap(objects, setup);
+    // add-on: the island ids are labelled after the map objects (and the free-play start town
+    // halls) exist, so they see the foundations (addon.md 2.4, `004922c0`)
+    if (bare) this.relabelIslands(bare);
     // the relation table is rebuilt from the race blocks after the map objects exist; this also
     // undoes the "first contact = war" of embassies activated while loading (mdb.md "Relations")
     if (setup) this.diplomacy.initRelations(setup.races);
     // computer players start after the map and the relations exist (ai-diplomacy-trade.md 1.1)
     if (setup && setup.ai !== false) this.ai.start(aiConfig(setup.races, setup.prerequisites));
+  }
+
+  /** label the island ids from the current heights; keep the cells that differ from `bare` (addon.md 2.4) */
+  private relabelIslands(bare: Uint8Array): void {
+    labelIslands(this.terrain as AddonTerrain);
+    this.islandEdits = [];
+    const isl = this.island!;
+    for (let i = 0; i < isl.length; i++) if (isl[i] !== bare[i]) this.islandEdits.push([i, isl[i]]);
   }
 
   /** create the map's objects in the original's order (docs/formats/dvm.md "Creation order") */
@@ -445,6 +465,10 @@ export class World {
         }
         if (r.garrison > 0) this.combat.startOutpost(b);
       }
+      // the loader then sets the occupancy to 0: a house's porter keeps it as his home but is not
+      // counted, so the housing below can fill the house up to its capacity besides him (dvm.md
+      // "Creation order", quirk)
+      b.occupancy = 0;
       if (!r || r.operator < 0 || op) this.logistics.activate(b);
     }
     const ships: [Entity, MapObject][] = [];
@@ -651,6 +675,30 @@ export class World {
   }
 
   /**
+   * The attack job's firing-position search (combat.md 3.5, path.ts `Planner.seek`), computed at
+   * once: from (sx, sy), the distance term toward the target footprint's centre (cx, cy), planner
+   * mode 0 (units with D < 32 from the start block), path shift 1 (worn paths cost like any other
+   * cell), e's step times. `test(x, y)`: the range test from a cell. The path from the start cell
+   * (included) to the first cell that passes, or null. Add-on: a target on another island fails
+   * at once (the original's search fails too, after its iterations).
+   */
+  seek(e: Entity, sx: number, sy: number, cx: number, cy: number, test: (x: number, y: number) => boolean): [number, number][] | null {
+    const m = this.size - 1;
+    const ship = this.isShip(e);
+    if (this.addon && e.kind === Kind.Unit && !ship && this.island) {
+      const a = this.island[this.cell(sx, sy)], b = this.island[this.cell(cx, cy)];
+      if (a !== 0 && b !== 0 && a !== b) return null;
+    }
+    this.planner ??= new Planner(this.bits);
+    const r = this.rules.get(e.oid);
+    return this.planner.seek({
+      sx: sx & m, sy: sy & m, gx: cx & m, gy: cy & m, steps: r?.stepTime ?? DEFAULT_STEP_TIME, shift: 1, mode: 0, allUnits: false,
+      blocked: ship ? this.shipBlocked : this.blocked, pathFlag: this.pathFlag, height: this.terrain.height,
+      unitAt: ship ? () => false : (i: number) => this.motion.unitOn(i, e) !== null,
+    }, test);
+  }
+
+  /**
    * Plan a walk to a cell with one plan made at once (units ignored); false when it fails (and the
    * old walk is kept). Used where one search decides (the attack's stored plan, animals, patrols,
    * ships, a few computer-player walks); the jobs that walk with the original's follow-path job use
@@ -668,23 +716,6 @@ export class World {
     if (!path) return false;
     this.setPath(e, path, x, y);
     return true;
-  }
-
-  /**
-   * The way `walk` would plan for e from (sx, sy) to (x, y), without walking it: units ignored,
-   * the add-on land goal rules applied (the attack's stored plan, combat.md 3.3.1). Cells after the
-   * start; [] on the goal; null: no way.
-   */
-  planPath(e: Entity, sx: number, sy: number, x: number, y: number): [number, number][] | null {
-    const m = this.size - 1;
-    let gx = x & m, gy = y & m;
-    if (this.addon && e.kind === Kind.Unit) {
-      const g = this.landGoal(e, gx, gy);
-      if (!g) return null;
-      [gx, gy] = g;
-    }
-    if ((sx & m) === gx && (sy & m) === gy) return [];
-    return this.plan(e, sx & m, sy & m, gx, gy);
   }
 
   /**
@@ -943,6 +974,8 @@ export class World {
   aiResearchDone(t: Town): void { this.ai.researchDone(t); }
   /** EconomyHost: a computer army targets the town and holds it (combat.md 10.4 "Lifetime") */
   aiHoldsTown(id: number): boolean { return this.ai.holdsTown(id); }
+  /** EconomyHost: a trade route job names the town as one of its ends and holds it (combat.md 10.4) */
+  tradeHoldsTown(id: number): boolean { return this.trade.holdsTown(id); }
 
   notify(race: number, mentor: number, queue = true, intervalMs = 0): void {
     const key = race * 1024 + mentor;
@@ -1332,6 +1365,7 @@ export class World {
       ai: this.ai.snapshot(),
       ground: [...this.groundEdits].sort((a, b) => a - b).map(i => [i, this.terrain.height[i], this.terrain.cls[i], this.terrain.tile[i], this.pathFlag[i]]),
       groundRand: this.groundRand.state,
+      ...(this.islandEdits.length ? { islandEdits: this.islandEdits.map(([i, v]) => [i, v] as [number, number]) } : {}),
       territory: this.territory.snapshot(),
       enters: this.enters,
       advisor: [...this.advisorLast].sort((a, b) => a[0] - b[0]).map(([k, t]) => [Math.floor(k / 1024), k % 1024, t] as [number, number, number]),
@@ -1341,7 +1375,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1349,6 +1383,11 @@ export class World {
       terrain.height[i] = h; terrain.cls[i] = c; terrain.tile[i] = tl; w.pathFlag[i] = p; w.groundEdits.add(i);
     }
     if (snap.groundRand !== undefined) w.groundRand.state = snap.groundRand;
+    // island ids after the map objects (version 23; older saves keep the bare terrain's labels)
+    if (snap.islandEdits && w.island) {
+      w.islandEdits = snap.islandEdits.map(([i, v]) => [i, v] as [number, number]);
+      for (const [i, v] of w.islandEdits) w.island[i] = v;
+    }
     if (snap.gold) w.gold = { ...w.gold, ...snap.gold };
     for (const e of JSON.parse(JSON.stringify(snap.entities)) as Entity[]) {
       const copy: Entity = e;
@@ -1413,6 +1452,13 @@ export class World {
     // before version 22 the route job had no first-leg marker and no first-leg destination
     // (ai-diplomacy-trade.md 4.4): running routes go on as later legs
     if (snap.v < 22) w.trade.migrateRoutesV21(w.sched.jobs());
+    // before version 24 a stored attack plan kept only its two ends (combat.md 3.5): dropped (the
+    // next run searches again), and the towns kept no porter list (combat.md 12.1): it starts in
+    // entity order
+    if (snap.v < 24) {
+      w.combat.migratePlansV23(w.sched.jobs(), HV.Attack, HG.Harvest + HV.Attack);
+      for (const t of w.economy.towns) { t.porters = []; w.economy.porterList(t, w.entities, id => w.get(id)); }
+    }
     if (snap.lists) w.lists = snap.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (snap.territory) w.territory.restore(snap.territory);
     else w.migrateTerritory();
@@ -1460,6 +1506,7 @@ export class World {
     this.naval.digest(mix);
     this.territory.digest(mix);
     mix(this.groundEdits.size); mix(this.groundRand.state);
+    mix(this.islandEdits.length); for (const [i, v] of this.islandEdits) { mix(i); mix(v); }
     // order-independent (a restored world lists the edits sorted)
     let g = 0;
     for (const i of this.groundEdits) g = (g + Math.imul(i + 1, 0x9e3779b1) + Math.imul(this.terrain.height[i] * 16 + this.terrain.cls[i] * 2 + this.pathFlag[i] + 1, 0x85ebca6b)) | 0;

@@ -147,7 +147,10 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   nearest free land cell of their island within 6 rings, and the walk fails at once when there is
   none (otherwise melee units retaliating against ships ran 2000-node searches every tick; the
   original replaces goals only in the go-to and the move command, with an unlimited spiral and no
-  island filter, then fails the follow path by the island test: audit A11, not changed). Trees
+  island filter, then fails the follow path by the island test: audit A11, not changed; re-checked in batch 8,
+  2026-11: harbour and shipyard entrances lie in the water and our go-to aims at the entrance,
+  so the original's go-to chooser, `Map::GetFreeNeighbour` `00485dc0`, would first have to
+  replace ours for every add-on go-to; kept as a documented deviation). Trees
   and other goals keep the base search.
 - **Sea bodies.** Open-sea cells are labelled once (static terrain), **8-connected**: ships cut
   diagonal corners like units (the planner and the step test only the destination cell,
@@ -228,8 +231,11 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   counter, the idle list of the request service and request cancelling (all ships of the
   request become idle) follow 8.4 now.
 - **Goal 17** uses the object's own position; a unit aboard keeps the cell where it boarded (or
-  was created). **SajikisAO 8**'s goal ids still point at the outpost/house objects
-  (formats addon.md 7.3); **SajikisAO 2**'s goal `19(1, ...)` can never hold (no island 1).
+  was created). Goal 17 counts the object until it leaves the world, also while dead
+  (`addon.md` 9.2; the original until the object is freed). **SajikisAO 8**'s goal ids point at
+  the outpost/house objects in the original too (formats addon.md 7.3, settled 2026-11: the
+  house porters are created at load for certain), so its lose conditions never fire;
+  **SajikisAO 2**'s goal `19(1, ...)` can never hold (no island 1).
 - **Map ships** are housed by the base housing rule when their town has room (ships are units);
   cargo is not housed.
 - **Client (done)**: sections 3..5 are implemented in `src/client/` and checked in Chromium on

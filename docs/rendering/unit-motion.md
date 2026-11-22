@@ -473,7 +473,7 @@ Status text per job type (DV.tdb, the same in GOG and Gold):
 | 0x05 transport | T272 "Trägt %s zu %s" while loaded, T281 "Holt %s aus %s." on the way to fetch |
 | 0x06 follow path (plain move) | T308 "Unterwegs" |
 | 0x07 go to object | T269 "Unterwegs zu %s" |
-| 0x08 attack | T262 "Attackiert %s" (target name *(I: the argument was not decoded)*) |
+| 0x08 attack | T262 "Attackiert %s" with the **target's record name** (record +0x14C, the type name, e.g. "Bogenschütze"); empty without a target (C, `00473520`) |
 | 0x0C builder | T264 "Errichtet %s" on a site, T310 "Restauriert %s" on a repair |
 | 0x0E found town | T266 "Errichtet Stadt" |
 | 0x16 harvest | T263 "Sammelt %s" |
@@ -482,9 +482,9 @@ Status text per job type (DV.tdb, the same in GOG and Gold):
 | 0x1F turn / idle | T278 "Ohne Aufgabe" |
 | 0x20 trade | T273 "Bringt %s von %s nach %s" / T305 "Unterwegs von %s nach %s" |
 | 0x21 plant | T275 "Pflanzt %s an" |
-| 0x26 flee | T274 "Flüchtet vor %s" |
-| 0x27 guard / patrol | T276 "Patrouilliert" |
-| 0x29 heal | T277 "Heilt %s" |
+| 0x26 flee | T274 "Flüchtet vor %s" with the attacker's record name (+0x14C) (C, `0047de40`) |
+| 0x27 guard / patrol | while its child is an attack (0x08): **the attack child's text** (T262 with the target's type name); otherwise T276 "Patrouilliert" (C, `00480d40`) |
+| 0x29 heal | T277 "Heilt %s" with the **patient's record name** (+0x14C); an **empty line** while no patient is chosen (C, `00481380`) |
 | 0x2B work area (hunters and others) | with a child: T268 "Jagt %s" (the animal's name) while an attack is anywhere in the child chain; otherwise the harvest child's T263; T279 "Unterwegs ins Jagdgebiet" while the direct child is a plain walk; otherwise empty. Without a child: T267 "Hält nach Tieren Ausschau" |
 | 0x38 operator errand | T265 "Bietet %s %s an" |
 | 0x3C answer request | the child's text |
@@ -499,6 +499,8 @@ Our build had no case for the arrest job in `hud-pages.ts jobText` (it fell thro
 T276, heal T277, found town T266, turn/idle T278, empty lines for 0x0F, 0x17, 0x19 and 0x1B, and
 T268 for a harvest job while it hunts, and the hunter's work area 0x2B as in the table above
 (T267 waiting, T279 walking back, T268 hunting, otherwise the harvest child's T263).
+November 2026: the guard shows its attack child's text while it fights, the heal job an empty
+line without a patient, and the %s of T262 / T274 / T277 is the other object's type name.
 
 ---
 

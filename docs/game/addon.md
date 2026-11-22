@@ -281,7 +281,13 @@ themselves and any land cell, diagonals included.** No land unit can stand next 
   island map, +0x0E cells, +0x12 mask, +0x16 shift, +0x1A size; AN.exe: +0x09 cells, +0x0D,
   +0x11, +0x15). The constructor allocates it, zeroed, only in add-on mode.
 - It is filled once, after the map file has been loaded and before play (`004922c0` = AN
-  `00485a30`, at its end): land = **height > 120** (`004922a0`). Every 4-connected component of
+  `00485a30`, at its end): land = **height > 120** (`004922a0`). That is **after** the free-play
+  start town halls (`Player::AddTown` and its completion step) and after `Mission::Load`
+  (`004144e0`, all map objects), so the heights it reads already include the foundations of
+  every start and map building (`units-and-jobs.md` 6.6) (C, fidelity audit A21, 2026-11:
+  the label call follows both in `004922c0`). On the shipped AO maps the foundations change no
+  label (checked with our engine: 0 differing cells on all 30 AO missions); a free-play start
+  town hall could move a cell across 120. Every 4-connected component of
   land on the torus gets a label, written to all its cells. Water cells stay **0**. The
   labelling routine is `0044cea0` (Appendix A.4). Labels start at 1 and are stored in a byte, so
   label 256 would wrap to 0 *(quirk, C)*.
@@ -1118,9 +1124,20 @@ Add-on mode only:
   ship mask for ships) allows; a follow-path child job (kind 6) to it; the job returns
   rand() % 5 + 1. While the child runs, the job returns the child's result; when the child ends
   (arrived, or no path to another sea body), the next round draws a new cell.
-- A released fishing boat (gang trimmed) is sent to the town's first **shipyard**, when the town
-  has a harbour and a shipyard, instead of to the school. Ships cannot enter class-5 buildings,
-  so that walk fails *(quirk by reading)*.
+- **Releasing a member** (Gold `00477f90`, the gang resize; re-checked November 2026): while the
+  list is longer than wanted, its **first** entry (the member that joined first) is removed and
+  gets group 0. Then, through the general job hand-out `00465650` with first delay **5** (a
+  member inside a building is ejected first, `units-and-jobs.md` 1.2), a go-to job (0x07, walk
+  and enter):
+  - a **fishing boat** (64): only when the town's harbour list (62) **and** shipyard list (63)
+    are both non-empty (sites count): into the first shipyard of the list. Otherwise it gets no
+    job (it keeps whatever it was doing, now without a gang);
+  - **every other type** (woodcutters, stonemasons, hunters, bush porters, and the warship of the
+    warship gang): when the town's school list (55) is not empty, into the first school of the
+    list; otherwise no job.
+  A ship's go-to toward a school (warship) ends without entering: a ship cannot enter a
+  training building (3.4) *(quirk)*. The base game (AN `0046ea30`) is the same without the
+  fishing-boat branch.
 - The AI economy job runs only while the town's capacity is not 0 (`004783c0`; 10.4).
 
 ### 8.3 AI fishing (C, `00477610` = AN `0046e260`, class 15)
@@ -1375,7 +1392,7 @@ Parameters p1, p2 and p3 are as in `mdb.md`. The file side belongs to `docs/form
 
 | type | condition | function |
 |---|---|---|
-| 17 | object with map id p1 exists and its wrapped distance (max + min/2) to the point (**x = p2 >> 16, y = p2 & 0xFFFF**; C, the low half is compared with the object's y) is ≤ p3 | `00478b60` |
+| 17 | object with map id p1 exists and its wrapped distance (max + min/2) to the point (**x = p2 >> 16, y = p2 & 0xFFFF**; C, the low half is compared with the object's y) is ≤ p3. "Exists" is only the object-table slot (`DAT_004c0c7c[p1]` holds a handle whose object pointer is set); the alive byte is **not** read. The slot is cleared by the object's destructor (`DVObject::~DVObject` `004029e0` → `00468920` sends `MsgRemoveFromHash`), i.e. when the object is freed, not when it dies: a dead object still counts at its last cell until it is freed (C, fidelity audit A16, 2026-11) | `00478b60` |
 | 18 | object id p1 is gone, dead, or not of type p2 (true = "destroyed") | `00478d50` |
 | 19 | sum over the player's living towns **whose town position is on island p1** of the count of objects of type p2 ≥ p3 | `00478db0` |
 | 20 | stock of good p1 in city p3 ≤ p2 (inverse of type 1). The city is found by counting p3 down along the player's town list and stopping when it reaches 0, so **p3 ≤ 0 never matches a city and the goal is false**, as is a p3 beyond the list (C; shipped missions only use p3 = 1) | `00478e90` |

@@ -105,6 +105,24 @@ After the objects, the loader sets the diplomatic relations from the mission (se
 > 2, ... in creation order: nature, town halls with their 4 units, other buildings with operator /
 > house porter / outpost archers, units, then Gold ship cargo). The Gold mission goals 17 and 18
 > refer to objects by these ids; see [addon.md](addon.md) 8.4.
+>
+> **Details of step 3, re-traced at instruction level (fidelity audit 2026-11, AN `00411200`,
+> `004602d0`; Gold `004144e0`, `00466590`, identical):**
+> - The house porter comes from the building's completion step (`004602d0` / Gold `00466590`):
+>   homeless move in first (there are none at that point), then, if the house is not full, the
+>   birth roll of `economy.md` 3.2 with the town's stored happiness. A new town starts with
+>   happiness **100** (town constructor, AN `+0x4B4`, Gold `+0x514`), so the porter is **always**
+>   born and **no rand() is drawn**. It is a criminal instead when the town's population is a
+>   multiple of the criminal divisor (3.2). So every map house creates exactly one unit here.
+> - Right after the completion step and the outpost archers, and before the building's
+>   activation, the loader sets the building's **occupancy (+0xB4) to 0** (AN `0x411975`
+>   `mov [eax+0xB4],0`; Gold the same store before `00465d00`). This is done for every
+>   building of step 3 (not for the town halls of step 2). For a house it means the house porter
+>   keeps the house as his home but is **not counted**: the housing step 5 can then put up to
+>   capacity more map units into that house, so a map house can hold capacity + 1 residents
+>   *(quirk, C)*. When one of them leaves (death, resettling), the occupancy drops by 1 without a
+>   lower limit (`00461690` has no clamp), so a house whose porter leaves before anyone else moved
+>   in has occupancy −1 and takes one resident more than its capacity later.
 
 ## Trailing block (C)
 

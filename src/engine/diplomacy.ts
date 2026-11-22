@@ -135,14 +135,15 @@ export class Diplomacy {
    * Hook: an embassy became active (its diplomat moved in; also at map load). Every other
    * present player hears mentor#(68 + race); every other player still without contact (0) that
    * owns an active embassy is now at war with this race (first contact = war).
-   * Messages are not sent at tick 0 (map loading).
+   * The lines are said for map embassies too: the loader activates them after the players and the
+   * human's advisor exist (3.3 "Embassies of the map").
    */
   embassyActivated(b: Entity): void {
     if (!this.isEmbassy(b)) return;
     const race = b.owner;
     for (let o = 0; o < RACES; o++) {
       if (o === race || !this.w.economy.players[o]) continue;
-      if (this.w.tick > 0) this.notify(o, M.Embassy + race);
+      this.notify(o, M.Embassy + race);
     }
     for (let o = 0; o < RACES; o++) {
       if (o === race || !this.w.economy.players[o]) continue;
@@ -328,9 +329,9 @@ export class Diplomacy {
         case PH.ToDest: {
           if (u.path) return walkDelay(this.w, u);
           const dest = this.w.get(d[ER.Dest]);
-          // he cannot get in (embassy gone or inactive, refused at the door): nothing changes, back
-          // home (3.4 step 5)
-          if (!dest || !dest.alive || !dest.active || !nearEntity(this.w, u, dest)) { leaveQueues(this.w, u); d[ER.Phase] = PH.Home; continue; }
+          // he cannot get in (embassy gone, refused at the door): nothing changes, back home (3.4
+          // step 5). An embassy that went inactive since the sending still admits him (`00460a10`)
+          if (!dest || !dest.alive || !nearEntity(this.w, u, dest)) { leaveQueues(this.w, u); d[ER.Phase] = PH.Home; continue; }
           const e = enterDoor(this.w, u, dest);
           if (e > 0) return e;
           if (e < 0) { d[ER.Phase] = PH.Home; continue; }

@@ -147,6 +147,9 @@ export class Logistics {
     t.workerReqs.push([type, building]);
     this.wakeDispatcher(t);
   }
+  /** the scheduler's job lookup, for the free test's block counter (5.4) */
+  readonly jobOf = (id: number): Job | undefined => this.w.sched.get(id);
+
   private wakeDispatcher(t: Town): void {
     if (t.dispatcher && this.w.sched.get(t.dispatcher)) return;
     t.dispatcher = this.w.sched.create(LJ.Dispatcher, t.id, 1).id;
@@ -156,11 +159,19 @@ export class Logistics {
 
   /**
    * The free test (5.4, `0045aed0`): alive, the asked group id, and either outside with no job, or
-   * on a leisure visit (+0x78 = -1) unless inside a building with a job. Also the computer
-   * players' "free" unit (ai-diplomacy-trade.md 0, `0045b110`).
+   * on a leisure visit (+0x78 = -1) unless inside a building with an unblocked job. Also the
+   * computer players' "free" unit (ai-diplomacy-trade.md 0, `0045b110`). `job` looks up the current
+   * job for its block counter; without it such a unit counts as not free.
    */
-  static free(u: Entity, group: number): boolean {
-    return u.alive && u.group === group && ((u.job === 0 && u.inside < 0) || (u.idle === -1 && !(u.inside >= 0 && u.job !== 0)));
+  static free(u: Entity, group: number, job?: (id: number) => Job | undefined): boolean {
+    if (!u.alive || u.group !== group) return false;
+    if (u.job === 0 && u.inside < 0) return true;
+    if (u.idle !== -1) return false;
+    // a leisure visitor is free unless inside with an unblocked current job (block counter <= 0;
+    // 5.4: a blocked one does not keep him)
+    if (u.inside < 0 || u.job === 0) return true;
+    const j = job?.(u.job);
+    return !!j && j.hold > 0;
   }
 
   /**
@@ -174,7 +185,7 @@ export class Logistics {
     for (const u of this.w.entities) {
       if (u.kind !== Kind.Unit || u.town !== t.id || (u.oid & 0xffff) !== T.Porter || (u.oid >>> 16) !== t.race) continue;
       porters++;
-      if (Logistics.free(u, group)) { if (freeClears) flag = false; continue; }
+      if (Logistics.free(u, group, this.jobOf)) { if (freeClears) flag = false; continue; }
       const j = u.job ? this.w.sched.get(u.job) : undefined;
       if (j && !j.cancelled && j.kind !== LJ.Harvest) flag = false;
     }
@@ -182,7 +193,7 @@ export class Logistics {
   }
 
   private isFree(u: Entity, t: Town, type: number, group = 0): boolean {
-    return u.kind === Kind.Unit && u.town === t.id && (u.oid & 0xffff) === type && (u.oid >>> 16) === t.race && Logistics.free(u, group);
+    return u.kind === Kind.Unit && u.town === t.id && (u.oid & 0xffff) === type && (u.oid >>> 16) === t.race && Logistics.free(u, group, this.jobOf);
   }
 
   /**
@@ -468,12 +479,16 @@ export class Logistics {
   private goCell(u: Entity, x: number, y: number): boolean {
     return this.w.follow(u, x, y);
   }
-  /** go to an object (job 0x07): its entrance or cell, moved by the go-to target chooser (4.8) */
+  /**
+   * go to an object (job 0x07): its entrance or cell, moved by the go-to target chooser (4.8). The
+   * go-to only creates its walk child, which plans in its own first run 1 tick later (4.2)
+   */
   private goEntity(u: Entity, e: Entity): boolean {
     const [px, py] = e.kind === Kind.Building ? this.entrance(e) : this.cellOf(e);
-    if (this.doorInside(e) || this.w.isShip(u)) return this.goCell(u, px, py);
+    if (this.w.isShip(u)) return this.goCell(u, px, py);
+    if (this.doorInside(e)) return this.w.follow(u, px, py, 0, 1);
     const [x, y] = this.w.goalCell(px, py);
-    return this.goCell(u, x, y);
+    return this.w.follow(u, x, y, 0, 1);
   }
   /**
    * Close enough to work on a target (nature: adjacent, building: at the entrance). A walk that the
@@ -610,8 +625,13 @@ export class Logistics {
     // Gold: a training building admits everyone except ships (addon.md 3.4, `00466cd0`)
     if (r && r.cls === 5 && b.kind === Kind.Building && this.w.isShip(u)) return false;
     // a construction site (state 1) admits only builders and units whose current job is a
-    // transport, also the site of a house or town hall (4.4); anyone else stands at its door
-    if (b.kind === Kind.Building && !b.complete && b.order?.kind === 'build') return this.type(u) === T.Builder || this.mainJob(u)?.kind === LJ.Transport;
+    // transport, also the site of a house or town hall (4.4); anyone else stands at its door. The
+    // test belongs to the same-race branch: a unit of another race on a trade or errand job is
+    // admitted in any building state (a foreign merchant at a market site)
+    if (b.kind === Kind.Building && !b.complete && b.order?.kind === 'build') {
+      if ((u.oid >>> 16) !== (b.oid >>> 16)) { const k = this.mainJob(u)?.kind; return k === 0x20 || k === 0x38; }
+      return this.type(u) === T.Builder || this.mainJob(u)?.kind === LJ.Transport;
+    }
     if (r && r.residents > 0 && r.cls !== 5 && b.complete && b.kind === Kind.Building) return this.mayEnterResidence(u, b, r);
     // a unit of the building's operator type and race is admitted only while the building is not
     // active or as its stored operator (`00460a10`); units on a transport or builder job (our
@@ -1595,12 +1615,14 @@ export class Logistics {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || !u.alive) return 0;
     if (d[HG.Child] === HuntChild.Harvest) {
-      const h = d.slice(HG.Harvest, HG.Harvest + HV.Size);
+      // the harvest data run to the end of the job data: its attack state may carry a stored
+      // plan's path behind it (combat.md 3.3.1)
+      const h = d.slice(HG.Harvest);
       const r = this.harvestStep(u, h);
-      for (let i = 0; i < HV.Size; i++) d[HG.Harvest + i] = h[i];
+      d.length = HG.Harvest; d.push(...h);
       if (r > 0) return r;
       // the animal is used up, the chase failed or there is no store: back to the spot
-      for (let i = 0; i < HV.Size; i++) d[HG.Harvest + i] = 0;
+      d.length = HG.Harvest; for (let i = 0; i < HV.Size; i++) d.push(0);
       if (!u.path && u.action !== Action.Fight) this.setAction(u, Action.Idle);
       return this.huntWalkBack(u, d);
     }
@@ -2569,10 +2591,12 @@ export class Logistics {
   }
 
   /** "found town" command (11.2): new town + town-hall site at (x, y), the founder walks there */
-  found(u: Entity, x: number, y: number): boolean {
+  found(u: Entity, x: number, y: number, test = true): boolean {
     const race = u.oid >>> 16;
     if (u.inside >= 0 || (u.oid & 0xffff) !== T.Founder || !u.alive) return false;
-    if (!this.canFound(race, x, y, false)) return false;
+    // `test` false: the computer player's founding (`DVUnit::FoundCity` at its checked site, no
+    // placement test of its own, ai-diplomacy-trade.md 1.12)
+    if (test && !this.canFound(race, x, y, false)) return false;
     const r = this.w.rules.get(((race << 16) | T.TownHall) >>> 0)!;
     this.cancelJob(u);
     const m = this.w.size - 1;
@@ -2989,6 +3013,13 @@ export class Logistics {
           const i = target.needed.indexOf(u.carryGood);
           if (i >= 0 && !this.isStore(target)) target.needed.splice(i, 1);
           this.startDelivery(u, target);
+          continue;
+        }
+        // a founder on an own town-hall site (any town of the nation): found-town job toward it,
+        // no repeated-order test (3.2 "Unarmed units and foreign buildings"; our job completes the
+        // clicked site, the original the founder's own town's first hall, 11.6 "retarget")
+        if (ut === T.Founder && this.type(target) === T.TownHall && !target.complete && target.alive) {
+          this.assign(u, LJ.Found, 1, [0, target.id, 0]);
           continue;
         }
         if (this.ordering(u, GOTO, target)) continue;

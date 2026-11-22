@@ -168,7 +168,7 @@ test('a job given by the dispatcher after a move order is no player order', { sk
   w.logistics.cancelJob(u);
 });
 
-test('guard: while walking its patrol the scan comes once per step, never inside a step (8.1)', { skip }, () => {
+test('guard: while walking its patrol the scan comes once per step, never inside a step, from the new step\'s cell (8.1)', { skip }, () => {
   const { w, me, t, x, y } = setup();
   const s = w.spawnUnit(me, 30, x, y, t.id);
   w.schedule({ type: 'patrol', player: me, id: s.id, points: [[x + 12, y]] });
@@ -178,7 +178,9 @@ test('guard: while walking its patrol the scan comes once per step, never inside
   w.combat.choose = (c: Entity, cands: Entity[], race: number, tier: number) => {
     if (c.id === s.id && s.path) {
       scans.push(w.tick);
-      assert.ok(s.stepTicks === 0 || w.tick >= s.stepStart + s.stepTicks, `tick ${w.tick}: inside a step (${s.stepStart} + ${s.stepTicks})`);
+      // the walk child runs first: a scan comes when a step is over or right after the next step
+      // started in the same run (from its destination), never in the middle of a step
+      assert.ok(s.stepTicks === 0 || w.tick === s.stepStart || w.tick >= s.stepStart + s.stepTicks, `tick ${w.tick}: inside a step (${s.stepStart} + ${s.stepTicks})`);
     }
     return orig(c, cands, race, tier);
   };

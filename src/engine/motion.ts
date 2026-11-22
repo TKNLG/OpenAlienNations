@@ -219,7 +219,9 @@ export class Motion {
     e.walkMask = mask;
     e.walkState = WS.Normal;
     e.squeeze = 0; e.pushes = 0;
-    if (cx === e.goalX && cy === e.goalY) {
+    // a walk whose first run comes later finds out at that run that the unit stands on its goal
+    // (4.1 run order step 3; the go-to's walk child, units-and-jobs.md 4.2)
+    if (cx === e.goalX && cy === e.goalY && delay <= 0) {
       e.moveAt = Math.max(e.stepStart + e.stepTicks, w.tick + 3);
       e.path = null; e.plans = 1; e.walkResult = WalkResult.Arrived;
       return;

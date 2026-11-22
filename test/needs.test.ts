@@ -270,7 +270,7 @@ test('needs state: snapshot and restore continue identically; version-6 saves ar
   const snap = w.snapshot();
   const tr = w.terrain;
   const fresh = () => ({ ...tr, height: tr.height.slice(), cls: tr.cls.slice(), tile: tr.tile.slice() });
-  const copy = World.restore(fresh(), JSON.parse(JSON.stringify(snap)), w.rules);
+  const copy = World.restore(fresh(), JSON.parse(JSON.stringify(snap)), w.rules, w.weapons);
   assert.equal(copy.hash(), w.hash());
   steps(w, 1500); steps(copy, 1500);
   assert.equal(copy.hash(), w.hash());
@@ -282,7 +282,7 @@ test('needs state: snapshot and restore continue identically; version-6 saves ar
   const ot = old.economy.towns[t.id];
   ot.needs.find((n: { type: number }) => n.type === TAVERN).threshold = 33;
   ot.open = ot.open.filter((o: number) => o !== TAVERN);
-  const migrated = World.restore(fresh(), old, w.rules);
+  const migrated = World.restore(fresh(), old, w.rules, w.weapons);
   const mt = migrated.economy.towns[t.id];
   assert.equal(mt.needs.find(n => n.type === TAVERN)!.threshold, 15, 'no active tavern');
   assert.equal(mt.needs.find(n => n.type === POLICE)!.threshold, 68, 'one active police station');

@@ -105,6 +105,10 @@ lobby (`?dev`, campaign-mission rooms through `Game.startMultiplayer`).
 ## Later
 
 - Reconnect/resume: snapshot plus command log from the host.
-- Pause, game speed votes.
+- Pause, game speed votes. The original has a network pause: the local pause command (message
+  type 0x36, `004528b0`) makes the host broadcast "set paused" (0x50, `00457db0`) to every
+  connection (fidelity audit T19). Not done here: our lockstep driver ties every batch to a world
+  tick, so a pause needs batches that do not step the world (a separate frame counter in
+  `src/net/lockstep.ts` and the protocol), not just a command.
 - Saving a multiplayer game (host snapshot, see the saves plan in README; addon.md 11.5).
 - Kicking a member, changing the world parameters after the session exists.

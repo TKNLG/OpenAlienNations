@@ -349,11 +349,23 @@ function placeOne(ai: Ai, t: Town, s: AiTown, c: Census): boolean {
     const x0 = qx - padX + 1, y0 = qy - padY + 1;
     for (let dy = 0; dy < padY; dy++) for (let dx = 0; dx < padX; dx++) {
       const x = x0 + dx, y = y0 + dy;
-      // buildings, nature, water and (mask bit 0x02) units block; mountains except for mine and outposts
+      // buildings, nature, water and (mask bit 0x02) units block; mountains except for mine and
+      // outposts; the mine's mask (0x67E) forbids the two lower height bands: mountains only
       if (w.occupied(x, y) || !w.motion.free(x, y)) return false;
-      if (!mountainsOk && w.heightAt(x, y) > w.mountain) return false;
+      const h = w.heightAt(x, y);
+      if (!mountainsOk && h > w.mountain) return false;
+      if (type === B.Mine && h <= w.mountain) return false;
     }
-    return w.logistics.canPlace(t, r, bx, by);
+    // the slope ring just outside the padded rectangle (the area test `00447cd0` with the padded
+    // sizes); no test with the real footprint (1.5 step 5)
+    let lo = Infinity, hi = -Infinity;
+    for (let dy = -1; dy <= padY; dy++) for (let dx = -1; dx <= padX; dx++) {
+      if (dy > -1 && dy < padY && dx > -1 && dx < padX) continue;
+      const h = w.heightAt(x0 + dx, y0 + dy);
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    return hi - lo <= 64;
   };
   for (let k = 0; k <= radius >> 1; k++) {
     for (const [x, y] of ring(ax, ay, k)) {
@@ -557,8 +569,15 @@ function resize(ai: Ai, t: Town, s: AiTown, type: number, n: number): number[] {
     if (!e) continue;
     e.group = Grp.None;
     if (!e.alive) continue;
+    // Gold (addon.md 8.2): a fishing boat goes into the first shipyard when the town has a
+    // harbour and a shipyard, else gets nothing; every other type (warships too) into the first school
+    if (ai.w.addon && type === ShipType.Fishing) {
+      const yard = ai.list(t, SHIPYARD)[0];
+      if (yard && ai.list(t, HARBOUR).length) ai.w.logistics.goInto(e, yard, 5);
+      continue;
+    }
     const school = ai.list(t, B.School)[0];
-    if (school && !ai.w.isShip(e)) ai.w.logistics.goInto(e, school, 5);
+    if (school) ai.w.logistics.goInto(e, school, 5);
   }
   return g;
 }
@@ -691,7 +710,8 @@ function sliders(ai: Ai, t: Town): void {
   const p = ai.w.economy.players[t.race]!;
   t.motivationPct = 0;
   const I = t.income;
-  if (I <= 0 || t.research < 0 || ai.w.economy.count(t, B.Lab) === 0) { t.researchPct = 0; return; }
+  // the FIRST laboratory of the town's list (a site included) must be active (`0046e180`)
+  if (I <= 0 || t.research < 0 || !ai.list(t, B.Lab)[0]?.active) { t.researchPct = 0; return; }
   const M = p.money;
   const reserve = M < 150 ? Math.trunc(I / 3) : M < 250 ? Math.trunc(I / 5) : M < 600 ? Math.trunc(I / 10) : 0;
   t.researchPct = Math.max(0, Math.min(100, Math.trunc(((I - t.overheads - reserve) * 100) / I)));
@@ -797,6 +817,15 @@ function defenceTargets(ai: Ai, t: Town, s: AiTown, c: Census): void {
   // completion requests (1.7).
 }
 
+/**
+ * The target class of a unit's running attack job (its top-level job is an attack, 0x08), also of
+ * a dead target or one that has left the world (its class is kept); undefined without one
+ */
+function attackClass(ai: Ai, u: Entity): number | undefined {
+  const j = u.job ? ai.w.sched.get(u.job) : undefined;
+  return j && !j.cancelled && j.kind === 0x08 ? ai.w.combat.attackTier(j) ?? 2 : undefined;
+}
+
 /** the target of a unit's running attack job */
 function attackTarget(ai: Ai, u: Entity): Entity | undefined {
   const j = u.job ? ai.w.sched.get(u.job) : undefined;
@@ -825,12 +854,14 @@ function respond(ai: Ai, t: Town, s: AiTown): void {
     if (!e || !e.alive || e.kind !== KIND_UNIT) continue;
     const race = e.oid >>> 16, ty = e.oid & 0xffff;
     const tg = attackTarget(ai, e);
+    // `0046cf30` has no "inside a building" test: the unit's stored cell counts
     const ok = tg ? tg.kind !== KIND_NATURE && (tg.oid >>> 16) === t.race
-      : e.inside < 0 && ai.inTerritory(e, t) && ty !== U.Diplomat && ty !== U.Merchant;
+      : ai.inTerritory(e, t) && ty !== U.Diplomat && ty !== U.Merchant;
     if (!ok) continue;
     keep.push(id);
     if (race > 2 || !ai.hostile(t.race, race)) continue;
-    if (w.combat.valid(e)) buckets[Math.min(2, w.combat.tier(e))].push(e);
+    // filed without a validity test: one inside a building is attacked too (2.2)
+    buckets[Math.min(2, w.combat.tier(e))].push(e);
   }
   s.intruders = keep;
   const k = buckets.findIndex(l => l.length > 0);
@@ -865,11 +896,16 @@ export function assignAttackers(ai: Ai, units: Entity[], targets: Entity[], cap:
   let i = 0, n = 0;
   for (const u of units) {
     const x = targets[i];
-    const cur = attackTarget(ai, u);
-    if (cur && w.combat.valid(cur) && w.combat.tier(cur) <= keepClass) continue;
-    w.logistics.cancelJob(u);
+    const cls = attackClass(ai, u);
+    if (cls !== undefined && cls <= keepClass) continue;
+    // another job is cancelled before the attack check; a running attack job only when the new
+    // attack is made, so a refused defender keeps its old target (`0046d3a0`)
+    if (cls === undefined) w.logistics.cancelJob(u);
     // AI attack jobs first run 5 ticks later (`00465650` with delay 5)
-    if (w.combat.mayAct(u, x)) w.combat.startAttack(u, x, true, false, AI_ATTACK_DELAY, false);
+    if (w.combat.mayAct(u, x)) {
+      if (cls !== undefined) w.logistics.cancelJob(u);
+      w.combat.startAttack(u, x, true, false, AI_ATTACK_DELAY, false);
+    }
     if (++n >= cap(x)) { n = 0; i = (i + 1) % targets.length; }
   }
 }

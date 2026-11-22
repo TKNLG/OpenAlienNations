@@ -286,6 +286,20 @@ footprint; unit/nature/building priority) is decided by the client's hit test,
 | own unit with HP below maximum | priest (22) | 0x29 heal |
 | any other unit | any | 0x07 go to object |
 
+**Unarmed units and foreign buildings** (C, fidelity audit T10): the building rows (builder,
+delivery, founder, go-to) test no owner. A unit that is unarmed (or a priest) reaches them also
+for a foreign building, because the "target is own" byte only selects the attack branch for
+armed units: a builder right-clicked on a damaged foreign building gets a builder job on it, a
+founder on a foreign town-hall site a found-town job (whose completion then works on his own
+town's first town hall, 11.6 "retarget").
+*Our build:* the founder row is implemented for **own** town-hall sites (any town of the
+nation): a found-town job (0x0E) toward the clicked site, first run after 1 tick, no
+repeated-order test (so a second click on the site his found-town job already walks to ends
+that job, which destroys the site and its town, as in the original, 11.6). Deviations: the job
+completes and enters the **clicked** site (the original completes the first town hall of the
+founder's own town, 11.6 "retarget"; the two differ only for an orphaned site), and the building
+rows keep the owner test (an unarmed unit clicking a foreign building walks to its cell).
+
 A building "accepts the unit's load" (`004617c0`) if the unit carries something and either:
 
 - the building is a completed store, or
@@ -684,11 +698,13 @@ the walk plans in its own first run one tick later. The walk is a child job, run
 parent's scheduler slot (1.1, 1.2). When the walk ends, the go-to turns the unit in its next run
 (1 tick later), then creates the enter job.
 
-*Deviation (known approximation, movement audit M14):* our go-to (`logistics.ts` `goEntity` →
-`World.follow`) requests the plan in the go-to's own first run, so the plan is about 1 tick early,
-and walking is a world pass outside the job wheel, so the turn follows the walk's end after 0 to 1
-tick instead of exactly 1. Timelines of 4.10 and 5.7 are therefore up to about 1 tick early at
-each end of a go-to.
+*Our build* (movement audit M14, done November 2026): the go-to (`logistics.ts` `goEntity`)
+starts its walk with a first run 1 tick later (`World.follow` with delay 1), and that run plans,
+or ends the walk at once when the unit already stands on the goal (a delayed walk does not take
+the "already there" shortcut at its creation). The walk ends in the world's motion pass, after
+the jobs of that tick, so the job that polls it acts 1 tick after the walk ended, as the
+original's parent does. Remaining approximation: walking itself is a world pass outside the job
+wheel (steps at their due tick, not inside the parent's slot).
 
 ### 4.3 Store selection (C, `0045b3f0` Town::GetNearestStore)
 
@@ -744,7 +760,12 @@ Who may enter (`00460a10`), same race:
 | police station (54) | criminals |
 | outpost (class 6) | ranged units (class 2: types 29, 32, 33, 36 of every race) while occupants < +0xDC. The capacity is tested only at the unit's first request, so units already queued all get in (`combat.md` 9.1) |
 
-Other race: only units on a trade job (0x20) or an operator errand (0x38).
+Other race: only units whose **current** job is a trade job (0x20) or an operator errand (0x38),
+in **any** building state: the construction-site row and the activity tests above belong to the
+same-race branch only (C, `00460a10`, re-checked November 2026). So a foreign merchant enters a
+market under construction (his goods go into the site's own stock, `ai-diplomacy-trade.md` 4.4)
+and a foreign diplomat enters an embassy that is no longer active (3.4 step 5 there), while an
+own-race merchant (current job 0x20, not a transport) is refused at a market site.
 
 What the "unit entered" step (`00460ed0`) does with an admitted unit, in this order (C):
 
@@ -1687,7 +1708,11 @@ A porter is free if all of the following hold:
 - it is alive;
 - its group id (+0x48) is 0. For AI nations the value is 50 instead (I: an AI worker group);
 - either it has no job and is not inside a building, or it is on a leisure visit (+0x78 = −1)
-  and not (inside a building with an unblocked job).
+  and not (inside a building with an unblocked job). "Unblocked" is the current job's block
+  counter (+0x04) ≤ 0 (instruction level `0x45af56`..`0x45af6b`: `cmp [job+4],0` / `jle` = not
+  free); so a leisure visitor inside whose current job is blocked (+0x04 > 0) **is** free. AN
+  `0045aed0` and `0045b2f0`, Gold `00461360` and `00461180` all have this third clause (C,
+  re-checked 2026-11).
 
 Leisure visitors are therefore taken back for work at once. A porter released from a visit keeps
 +0x78 = −1 while he stands outside with no job (5.7 "After leaving"); he is free by the first

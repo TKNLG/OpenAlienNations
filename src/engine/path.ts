@@ -160,6 +160,45 @@ export class Planner {
     }
   }
 
+  /**
+   * The attack job's firing-position search (combat.md 3.5, `004725e0` run in one-way mode): the
+   * forward search alone, from the start toward the "goal" cell (the target footprint's centre,
+   * used for the distance term and the step-cost exemption), with the same expansion, step cost,
+   * insertion and open list as `plan`. Each iteration tests the head node with `test` first (the
+   * range test from its cell); the first node that passes ends the search. 100 iterations per run,
+   * failure once the total passes 2000 after a run (a node found in that run is dropped) or when
+   * the open list is empty. The path is the start cell followed by the cells up to the found one
+   * (just the start when the start itself passes); null on failure.
+   */
+  seek(r: PlanRequest, test: (x: number, y: number) => boolean): [number, number][] | null {
+    const m = this.size - 1, bits = this.bits;
+    this.req = r;
+    const start = this.start = ((r.sy & m) << bits) | (r.sx & m);
+    this.goal = ((r.gy & m) << bits) | (r.gx & m);
+    this.iterations = 0;
+    if (++this.stamp === 0xffffffff) { this.stamp = 1; this.bstamp.fill(0); }
+    this.count = 0; this.seqNo = 0;
+    const hf = this.heap[1];
+    hf.clear(); this.heap[0].clear();
+    // one root: forward, on the start (no backward search)
+    const f = this.node(start, 0, 999999, -1, 1);
+    this.hashFront(f);
+    hf.push(f, this.seq[f] = ++this.seqNo, 999999);
+    let total = 0;
+    for (;;) {
+      let found = -1, fh = this.head(1);
+      for (let k = 0; k < PLAN_RUN && fh >= 0 && found < 0; k++) {
+        total++;
+        if (test(this.cell[fh] & m, this.cell[fh] >> bits)) found = fh;
+        else this.expand(fh);
+        fh = this.head(1);
+      }
+      this.iterations = total;
+      if (total > PLAN_CAP || (found < 0 && fh < 0)) return null;
+      if (found >= 0) return [[r.sx & m, r.sy & m], ...this.path(found)];
+    }
+  }
+
   // ------------------------------------------------------------------ internals
 
   private node(c: number, moves: number, pri: number, parent: number, dir: number): number {

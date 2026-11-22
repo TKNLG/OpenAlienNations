@@ -38,8 +38,9 @@ const M = { TownAttacked: 20, TownDestroyed: 21, HallAttacked: 22, Defeated: 23,
 /**
  * attack state slots, relative to the owner job's base offset (always the last part of the job's
  * data). Walk: the attack's own walk (the original's follow-path child, state 2) is under way.
- * Plan: a stored plan for the next walk (3.3.1): searched from (PX, PY), ending on the firing
- * position (GX, GY); its cells are planned again from (PX, PY) when the walk is made.
+ * Plan: a stored plan for the next walk (3.3.1, 3.5): searched from (PX, PY), ending on the firing
+ * position (GX, GY); the cells after the start follow the attack state as (x, y) pairs to the end
+ * of the job data (the search's whole path, start cell first; snapshot version 24).
  * Plan = GONE: the target has left the world (dead and removed); the plan slots then hold what the
  * original still reads from the referenced object (3.6, 7.2): its last cell (PX, PY), its race
  * (GX) and its tier (GY). The next run retargets from them, which clears the plan.
@@ -220,6 +221,13 @@ export class Combat {
     d[base + A.Searches] = 0; d[base + A.Auto] = auto ? 1 : 0; d[base + A.Player] = player ? 1 : 0;
     d[base + A.Walk] = 0; d[base + A.Plan] = 0;
     d[base + A.PX] = 0; d[base + A.PY] = 0; d[base + A.GX] = 0; d[base + A.GY] = 0;
+    if (d.length > base + A.Size) d.length = base + A.Size;
+  }
+
+  /** drop the stored plan (and its path behind the state) */
+  private dropPlan(d: number[], base: number): void {
+    d[base + A.Plan] = 0;
+    if (d.length > base + A.Size) d.length = base + A.Size;
   }
 
   /**
@@ -258,7 +266,7 @@ export class Combat {
     if (d[base + A.Walk] && !u.path) {
       d[base + A.Walk] = 0;
       u.charging = false;
-      if (u.walkResult === WalkResult.Failed) d[base + A.Plan] = 0;
+      if (u.walkResult === WalkResult.Failed) this.dropPlan(d, base);
     }
     const walking = d[base + A.Walk] === 1;
     const [ux, uy] = this.cell(u);
@@ -293,25 +301,23 @@ export class Combat {
   }
 
   /**
-   * The firing-position search (3.5) from the unit's cell, done at once (lockstep rule): the plan
-   * ends on the first cell of the way from which the target is in range now. Melee walks toward a
-   * free cell next to the target (meleeSpot) and keeps that cell as the end. No way to any such
-   * cell: no plan (the next run searches again, using up another search).
+   * The firing-position search (3.5, `004725e0`) from the unit's cell, done at once (lockstep
+   * rule): the planner's forward search alone, toward the target footprint's centre, ending at
+   * the first cell from which the target is in range (3.4, the footprint as it is now). The plan
+   * keeps the whole path, start cell first. No such cell (open list empty, 2000 iterations): no
+   * plan (the next run searches again, using up another search).
    */
   private plan(u: Entity, d: number[], base: number, t: Entity, wpn: Weapon): void {
-    d[base + A.Plan] = 0;
-    const [ux, uy] = this.cell(u), [tx, ty] = this.cell(t);
-    const spot = wpn.range === 0 ? this.meleeSpot(u, t) : null;
-    const [gx, gy] = spot ?? [tx, ty];
-    const path = this.w.planPath(u, ux, uy, gx, gy);
+    this.dropPlan(d, base);
+    const [ux, uy] = this.cell(u);
+    const [x0, y0, x1, y1] = this.footprint(t);
+    const path = this.w.seek(u, ux, uy, (x0 + x1) >> 1, (y0 + y1) >> 1, (x, y) => this.inRange(x, y, t, wpn));
     if (!path || !path.length) return;
-    const [lx, ly] = path[path.length - 1];
-    let end = spot && lx === spot[0] && ly === spot[1] ? path.length - 1 : -1;
-    for (let i = 0; i < path.length && end < 0; i++) if (this.inRange(path[i][0], path[i][1], t, wpn)) end = i;
-    if (end < 0) return;
     d[base + A.Plan] = 1;
-    d[base + A.PX] = ux; d[base + A.PY] = uy;
-    d[base + A.GX] = path[end][0]; d[base + A.GY] = path[end][1];
+    d[base + A.PX] = path[0][0]; d[base + A.PY] = path[0][1];
+    const [gx, gy] = path[path.length - 1];
+    d[base + A.GX] = gx; d[base + A.GY] = gy;
+    for (let i = 1; i < path.length; i++) d.push(path[i][0], path[i][1]);
   }
 
   /**
@@ -321,10 +327,11 @@ export class Combat {
    * neighbour fails the walk at once). The plan is used up.
    */
   private walkPlan(u: Entity, d: number[], base: number): void {
-    d[base + A.Plan] = 0;
     const m = this.w.size - 1;
-    const px = d[base + A.PX], py = d[base + A.PY], gx = d[base + A.GX], gy = d[base + A.GY];
-    const way: [number, number][] = [[px, py], ...(this.w.planPath(u, px, py, gx, gy) ?? [])];
+    const way: [number, number][] = [[d[base + A.PX], d[base + A.PY]]];
+    for (let i = base + A.Size; i + 1 < d.length; i += 2) way.push([d[i], d[i + 1]]);
+    const gx = d[base + A.GX], gy = d[base + A.GY];
+    this.dropPlan(d, base);
     const [ux, uy] = this.cell(u);
     const k = way.findIndex(([x, y]) => (x & m) === ux || (y & m) === uy);
     const rest = k < 0 ? [] : way.slice(k + 1);
@@ -370,30 +377,27 @@ export class Combat {
     }
   }
 
+  /**
+   * Saves before version 24 stored a plan as its two ends only (Plan = 1, nothing behind the
+   * state): such plans are dropped, the next run searches again (3.5).
+   */
+  migratePlansV23(jobs: Iterable<Job>, harvest: number, hunt: number): void {
+    const bases = new Map<number, number>([
+      [CJ.Attack, 0], [CJ.Guard, GD.Attack], [CJ.Criminal, CR.Attack], [CJ.Arrest, 2], [CJ.Heal, 2], [0x16, harvest], [0x2b, hunt],
+    ]);
+    for (const j of jobs) {
+      const base = bases.get(j.kind);
+      if (base === undefined || j.data.length < base + A.Size) continue;
+      if (j.data[base + A.Plan] === 1) this.dropPlan(j.data, base);
+    }
+  }
+
   /** the attack is over (leash, no target, no weapon): its walk ends with it; returns 0 */
   private endAttack(u: Entity, d: number[], base: number): number {
     this.stopWalk(u);
-    d[base + A.Walk] = 0; d[base + A.Plan] = 0;
+    d[base + A.Walk] = 0; this.dropPlan(d, base);
     u.charging = false;
     return 0;
-  }
-
-  /**
-   * Nearest cell (to the attacker) in the target's footprint grown by one that a unit could stand
-   * on now: no building, nature object, water or other unit (4.7). Several melee attackers thus
-   * spread round their target instead of queueing for one cell. null: none free.
-   */
-  private meleeSpot(u: Entity, t: Entity): [number, number] | null {
-    const [x0, y0, x1, y1] = this.footprint(t);
-    const [ux, uy] = this.cell(u), m = this.w.size - 1;
-    let best: [number, number] | null = null, bd = Infinity;
-    for (let y = y0 - 1; y <= y1 + 1; y++) for (let x = x0 - 1; x <= x1 + 1; x++) {
-      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;
-      if (!this.w.motion.free(x, y, u)) continue;
-      const d = this.dist(ux, uy, x & m, y & m);
-      if (d < bd) { bd = d; best = [x & m, y & m]; }
-    }
-    return best;
   }
 
   private stopWalk(u: Entity): void {
@@ -416,7 +420,7 @@ export class Combat {
     // state, walk child, search and stored plan are cleared first; the walk stops where the unit stands
     d[base + A.Searches] = 0;
     if (d[base + A.Walk]) { this.stopWalk(u); d[base + A.Walk] = 0; }
-    d[base + A.Plan] = 0;
+    this.dropPlan(d, base);
     if (!d[base + A.Auto]) return undefined;
     const r = (this.rule(u)?.radius ?? 5) + 3;
     if (race < 0) return undefined;
@@ -441,10 +445,14 @@ export class Combat {
       const base = j.kind === CJ.Attack ? 0 : j.kind === CJ.Guard && j.data[GD.Attacking] ? GD.Attack : -1;
       if (base < 0 || j.data[base + A.Target] !== e.id) continue;
       const d = j.data;
+      this.dropPlan(d, base);
       d[base + A.Plan] = GONE;
       d[base + A.PX] = x; d[base + A.PY] = y; d[base + A.GX] = race; d[base + A.GY] = tier;
     }
   }
+
+  /** tier of the target of a top-level attack job (0x08); a target that has left the world keeps its tier */
+  attackTier(j: Job): number | undefined { return j.kind === CJ.Attack ? this.targetTier(j.data, 0) : undefined; }
 
   /** tier of the target of a running attack state; a target that has left the world keeps its tier (7.2) */
   private targetTier(d: number[], base: number): number | undefined {
@@ -786,6 +794,9 @@ export class Combat {
       const tick = this.w.tick, stepEnd = u.stepStart + u.stepTicks;
       if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
       if (u.moveAt > tick) return u.moveAt - tick;
+      // the walk child runs first (`00480a10`): its due run starts the next step (or turns, waits,
+      // ends) now, so the scan below is made from the step's destination (8.1)
+      if (u.inside < 0) this.w.motion.run(u);
     }
     // the walk child has finished: the next waypoint, cyclically, before the scan (8.1 step 1)
     if (d[GD.Walking] && !u.path) { d[GD.Index] = (d[GD.Index] + 1) % Math.max(1, d[GD.Count]); d[GD.Walking] = 0; }
@@ -800,8 +811,8 @@ export class Combat {
       d[GD.Attacking] = 1;
       return 1;
     }
-    // the next step starts at this tick's motion run; the next run comes when it has been played
-    if (u.path) return 1;
+    // the walk goes on: its delay (a step, a turn, a wait, a plan) is the guard's
+    if (u.path) return Math.max(1, u.moveAt - this.w.tick);
     const i = d[GD.Index];
     const wx = d[GD.Points + 2 * i], wy = d[GD.Points + 2 * i + 1];
     if (x !== wx || y !== wy) {
@@ -1008,8 +1019,14 @@ export class Combat {
     this.w.notify(t.race, M.TownDestroyed);
     const others = eco.towns.filter(o => o.alive && o.race === t.race && this.w.get(o.hall)?.alive);
     const nearest = others.sort((a, b) => this.dist(a.x, a.y, t.x, t.y) - this.dist(b.x, b.y, t.x, t.y))[0];
-    for (const u of [...this.w.entities]) {
-      if (u.kind !== Kind.Unit || u.town !== t.id) continue;
+    // by type, in the order of the race's unit records in the object database (file order), then
+    // each type's list from its front; creation order stands for the join order (step 3, T5)
+    const rank = new Map<number, number>();
+    for (const [oid, r] of this.w.rules) if (r.kind === Kind.Unit && (oid >>> 16) === t.race && !rank.has(oid & 0xffff)) rank.set(oid & 0xffff, rank.size);
+    const mine = this.w.entities.filter(u => u.kind === Kind.Unit && u.town === t.id);
+    mine.sort((a, b) => (rank.get(a.oid & 0xffff) ?? 1e9) - (rank.get(b.oid & 0xffff) ?? 1e9) || a.id - b.id);
+    for (const u of mine) {
+      if (u.town !== t.id) continue;
       this.w.logistics.cancelJob(u);
       if (nearest) { eco.leaveTown(u); eco.joinTown(u, nearest); nearest.homeless.push(u.id); }
       else this.die(u);
@@ -1036,7 +1053,9 @@ export class Combat {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || !u.alive || this.type(u) !== T.Criminal) return 0;
     if (!d[CR.Active]) {
-      const porters = this.w.entities.filter(e => e.kind === Kind.Unit && e.town === u.town && this.type(e) === T.Porter && e.alive);
+      // the victim: index rand() % count into the town's porter list, in join order (12.1)
+      const t = this.w.economy.town(u.town);
+      const porters = t ? this.w.economy.porterList(t, this.w.entities, id => this.w.get(id)) as Entity[] : [];
       if (!porters.length) return 50;
       const v = porters[this.w.rand.next() % porters.length];
       this.initAttack(d, CR.Attack, v, false, false);
@@ -1297,7 +1316,7 @@ export class Combat {
 }
 
 /** guard job data slots */
-const GD = { Count: 0, Index: 1, Points: 2, Walking: 18, Attacking: 19, Attack: 20 } as const;
+export const GD = { Count: 0, Index: 1, Points: 2, Walking: 18, Attacking: 19, Attack: 20 } as const;
 /** criminal job data slots */
 const CR = { Active: 0, Hp0: 1, Attack: 2 } as const;
 /**

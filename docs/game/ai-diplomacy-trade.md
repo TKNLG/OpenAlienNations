@@ -482,8 +482,10 @@ race's school (`dv.odb`: Amazons 4 wood + 2 stone, Pimmons 2 wood + 4 stone, Saj
 - Motivation spending (town +0x3C) is always set to 0. (AI towns have no happiness anyway,
   `economy.md` 5.5.)
 - Research spending (town +0x40, initialised to 40 when the town is created) is set to 0 unless
-  the town has income, an active laboratory and a selected research project. Then, with I =
-  income, U = overheads and M = the player's money:
+  the town has income, its **first** laboratory (the first entry of the town's laboratory list,
+  a site included) is active, and a research project is selected (C, `0046e180`, re-checked
+  November 2026: a second, active laboratory behind an inactive first one does not count).
+  Then, with I = income, U = overheads and M = the player's money:
 
   | money | reserve kept |
   |---|---|
@@ -553,16 +555,42 @@ population exceeds the profile's threshold and the player has fewer towns than i
 already has a free founder a founding mission (kind 0x36) is started.
 
 The check runs after the attack decision (0.1) and draws rand() mod 50 for the mission's first
-run. It does not test for a running mission: a new one is started whenever a free founder exists
-(the founder of a running mission is in group 54, so it is not free).
+run (first run after rand() mod 50 + 1 ticks). It does not test for a running mission: a new one
+is started whenever a free founder exists (the founder of a running mission is in group 54, so it
+is not free; a founder not yet taken by a mission waiting for its first run still is, and a
+second mission then finds no free founder at its step a and ends). It does not look at the map
+either: C[10] = 1 is set and missions are started also on maps without start candidates, where
+each mission ends at its step c (C, `00468cc0`, re-checked November 2026: the only tests are
+"a smallest town exists", its population > the threshold and the town-list count < the limit).
+The town-list count is the nation's list (+0x238), which still holds destroyed towns that are not
+freed yet (`combat.md` 10.4), while the smallest town is taken among the towns with a town
+planner job (town +0x1C set, i.e. an active town hall).
 
 The founding mission (every 50 ticks):
 
 1. Takes one free founder of the town (group 54).
-2. A site is valid when a 7 x 7 area around it is free of flags 0x7E, the cell is in nobody's town
-   area, and no point of a circle with the town hall's radius (25) around it lies in any town area
-   (`0045dc10` builds the circle). Effect: new towns keep their whole radius-25 area clear of every
-   existing area, so town centres end up at least about 2 x 25 cells from other towns.
+2. A site (x, y) is valid (C, `00467e10`, Gold `IsGoodCityFoundPlace` identical, re-checked
+   November 2026) when:
+   - the area test `00447cd0` with size 7 x 7 and mask 0x7E passes: the 49 cells x − 6..x,
+     y − 6..y (the site is the **maximum** corner) hold no unit (0x02), building (0x04), special
+     object (0x08), nature object (0x10) or water (0x20), and the heights on the ring of cells
+     just outside that square (x − 7..x + 1, y − 7..y + 1) differ by at most 64 (else slope flag
+     0x40). No territory and no height-band flag is in this mask (mountains are allowed);
+   - the site's own cell lies in no town area (`0044e3e0` with sizes 0: the block of (x, y) owned
+     by no territory);
+   - none of the **circle offsets** of the nation lies in a town area: for every offset (dx, dy)
+     of the list, the block of the cell (x + dx, y + dy) (wrapped) is owned by no territory.
+   The circle list (`0045dc10`, built once, when the nation's first town is created,
+   `units-and-jobs.md` 11.2) holds the **outline** of a circle of radius R = the race's town-hall
+   radius (record +0xB0, 25), not the disc: first (R, 0), (−R, 0), (0, −R), (0, R); then, with
+   x = R, error e = 0 and k = trunc(R x 0.707) = 17 steps for i = 0 .. k − 1: e' = e + 1 + 2i;
+   if |e' − 2x + 1| < |e'| then x = x − 1 and e = e' − 2x_old + 1, else e = e'; then, with
+   j = i + 1, the eight points (x, j), (x, −j), (−x, j), (−x, −j), (j, x), (j, −x), (−j, x),
+   (−j, −x). 4 + 8 x 17 = 140 offsets for R 25 (the midpoint circle; diagonal points can
+   repeat). A nation without a town has an empty list.
+   Effect: new towns keep the outline of their radius-25 circle clear of every existing area, so
+   town centres end up at least about 2 x 25 cells from other towns' centres (a small area lying
+   wholly inside the circle without touching the outline does not stop the site).
 3. The mission's target starts at the old town (never valid). While the target is not valid, the
    start-candidate list of the map (`.dvm` point list 3, see 1.13) is scanned **in order**; around
    each candidate a site within 20 cells is searched; the first hit becomes the target. If no
@@ -587,6 +615,13 @@ the Gold disassembly `0046f3f6..0046f404`, `0046f7aa`, `0046f1a7..0046f1af`):
 | d | target valid, founder distance 8..15 (`0045fa10`: max + min/2) | if his job is already the found-town job (0x0E): wait. Else found the town (`0046afd0`), drop the founder, clear C[10] | 50 |
 | e | target valid, distance outside 8..15, the founder has a job | wait | 50 |
 | f | as e, no job | search a cell around the target with the 30-ring site search (`00449c00` / Gold `0044ed90`, test `00467ba0` / `0046ef70`): passable for the founder **and** at distance 8..15 from the target. None: wait. Found: base game, a walk job (follow path, kind 6) to it, first run after 5 ticks; add-on, see `addon.md` 8.4 (walk if that cell is on the founder's island, else a ship request and job 0x3E) | 50 |
+
+The founding in step d is `DVUnit::FoundCity` (`00464aa0`) at the target cell itself: the new
+town and its town-hall site (maximum corner = the target) are made **without any further
+placement test** (C, `00467f80`; the site test of step 2 is the only one). Step c's "no hit"
+ends the mission with 0 and nothing else: the founder keeps group 54 and stays idle, so the town
+never trains another founder (want(10) counts him) and no later mission finds a free founder.
+There is no player-wide "no site" flag.
 
 Consequences (C):
 - A founder on a **leisure visit** counts as free (section 0), so the mission can take a founder
@@ -795,9 +830,11 @@ In detail (C, fidelity audit 2026-11; Gold the same in its `SetPosition`):
 
 - Defenders = hunters, then soldiers 29..36 (type order): for each type first its group-52 units
   outside buildings (any job), then its **free** group-0 units (section 0).
-- Intruders are dropped when dead, or when they fail this test: a unit without an attack job
-  (kind 8) must stand in the town's area and not be a diplomat or merchant; a unit with an attack
-  job must be attacking an object of this town's **race** (any town of it). The rest stay in the
+- Intruders are dropped when dead, or when they fail this test (`0046cf30`): a unit without an
+  attack job (kind 8) must stand in the town's area (its stored cell; there is **no** "inside a
+  building" test, so a unit standing inside a building in the area passes) and not be a diplomat
+  or merchant; a unit with an attack job must be attacking an object of this town's **race** (any
+  town of it; the target object's record race, the target may be dead). The rest stay in the
   list; those whose race is hostile to this town's race (relation 0 or 1, section 3) are sorted
   into three buckets by their target class (object +0x20, the same field as in 2.5). An intruder
   of a race at ceasefire or peace (or without a relation entry) is **not removed**: it is only
@@ -813,11 +850,17 @@ In detail (C, fidelity audit 2026-11; Gold the same in its `SetPosition`):
 - Hostile intruders: the flag is set; only the **first non-empty bucket** (most urgent class) is
   attacked. Its intruders are taken in turn; every defender in list order is handled once: a
   defender with an attack job on a target of a class at most the bucket's class keeps it (and is
-  not counted); every other defender has its current job cancelled and gets an attack job on the
-  current intruder (if the attack check `00465460` allows it), and is counted; after 3 counted
-  defenders the next intruder of the bucket becomes current, **wrapping to the first** after the
-  last. So every defender ends up attacking, three per intruder in turn, however few the
-  intruders.
+  not counted); every other defender is counted and gets an attack job on the current intruder
+  if the attack check `00465460` allows it (handed out through `00465650` with delay 5). The
+  order of cancelling (C, `0046d3a0`, re-checked November 2026): a defender with **another**
+  job (not an attack) has it cancelled **before** the check, so a refused one is left without a
+  job; a defender whose attack job is re-assigned keeps that attack job when the check refuses
+  the new target, and loses it only when the new attack is made. After 3 counted defenders the
+  next intruder of the bucket becomes current, **wrapping to the first** after the last. So every
+  defender ends up attacking, three per intruder in turn, however few the intruders. The bucket
+  entries are not tested for validity: an intruder standing inside a building is filed and
+  attacked like any other (its attackers' jobs then retarget around it at their first run,
+  `combat.md` 3.6).
 
 ### 2.3 Army candidates and troop production (C)
 
@@ -862,7 +905,7 @@ or 1.
 | 2 | candidates > min(20, tick / 30000); cooldown; hostile to the human; own strength > 1.5 x the human's | the first human town (in town-id order) that the AI has **discovered**: a town is discovered when any unit of this AI steps into its area (`004621c0`); forgotten when the town is destroyed (`00459400`) |
 | 3 | more than 2 candidates; hostile to the human | the army is cut to 1..3 units (rand() mod 3 + 1), keeping the **last** candidates; a random town of the human |
 | 4 | never attacks | - |
-| 5 | candidates > n + 1, where n = 1 until tick 60000, then min(15, tick / 20000 + 4); hostile to the human | the army is cut to n + rand() mod 3 units, keeping the **last** candidates; a random town of the human |
+| 5 | candidates > n + 1, where n = 1 while tick <= 60000 (C: `tick > 2000 x 30` selects the formula), then min(15, tick / 20000 + 4); hostile to the human | the army is cut to n + rand() mod 3 units, keeping the **last** candidates; a random town of the human |
 
 Notes:
 
@@ -878,7 +921,13 @@ Notes:
   player is eliminated, `0045d2a0`) is set; profile 0: own strength > 0.5 x candidate's
   (`004a6628` = 0.5, float compare) or tick < 54000 (0xD2F0); profile 1: candidate's strength <
   own; then the candidate's town list is walked and the **first non-empty entry** becomes the
-  target. A candidate **without a town** (for example the free-play human, who starts with only
+  target. The list is the nation's town list (+0x234), which still holds its **destroyed towns
+  that are not freed yet** (`combat.md` 10.4 "Lifetime of a town object"): when the first entry
+  is such a town, the army is sent to it (to its stored position) and fights there as after a
+  fall (2.5 "When the target town falls"). The same list is used by profiles 3 and 5: their
+  random town is rand() mod (list count) over all entries, destroyed-not-freed ones included
+  (C, `00468f10`, `00469cd0`, `0046a320`, re-checked November 2026). Profile 2's known-town set
+  drops a town when it is destroyed, so it never picks a fallen town. A candidate **without a town** (for example the free-play human, who starts with only
   a founder, until he founds his town) is passed over and the loop goes on to the next race.
   The tick divisors are 2000 x 15 = 30000 (profiles 0, 2) and 2000 x 10 = 20000 (profile 1)
   (`004afecc` = 2000).
@@ -1136,8 +1185,11 @@ Notes:
   8.4): the ship still fetches it later. The walk is one ordinary follow-path job to that cell
   (`units-and-jobs.md` 4.1, with its own re-plans), however far away home is; it is not a
   player order, so a member on its way home still answers the help rule (`combat.md` 7.2) and
-  resumes the walk afterwards (7.4). *Our build: as described, the drawn delay applied (since
-  November 2026; before, the walk started at once); until October 2026 it was a single leg of at most 32 cells per axis toward
+  resumes the walk afterwards (7.4). The walk job of a member **inside** a building or a ship is
+  set as its current job directly (no eject, no `00465650`), so it starts walking from inside
+  (I: what the follow-path job does for a unit that is inside was not traced). *Our build: as
+  described, the drawn delay applied (since November 2026; before, the walk started at once); a
+  member inside a building or ship draws its delay but gets no walk (deviation, rare); until October 2026 it was a single leg of at most 32 cells per axis toward
   the town hall, after which the unit stood (no job re-issued the next leg), so members of an
   army that ended far from home (a ceasefire, a retreat) were left standing near the enemy town.*
 
@@ -1262,6 +1314,16 @@ Combat code treats 0 and 1 the same way (`mdb.md`; details in `combat.md`). (C f
   gets mentor#(68 + race) "Die X haben eine Botschaft errichtet." Then, for every other player
   whose relation with this race is 0 and who owns an active embassy in any town, the relation
   becomes **1 (war)**. First contact therefore always starts in war.
+- **Embassies of the map** (C, fidelity audit T21, 2026-11): map embassies are activated by the
+  map loader (`00411200` → `0045fa40`) with the same branch, so the contact lines are said then
+  too. The players already exist with their advisor (`Player::Create` `0045d780` makes the human
+  nation's mentor service, +0x22C, in `00485a30` **before** it calls `Mission::Load`; the
+  human's message connection +0x25C exists from the session start, `0045d6c0`), so for every
+  computer embassy on the map the human player is sent mentor#(68 + race), queued, interval 0;
+  the voice player then speaks the first at the start of play and drops the others that arrive
+  together (`docs/ui/side-panel.md` 1.1.2). The wars of these activations are undone by the
+  relation table read from the mission afterwards (`mdb.md` "Relations"). A second activation
+  call by the loader does nothing (the building is already in state 2).
 - **Closure.** When an embassy is deactivated (the diplomat is sent out with "Betrieb einstellen",
   T312 "Diplomatische Beziehungen abbrechen", or the building is lost) and the player has **no
   other active embassy**, every relation of that player that is not 0 is set back to 0. A diplomat
@@ -1345,7 +1407,13 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
 5. If he dies or cannot enter, nothing changes (handbook: a third nation may capture him; there is
    no separate capture rule, I). The go-to into the embassy ignores how its walk ends and enters
    from wherever he stands (`units-and-jobs.md` 4.2, 4.10): only a refusal at the door (or the
-   embassy gone) fails it.
+   embassy gone) fails it. The door never refuses him for the embassy's state: a unit of another
+   race whose current job is the errand is admitted to any building of that race (`00460a10`),
+   and neither the errand nor the decision tests whether the target embassy is still active
+   (C, `00478910`, `00460ed0`, re-checked November 2026). An embassy that lost its diplomat
+   after the errand was created (inactive, its job slot empty) still takes him in: his entry
+   makes the one-run operator job (3.3, first run after 100 ticks), which ejects him, and the
+   offer is decided as usual. Only a destroyed embassy fails the go-to (its alive test).
    An offer value outside 1..3 would be written into the relation table directly; the panel never
    sends one (C, `00478910`, D6).
 6. "Diplomat zurückbeordern" (T254, command 0x60 `00452d40`, C at instruction level) acts on the
@@ -1650,6 +1718,14 @@ per race, up to 10 such towns (`00456fc0`).
 - **At a market of town M** (on entering it; the other end of the route is D):
   1. **Unload**: if M has purchase enabled for the carried good, he puts down
      min(carried, M.max stock - M.stock). No money changes hands here. The rest stays on him.
+     The goods go into the **town stock** (`Town::AddResource`, capped by the capacity) when the
+     market is built and has the store flag (odb +0xB8 bit 0x1, all markets); while the market
+     is a **construction site** (state 1) they go into the site's own goods slots (building
+     +0x7C + 4 x good, the slots that hold delivered building materials), without a cap, and
+     the town's stock does not change (C, `0047d4d0`, re-checked November 2026). Only a merchant
+     of **another race** can be inside a market site (the site admits same-race units only as
+     builders or on a transport job, `units-and-jobs.md` 4.4); wood or stone unloaded there is
+     consumed by the builders like a delivery (`units-and-jobs.md` 6.3 "Consumption rules").
   2. **Choose a good** to load, among goods where M has sale enabled, D has purchase enabled and M
      has stock: n = min(M.stock - M.min stock, D.max stock - D.stock) (negatives count as 0), capped
      at 5; goods with n = 0 are skipped.
@@ -1664,8 +1740,9 @@ per race, up to 10 such towns (`00456fc0`).
      price**: M's owner receives it; D's owner pays it only if human (clamped at 0). M's stock
      drops by n; the merchant now carries the good.
      When n ends up 0 (no room, no money) the carried good is still set to the chosen good
-     (with the amount unchanged); nothing is paid or moved (audit reading of `0047d4d0`, not
-     re-checked at instruction level; cosmetic).
+     (with the amount as it stands after the throw-away above); nothing is paid or moved (C,
+     `0047d4d0`, re-checked November 2026; cosmetic). The carried good index is also left as it
+     was when an unload empties him (amount 0).
 - Own-race routes move goods without money (handbook p. 35).
 - The handbook's "he trades at the terms of his departure market" is only partly true: each load
   is paid at the sale price of the market where it is loaded; the destination's maximum price is

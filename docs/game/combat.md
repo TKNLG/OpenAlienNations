@@ -266,9 +266,12 @@ still ends on a firing position.
 
 **What the walk aims at.** The search goal is not the target's cell but the first cell, in the
 search's best-first order from the attacker, from which 3.4 holds for the target's footprint *at
-the time the search started*: for a melee weapon a cell of the target's 8-neighbourhood (the
-search ignores units, so the cell may be occupied), for a ranged weapon the nearest cell with
-range and line of fire. That cell is the end of the path and the goal of the walk made from it.
+the time the search started*: for a melee weapon a cell of the target's 8-neighbourhood, for a
+ranged weapon a cell with range and line of fire (3.5). Cells holding a unit are impassable to
+the search within about 16 cells of the attacker (planner mode 0), so a melee attacker near its
+target does not plan onto a neighbour cell another unit stands on: several attackers end up on
+different sides of the target. Farther away units are ignored. That cell is the end of the path
+and the goal of the walk made from it.
 
 **The walk is never redirected because the target moved.** A running walk ends only when
 - the target is in range after a step (step 4: the walk child is dropped, the strike begins);
@@ -349,14 +352,14 @@ the stored plan stale in the same way.
 one search per walk, no searches during a walk, so the counter never ran out mid-walk and a walk
 was never dropped by the retarget; the first step came 3 ticks after the search. Now the attack
 state holds a walk flag and the stored plan (snapshot version 9; older saves get the two slots,
-the walk flag set when the unit was walking). Deviations: the plan keeps only its start cell and
-its end (the firing position); when the walk is made, the way between them is planned again with
-the same unit-free search (deterministic, normally the same way) and the join rule is applied to
-it. The search is our A\* toward the target's cell, cut at the first cell from which the target is
-in range; a melee attacker aims at the nearest free cell next to the target (several attackers
-spread out) and keeps that cell as the plan's end. Ships keep their one-search-per-walk chase on
-the sea grid (`addon.md` 7). Our walk ends at the motion run after the jobs, so the end is seen
-at the next run, which is the original's next run (1 tick later), and goes on at once.*
+the walk flag set when the unit was walking). Since November 2026 the search is the original's
+(3.5, `Planner.seek`) and the stored plan holds the whole path, start cell first (snapshot
+version 24; a plan stored by an older save is dropped and searched again). Before, the plan kept
+only its start and end and was planned again with A* when the walk was made, the search ran
+toward the target's cell, and a melee attacker aimed at the nearest free neighbour cell. Ships
+keep their one-search-per-walk chase on the sea grid (`addon.md` 7). Our walk ends at the motion
+run after the jobs, so the end is seen at the next run, which is the original's next run (1 tick
+later), and goes on at once.*
 
 ### 3.4 Range and line of fire (C, `00472b20` inline walk `472f74..4731a6`, `004709b0`, `004712d0`; Gold `0047a420`/`0047c590` identical)
 
@@ -457,14 +460,65 @@ cells along y with R 6 (every cell + 1), but 6 along x (one + 1 for the single s
 centred Bresenham walk priced each step against the previous cell in both directions, wrapped
 the delta (shots across the seam) and treated drops like rises (32 units).*
 
-### 3.5 Path search for a firing position (C, `004725e0`, `004706e0`)
+### 3.5 Path search for a firing position (C, `00472520`, `004725e0`, `004706e0`)
 
-- The search is a best-first expansion over the 8 neighbours. It uses the attacker's step costs
-  (rec+0xC4) and its path mask (+0x28), and starts at the attacker's cell.
-- **Goal**: any cell from which 3.4 holds, the same predicate as above.
-- 100 nodes are expanded per step. The search fails after **2000** nodes (result 3) or when the
-  open list is empty (results 1/2).
-- On success the path is written into the attack job's list.
+Re-derived at instruction level in November 2026 (fidelity audit C4). The search is the path
+planner object of `units-and-jobs.md` 4.1.1 (same class, same expansion, step cost, insertion and
+open-list code), built by its own constructor `004725e0` and run in a **one-way mode** (planner
+flag +0x11 = 1) by the same run routine `004706e0`.
+
+**Start** (`00472520`, the attack job's "start a search"): the job's search counter (+0x48) is
+raised first; if it is now 6 or more, nothing is made and the caller retargets (3.3 step 4).
+Otherwise the search is made with:
+
+| input | value |
+|---|---|
+| start | the attacker's stored cell at this moment |
+| target footprint | the target's rectangle (`00462870`, as in 3.4), fixed for the whole search |
+| "goal" cell | the footprint centre ((min + max) >> 1 per axis), wrapped |
+| step times | the attacker's record +0xC4 |
+| planning mask | the attacker's +0x28 (0x3C) |
+| weapon | the attacker's weapon (+0x74), for the goal test |
+| mode | **0, "avoid nearby units"**: the unit bit 0x02 joins the mask for every cell with D(start, cell) < 32 (D = 2 max + min of the wrapped deltas) |
+| path shift | **1** (planner +0x8090): a cell with the path flag costs step time << 1 = 2 x step time, the same as any other cell, so worn paths do not draw the search (C, `004717a0` reads +0x8090, `00472520` passes 1) |
+| iterations per run | 100 |
+
+The job's search result (+0x34) becomes 0xFE (running) and the job's path list is the search's
+output list.
+
+**The search** keeps only the **forward** search of 4.1.1: one root node on the start (move count
+0, rating D(start, goal cell), priority 999999, direction 1), put into the hash table and its
+open list; there is no backward root and no backward list. Each iteration (up to 100 per run,
+while the open list is not empty and nothing was found in this run):
+
+1. the planner's total iteration counter rises by 1;
+2. N = the head of the open list;
+3. **goal test**: the range test of 3.4 (`004709b0`, the normal variant, not the garrison one)
+   from N's cell to the stored footprint, with the attacker's weapon: melee (range 0) = N's cell
+   in the footprint grown by one (wrapped); ranged = quick reject, budget and line-of-fire walk
+   with N's cell as the shooter's cell O. If it holds, the path is built from N and the run stops;
+4. otherwise N is expanded exactly as in 4.1.1 (the 8 neighbours in the fixed order, step cost,
+   move count + 2 / + 3, rating = step cost + D(neighbour, goal cell), priority = moves + 4 x
+   rating, insertion with the bucket rule) and closed.
+
+Because every node has direction 1, the insertion's duplicate check looks only at the **first
+node of the cell's bucket** (the stretch "up to and including the first node of its own
+direction" is one node), and the meeting boost never applies. The step cost's start/goal
+exemption covers the start cell and the **footprint centre**; the centre of a building target
+can therefore be a node (it is never needed: a neighbour cell passes the goal test first).
+
+After the run the result is decided, a later line overriding an earlier one: a path was built =
+0 (found); total counter above 2000 = 3 (failed); open list empty = 2 (failed). Otherwise the
+search goes on at its next run. Any result other than "running" clears the job's "search
+running" byte. A failure leaves the job without a plan (3.3 step 4 then starts the next search,
+using up another of the 5).
+
+**The path** (`00471df0`, then `004706e0`): the cells of N's parent chain from the start's
+neighbour to N in walking order, then the **start cell is inserted in front**. So the stored path
+is the start cell followed by the cells up to the firing position N; when the start itself
+passes the goal test (the target moved into range meanwhile) the path is the start cell alone.
+A walk is made from it by the join rule of 3.3.1.
+
 - In the original, searches are stepped by a cooperative background task queue
   (`00487bf0`/`00470670`), not by the tick scheduler. Their completion time in ticks therefore
   depends on frame timing. **Lockstep rule for the rebuild:** finish the search synchronously, so
@@ -472,9 +526,15 @@ the delta (shots across the seam) and treated drops like rises (32 units).*
 - At most **5 searches per target** (counter +0x48). Each re-plan caused by a moving target uses
   one up, also the ones made during a walk, so a target that keeps running away is chased
   through about 5 re-plans, then abandoned or retargeted (C; the whole sequence is in 3.3.1).
-- The stored path starts with the search's start cell, followed by the cells found (the search
-  itself excludes the start; `004706e0` puts it in front). A walk is made from it by the join
-  rule of 3.3.1.
+
+Consequences: on open ground the search runs almost straight toward the footprint centre and
+stops at the first cell that passes 3.4, so a ranged unit walks only until the target is just in
+range; a melee attacker plans to the first neighbour cell of the target reached in best-first
+order. Nearby units (within D < 32 of the attacker's cell) are obstacles for the search, so the
+planned way already goes round them and a neighbour cell of the target with another unit on it
+is not chosen while the target is near; for a far target the units round it are ignored (they
+are farther than D 32 from the start) and several attackers can plan to the same cell, then
+jostle (step aside, `units-and-jobs.md` 4.7) when they get there.
 
 ### 3.6 Retarget / give up (C, `00472190`)
 
@@ -906,7 +966,7 @@ cells, the positions of the ships they first fought) and none of them answered t
 landing party; the human archers on the other shore were locked the same way onto a Sajiki
 soldier. *(quirk, kept in vanilla; an enhanced option could end attacks on a target on another
 island.)* *Our build: the same. Our search toward another island fails at once (no search is
-made, `World.planPath`), the original's 2000-node search is spread over frames, so a cycle of
+made, `World.seek`), the original's 2000-node search is spread over frames, so a cycle of
 five searches and a retarget takes about 10 ticks in ours and longer in the original; the
 outcome is the same (test `test/engagement.test.ts`).*
 
@@ -917,8 +977,13 @@ Fields: home cell (V's cell at creation), attacker A, "returning" flag.
 1. If V or A is dead: success. This is tested on every run, also during the walks: if A dies
    while V runs away or walks home, V stops and the suspended job resumes from there. While a
    walk runs, the flee job returns its walk child's delay (a step's D, a turn, a wait), so it
-   runs, and tests this, only at those boundaries: V finishes the step under way (audit reading of
-   `0047da50`; the same child-delay rule as 3.3 and 8.1).
+   runs, and tests this, only at those boundaries: V finishes the step under way (C, `0047da50`,
+   re-checked November 2026: the alive tests of V and A come first in every run, then a running
+   child is run and its non-zero delay returned; the same child-delay rule as 3.3 and 8.1).
+   Run order when a walk ends (child returns 0): the child is deleted; if the "returning" flag is
+   not set yet, it is set, the walk home to the home cell is made as the new child (not run) and
+   the job returns **50** (the wait of step 3); if it was set, the job ends with success. The
+   distance test of step 2 is made only in a run without a child before the flag is set.
 2. With no child, compute d = distance (max + min/2) from V to A, using wrapped deltas.
    - If d ≥ **A's sight + 2**: success, the flee is over.
    - Otherwise walk to the point **A + offset**, with dx, dy = V − A (wrapped) and
@@ -1028,9 +1093,13 @@ and there is no scan.
 
 Because the walk child runs first, a run that starts the next step scans from the **new** cell:
 the step's destination is the unit's registered cell from the step's start (8.3,
-`units-and-jobs.md` 4.7). *Our build: the guard scans from the cell it stands on and the step
-starts in the same tick's motion pass, after the jobs, so the scan centre is one step behind
-(deviation, LOW).*
+`units-and-jobs.md` 4.7) (C, `00480a10` re-checked November 2026: the child's Work call comes
+first; `Map::GetObjects` is then called with the unit's stored cell +0x10/+0x14, which the
+step has already set). *Our build (November 2026, `combat.ts runGuard`): the guard runs its
+walk's due follow-path run itself before the scan (as the child), so a step that starts in this
+run moves the scan centre to its destination; the motion pass then finds the walk not due.
+Before, the step started in the motion pass after the jobs and the scan centre was one step
+behind.*
 
 ### 8.2 How guard jobs come into being (C)
 
@@ -1649,6 +1718,19 @@ already on their way out keep their leave job.
      towns) and is appended to that town's **homeless list** (+0x4E0);
    - if not: **it dies** (a unit already dead is just dropped from the list).
 
+   **Order** (C, `0x459553`..`0x459639`, fidelity audit T5): the units are taken by **type**, in
+   the order of the race's unit records in the object database (ODManager list +0xE0 + 12 x race,
+   filled by `ODManager::Add` `0040e770` with every unit record, kind +0xA4 = 0, in file order;
+   for GOG `dv.odb` that is 9, 10, ..., 31, **33, 32**, 34, 35, 36; Gold appends `Addon.odb`'s
+   64..67). For each type the town's per-type list (+0xB4 + 12 x type) is emptied from its
+   **front**: the first entry is processed, which removes it from the list (joining the other
+   town or dying), until the list is empty. A per-type list is in the order its units joined it
+   (birth, map load, training into that type, resettling into the town). This order decides the
+   homeless list order of the receiving town, and so which units the immediate rehousing below
+   puts into which house.
+   *Our build:* type order as above; inside one type, creation (entity id) order stands for the
+   join order (the same reading as the other per-type lists, e.g. 12.3).
+
    **Rehousing at once** (C, `00459400`, `0045964d`..`00459797`): when another town was
    found, after all units have moved, that town's **small houses** (its per-type list of type 37,
    in list order) and then its **large houses** (type 38) take homeless immediately. For each
@@ -1665,6 +1747,9 @@ already on their way out keep their leave job.
    Then, for each race slot 0..2 whose nation is a living computer player, the town's id is
    removed from that nation's known-town set (AI general +0x3C, `ai-diplomacy-trade.md` 2.2 and
    2.4 profile 2) (C, `0x459836..0x459899`).
+   *Our build* drops destroyed towns from the known-town sets at the next think run instead, and
+   every reader of the set (the profile-2 target choice) also skips dead towns, so the result is
+   the same (T6: settled, no change).
 5. If the nation has no **living** town left (the size of its used-name set, +0x254, is 0), it is
    **defeated** (`0045d2a0`):
    - a human nation's diplomacy/town panel is refreshed (`0044fc20` = SendDialogData, a display
@@ -1696,7 +1781,12 @@ already on their way out keep their leave job.
   are deleted (`00462a06`) or change town (`0046441b`, resettling and founding,
   `units-and-jobs.md` 11.2 step 4);
 - a computer army (`00465710`) holds one on its target town until the army ends
-  (`ai-diplomacy-trade.md` 2.5 "When the target town falls").
+  (`ai-diplomacy-trade.md` 2.5 "When the target town falls");
+- a trade route job (0x20) holds one on each of its two towns A and B (`0047cd10`; the one-end
+  route command `004522d0` moves the reference to the new end; the job's destructor `0047cd60`
+  drops both), until the job is deleted. A merchant's running or paused route therefore keeps
+  a destroyed partner town in its nation's list until the route job ends: its next run finds
+  the town destroyed and ends the job (`ai-diplomacy-trade.md` 4.4 step 1).
 
 When the count reaches 0 the destructor (`00459210`) removes the town from its nation's town
 list (`0045d570`: the entry is unlinked and +0x238 drops by 1) and frees it. So a destroyed town
@@ -1710,8 +1800,9 @@ in a nation's list (UI only).
 *Our build* (`src/engine/economy.ts releaseTowns`): destroyed towns keep their record in the
 town table (the id is its index), and leave the nation's list (`Player.towns`) at the end of the
 tick in which the last reference went: no own job of the town (dispatcher, consumption, status,
-idle stroll, research, the AI town jobs) is left in the scheduler, no computer army targets it
-and no unit or building has the town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
+idle stroll, research, the AI town jobs) is left in the scheduler, no computer army targets it,
+no trade route job names it as one of its ends (November 2026) and no unit or building has the
+town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
 destroyed town in the list (the 10-town limit of the training page then blocked founders for
 good after ten failed foundings); they are cleaned up on load.
 
@@ -1823,9 +1914,18 @@ a porter in a house, the warehouse or a workshop. Such an assault ends at the ch
 on the pick (any porter of the town, however far), no "nearest", no search radius, no
 preference for porters that carry goods.
 
-*Our build (deviation, LOW): the index is applied to the town's porters in entity creation order,
-not in the order they joined the town. Same distribution; a porter who joined later (resettled,
-released prisoner) can be a different victim for the same draw.*
+**Order of the porter list (C).** The list is in **join order**: every way a unit becomes a
+porter of the town appends it at the end, and leaving removes it wherever it stands. Appends:
+the unit's creation (birth, map load), the home-town change (`00464350`: resettling, founding,
+re-housing after a town's fall; removed from the old town's list, appended to the new one's) and
+the retype to a porter (`00464840`: a released prisoner, 12.4). Removals: death, the home-town
+change, a retype away from porter (a porter trained into another type).
+So a porter who joined later (resettled, released from the station) sits behind the porters
+born before him, whatever his object id.
+
+*Our build (November 2026, `Town.porters`, `Combat` criminal pick): the town keeps its porter
+ids in join order (snapshot version 24; older saves start from the porters in entity creation
+order). Before, the index was applied to the town's porters in entity creation order.*
 
 What the criminal job does **not** do (C, by the absence of any other branch in `004784d0`):
 
@@ -1996,15 +2096,26 @@ attack jobs are children), so the chase is at porter speed.
 1. The **criminal walks by itself** into the station (go-to + enter). The station admits
    criminals (`units-and-jobs.md` 4.4).
 2. When the walk ends, **whatever its outcome** (entered, refused, no way): wait **599** ticks
-   (audit reading of `0047cca0`, not re-checked at instruction level). During that time the criminal still has job 0x19, so the arrest pick (12.3)
-   skips him.
-3. Then, if the criminal is inside a building: **retype it to a porter** (type 9) in place and
-   eject it. The job ends. The retype (`00464840`; the list below is the audit's reading, not
-   re-checked at instruction level) sets the new record, clears the carried good
-   and amount, recomputes the target tier (1.3), sets HP to the **new record's maximum** (the
-   porter's, 50 in the shipped data), takes the weapon from the new record (+0x144; a porter
-   has none), re-evaluates the town's needs, and would start a criminal job (first run after
-   50 ticks) if the new type were 12.
+   (C, instruction level `0x47ccb2..0x47cccd`: the go-to child returns 0 on every ending, success
+   or failure, and the job then deletes it and returns 0x257 = 599). During that time the
+   criminal still has job 0x19, so the arrest pick (12.3) skips him.
+3. Then (the run with no child), if the criminal is inside a building (unit +0x6C set,
+   `0x47ccd1`): **retype it to a porter** (type 9) in place and eject it (the building's eject
+   routine, vtable +0x20). The job ends (returns 0). The retype (C, `00464840`, re-checked
+   November 2026), in this order:
+   - the unit is removed from its town's list of its old type (the criminal list), the town's
+     population (+0x44) and +0x48 drop by 1 and the needs are re-evaluated (`0045a2c0`);
+   - the new record (the race's record of the new type) is set, and the unit's HP becomes the
+     **new record's maximum** (+0xAC: the porter's, 50 in the shipped data);
+   - the unit is appended at the **end** of the town's list of its new type (the porter list:
+     a released prisoner is the newest porter for the crime pick, 12.1), +0x44 and +0x48 rise
+     by 1 and the needs are re-evaluated again;
+   - the old weapon is deleted and a new one made from the new record's weapon (+0x144; a
+     porter has none);
+   - if the new type is 12, a criminal job is started (first run after 50 ticks);
+   - the carried amount (+0x3C) is cleared and the base movement animation (+0x40) set back to
+     walk; the carried good index (+0x38) is left as it was (meaningless with amount 0); the
+     target tier (1.3) is recomputed.
 4. If it never got inside, the job just ends and the ex-arrestee stays a criminal **without**
    its criminal job (it is idle from then on) (C; probably rare).
 

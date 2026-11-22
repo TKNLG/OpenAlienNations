@@ -203,10 +203,12 @@ sensibly:
 3. **Placement (1.5, 7 item 2):** candidate cells are our building anchors (footprint at
    x - sizeX + 1 .. x). The padded rectangle has a 1-cell margin left and top and 1..3 cells
    right and bottom. Every padded cell must be free and not a mountain (except mine and outposts);
-   for buildings with mask flag 0x800 (not the mine, harbour, shipyard) the anchor and the four
-   corners of the padded rectangle must lie in the town's own territory, and then
-   `logistics.canPlace` (which adds the four-corner-block test of `economy.md` 11.7) must accept
-   the position. Rings have half-size 0 .. radius / 2. Explicit anchors (outposts, watchtowers,
+   for buildings with mask flag 0x800 (not the mine, harbour, shipyard) the four corner blocks of
+   the padded rectangle must lie in the town's own territory; the slope ring is the ring just
+   outside the padded rectangle, and the mine needs every padded cell above the mountain height.
+   Since November 2026 (batch 8a, audit A16) there is no second test with the real footprint
+   (`logistics.canPlace` before), as in the original; the add-on harbour and shipyard keep their
+   shore test. Rings have half-size 0 .. radius / 2. Explicit anchors (outposts, watchtowers,
    warehouses) are computed when the request is queued (`anchor`), the outpost / tower sign drawn
    before the menu-state and "already queued" tests. Snapping (spec 1.5, `snap`) moves every
    anchor, inside or outside the territory, to the nearest of its border blocks (the stone cell;
@@ -251,7 +253,12 @@ sensibly:
    around the site free of every territory. Sites are searched around each start candidate in
    file order with the original's radius-20 site-search walk (`naval.siteSearch`: the candidate,
    rings 1..9, the corner of ring 10; exact since November 2026, before that rings 0, 2, .. 20).
-   A `noSite` flag stops further missions once no site is left.
+   Since batch 8a (audit A8, A17) the site test is the original's (`Ai.siteValid`: the 7 x 7 cells
+   with the site as maximum corner, mask 0x7E, the slope ring, the site's block and the 140
+   circle-outline offsets of `Ai.hallCircle` outside every territory), the town is founded there
+   without a further placement test (`logistics.found(..., false)`), C[10] is set and missions
+   start without looking at the map's start candidates or a running mission, and a mission that
+   finds no site ends with its founder kept in group 54 (the old `noSite` flag is no longer read).
 9. **Army target classes** (object +0x20, 7 item 1) use `combat.tier()` (0 fighters / outposts,
    1 military buildings and civilians, 2 the rest). The assault attacks bucket 0 only, six per
    target, the keep rule compares with the bucket (7b O..R). Members without an attack job
@@ -310,8 +317,8 @@ sensibly:
     step, school, first mine, embassy, the army's important buildings) uses that order. The
     engine's own code keeps creation order.
 22. **Founding search details (1.12)**: the candidate search is exact (item 8); a mission that
-    finds no site at all releases its founder (group 0) and marks the player as having no site,
-    where the original ends with the founder left in group 54 (audit A8, open). The approach
+    finds no site at all ends with the founder left in group 54, as in the original (audit A8,
+    fixed in batch 8a; before, the founder was released and the player marked as having no site). The approach
     cell (step f) uses the exact ring walk.
 23. **Add-on navy (section 9)**: see `integration-addon-gameplay.md` 7 "Computer players" for
     what was fixed in the 2026-10 audit and what still differs.
@@ -327,6 +334,17 @@ sensibly:
     after 5 ticks; diplomacy evaluates townless living players and uses the first town's first
     embassy. Still different: a gang member inside a building other than on a leisure visit gets
     no harvest job (the original ejects it; rare).
+
+25. **Fidelity batch 8a (November 2026)**, now as in the original: profiles 0, 1, 3 and 5 take
+    their target from the nation's town list including destroyed towns not yet freed (a trade
+    route job also holds both its towns in their lists, `Trade.holdsTown`); profile 5's small
+    waves last up to and including tick 60000; the founding count is the nation's list; the
+    defence cancels a running attack only when the new one is made (A14), files intruders inside
+    buildings too and has no "inside" test (A15); the research slider needs the first laboratory
+    active; the add-on gang release sends a fishing boat into the first shipyard (harbour and
+    shipyard present) and every other type, warships included, into the first school. Still
+    different: an ending army's member inside a building or ship gets no walk home (the original
+    gives it one from inside, effect not traced).
 
 ## 7a. Audit against the original (2026-10): our build versus spec, ordered by impact
 

@@ -350,7 +350,10 @@ seeds, the 19th the next, and the first porter death follows ≈ 7 800 ticks lat
   **ends** (returns 0); otherwise the chance roll and, on success, one birth; then it returns
   **599**, also when this birth has just filled the building (the job then ends at its next run,
   599 ticks later, unless a resident has left meanwhile).
-- **A resident leaves** (`00461690`: death, resettling, demolition handling): occupancy − 1;
+- **A resident leaves** (`00461690`: death, resettling, demolition handling): occupancy − 1
+  only while the building is alive (its alive byte +0x34), with **no lower limit** (C, fidelity
+  audit 2026-11: no clamp; a map house can reach −1 through the loader quirk of `dvm.md`
+  "Creation order");
   if the building is still alive and has no house job, a new one is created with its first run
   599 ticks later. (If the building's current job is of kind 0x22, the operator-inside job, the
   building first sends out all its occupants and cancels that job, then creates the house job;
@@ -512,7 +515,10 @@ settlement, and the accumulator only grows in a research step that actually happ
   choosing it once more starts it again. Any other choice (or the same one while no job runs)
   sets +0x58, marks the invention "in progress", cancels a running job and creates a **new**
   research job, first run after 30 ticks, so switching projects always restarts the 30-tick
-  rhythm. The simulation does not test whether the invention is already finished (the panel
+  rhythm. The **previous** project's "in progress" mark (invention byte +0x3C) is not cleared
+  by a switch (only the stop button clears a mark); for a computer race this keeps the old
+  project out of the cursor pick (`ai-diplomacy-trade.md` 1.11 "Started"; C, fidelity audit E9,
+  implemented with that section). The simulation does not test whether the invention is already finished (the panel
   offers only open ones). The command handler (`00450910`) then refreshes the panel and,
   if the research slider is 0 or the stored R is below 1, tells the human player (status 0x10:
   research has no money).
@@ -866,7 +872,11 @@ Repairs (builders, money) are outside this document.
   flag but 0). So capacity = 25 x (1 + warehouses) (handbook p. 29), **per good**: a town with a
   hall and five warehouses holds 150 of each of the nine goods. Added in `0045fa40` (flag 0x1 and
   +0x120 not 0; Gold `00465d00`: flag 0x10), removed in `0045ff30` (same test; Gold `004661f0`:
-  flag 0x10). Warehouse construction sites add nothing. The raw-material page shows this number
+  flag 0x10). The activation adds it only inside its branch for buildings that **produce
+  nothing** (odb +0x11C = −1; that branch also holds the town-hall births, the house job and the
+  need handling; producing buildings get their production job instead) (C, fidelity audit E19;
+  no shipped store produces anything, so this changes nothing on the data). The removal in
+  `0045ff30` has no such test. Warehouse construction sites add nothing. The raw-material page shows this number
   (T130 "Lagerkapazität: %d / Typ"). Every room test uses it per good: room(g) =
   max(0, capacity − stock[g]) (`00460ba0`), "full" = room(g) < 1.
 - **What counts as town stock (C):** the nine counters at town +0x88..+0xA8. Goods inside

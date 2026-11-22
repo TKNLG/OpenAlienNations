@@ -216,7 +216,7 @@ space of the race's group), construction sites included. "Finished" means constr
 | 2 | number of finished objects of type p1 in city p3 >= p2 | false when none is finished, even for p2 <= 0 (the count is tested only on a finished object) |
 | 3 | number of finished buildings in city p2 >= p1 | |
 | 4 | number of objects of type p1 in city p3 >= p2 | |
-| 5 | inhabitants of city p2 >= p1 | |
+| 5 | inhabitants of city p2 >= p1 | reads town +0x48, a second population counter: every site that changes the population (+0x44) changes +0x48 by the same amount in the same place (unit creation in the map loader, births, joining, leaving, retraining; AN `00411200`, `00460830`, `004641d0`, `00464350`, `00464840`, `00464c30`, `00485a30`; Gold the same), both start at 0, so it always equals the population (C, fidelity audit T13, settled) |
 | 6 | crime rate of city p2 <= p1 (percent) | crime rate = criminals * 100 / inhabitants |
 | 7 | satisfaction of city p2 >= p1 | 0..100, see below |
 | 8 | open wishes of city p2 <= p1 | |

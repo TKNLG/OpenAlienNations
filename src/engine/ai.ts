@@ -322,9 +322,9 @@ export class Ai {
 
   /**
    * A "free" unit of group g (section 0, `0045b110`): alive, group id g, and either outside with no
-   * job or on a leisure visit (unless inside a building with a job). The dispatcher's test.
+   * job or on a leisure visit (unless inside a building with an unblocked job). The dispatcher's test.
    */
-  free(u: Entity, g: number = Grp.None): boolean { return Logistics.free(u, g); }
+  free(u: Entity, g: number = Grp.None): boolean { return Logistics.free(u, g, this.w.logistics.jobOf); }
 
   /**
    * The town's list of a building type (sites included) in the original's order: creation order,
@@ -499,14 +499,19 @@ export class Ai {
 
   // ---------------------------------------------------------------- founding (1.12)
 
+  /**
+   * `00468cc0` (1.12): the smallest town among those with planner jobs; the town count is the
+   * nation's list (destroyed towns not yet freed included). No test of the map's start candidates
+   * nor of a running mission: C[10] = 1, and a mission for every think that finds a free founder.
+   */
   private considerFounding(ps: AiPlayer, towns: Town[], prof: Profile): void {
-    if (!towns.length || ps.noSite || !this.points(3).length) return;
+    if (!towns.length) return;
     let small = towns[0];
     for (const t of towns) if (t.population < small.population) small = t;
     const s = this.towns[small.id]!;
-    if (small.population > prof.foundPop && towns.length < prof.maxTowns) {
+    const listed = this.w.economy.players[ps.race]?.towns.length ?? towns.length;
+    if (small.population > prof.foundPop && listed < prof.maxTowns) {
       s.C[U.Founder] = 1;
-      if (ps.founding && this.live(ps.founding)) return;
       const f = this.w.entities.find(e => e.kind === KIND_UNIT && e.town === small.id && (e.oid & 0xffff) === U.Founder &&
         (e.oid >>> 16) === small.race && this.free(e));
       if (f) ps.founding = this.w.sched.create(AiJob.Founding, ps.race, 1 + (this.rand() % 50), [small.id, 0, 0, 0, 0, ...(this.w.addon ? [0] : [])]).id;
@@ -520,15 +525,54 @@ export class Ai {
   }
 
   /**
-   * A town site (1.12 step 2): the engine's founding test with the territory rule (flag 0x1000,
-   * economy.md 11.7), and the disc the new town hall would claim (radius 25, `0045dc10`) clear of
-   * every territory too.
+   * A town site (1.12 step 2, `00467e10`): the 7 x 7 cells with (x, y) as the maximum corner hold no
+   * unit, building, special or nature object and no water, the heights on the ring just outside
+   * them differ by at most 64; the site's cell and every offset of the nation's circle list (the
+   * outline of the town-hall radius) lie in no territory.
    */
   private siteValid(race: number, x: number, y: number): boolean {
-    if (!this.w.logistics.canFound(race, this.mask(x), this.mask(y), true)) return false;
-    const R = this.w.rules.get(((race << 16) | B.TownHall) >>> 0)?.radius || 25;
-    return this.w.territory.discFree(this.mask(x), this.mask(y), R);
+    const w = this.w;
+    for (let dy = -6; dy <= 0; dy++) for (let dx = -6; dx <= 0; dx++) {
+      const cx = this.mask(x + dx), cy = this.mask(y + dy);
+      if (w.occupied(cx, cy) || !w.motion.free(cx, cy)) return false;
+    }
+    let lo = Infinity, hi = -Infinity;
+    for (let dy = -7; dy <= 1; dy++) for (let dx = -7; dx <= 1; dx++) {
+      if (dy > -7 && dy < 1 && dx > -7 && dx < 1) continue;
+      const h = w.heightAt(this.mask(x + dx), this.mask(y + dy));
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    if (hi - lo > 64) return false;
+    const ter = w.territory;
+    if (ter.ownerAt(this.mask(x), this.mask(y)) >= 0) return false;
+    for (const [dx, dy] of this.hallCircle(race)) if (ter.ownerAt(this.mask(x + dx), this.mask(y + dy)) >= 0) return false;
+    return true;
   }
+
+  /**
+   * The nation's circle list (`0045dc10`, 1.12 step 2): the outline of a circle of the race's
+   * town-hall radius R, the four axis points, then 8 points per step of a midpoint circle for
+   * trunc(R x 0.707) steps.
+   */
+  private hallCircle(race: number): [number, number][] {
+    const R = this.w.rules.get(((race << 16) | B.TownHall) >>> 0)?.radius || 25;
+    const hit = this.circles.get(R);
+    if (hit) return hit;
+    const out: [number, number][] = [[R, 0], [-R, 0], [0, -R], [0, R]];
+    const k = Math.trunc(R * 0.707);
+    let x = R, e = 0;
+    for (let i = 0; i < k; i++) {
+      const e1 = e + 1 + 2 * i;
+      const e2 = e1 - 2 * x + 1;
+      if (Math.abs(e2) < Math.abs(e1)) { x--; e = e2; } else e = e1;
+      const j = i + 1;
+      out.push([x, j], [x, -j], [-x, j], [-x, -j], [j, x], [j, -x], [-j, x], [-j, -x]);
+    }
+    this.circles.set(R, out);
+    return out;
+  }
+  private circles = new Map<number, [number, number][]>();
 
   /**
    * The founding site (1.12 step 3): around each start candidate in file order the site-search
@@ -569,7 +613,8 @@ export class Ai {
     // c: the target is no longer valid: look for a new one; the founder's job (and a ship request) is dropped
     if (!d[4] || !this.siteValid(ps.race, d[2], d[3])) {
       const site = this.findSite(ps.race);
-      if (!site) { ps.noSite = 1; return end(f); }
+      // no site: the mission ends and nothing else; the founder stays in group 54 (1.12 step c)
+      if (!site) { if (ps.founding === job.id) ps.founding = 0; return 0; }
       [d[2], d[3]] = site; d[4] = 1;
       const j = f.job ? this.w.sched.get(f.job) : undefined;
       if (j && !j.cancelled) {
@@ -586,7 +631,8 @@ export class Ai {
       const j = f.job ? this.w.sched.get(f.job) : undefined;
       if (j && !j.cancelled && j.kind === LJ_FOUND) return 50;
       f.group = Grp.None;
-      if (this.w.logistics.found(f, d[2], d[3])) {
+      // `DVUnit::FoundCity` at the site, without a placement test of its own (1.12)
+      if (this.w.logistics.found(f, d[2], d[3], false)) {
         const s = this.towns[t.id];
         if (s) s.C[U.Founder] = 0;
         return end();
@@ -675,21 +721,25 @@ export class Ai {
     const n = cands.length;
     const cooled = tick - ps.lastArmy > Math.trunc((prof.cooldown * COOLDOWN_FACTOR[ps.race][0]) / COOLDOWN_FACTOR[ps.race][1]);
     const me = this.strength(ps.race);
-    const others = [0, 1, 2].filter(r => r !== ps.race && this.living(r));
-    const firstTown = (race: number) => this.w.economy.players[race]!.towns.map(id => this.w.economy.towns[id]).find(t => t?.alive);
-    const humanTowns = () => (this.w.economy.players[human]?.towns ?? []).map(id => this.w.economy.towns[id]).filter((t): t is Town => !!t && t.alive);
+    // the race slots with the alive flag (not defeated); their town lists are the nations' lists,
+    // which still hold destroyed towns not yet freed (2.4): such a town can be the target
+    const eco = this.w.economy;
+    const others = [0, 1, 2].filter(r => r !== ps.race && !!eco.players[r] && !eco.players[r]!.defeated);
+    const firstTown = (race: number) => eco.players[race]!.towns.map(id => eco.towns[id]).find(t => !!t);
+    const humanTowns = () => (eco.players[human]?.towns ?? []).map(id => eco.towns[id]).filter((t): t is Town => !!t);
     let target: Town | undefined;
     let size = n;
     switch (ps.profile) {
       case 0: {
         if (!(n > Math.min(10, Math.trunc(tick / 30000)) && cooled && hostile)) return;
-        const r = others.find(o => this.strength(o) * 5 < me * 10 || tick < 54000);
+        // a candidate without a town is passed over: the loop goes on with the next race
+        const r = others.find(o => (this.strength(o) * 5 < me * 10 || tick < 54000) && !!firstTown(o));
         if (r !== undefined) target = firstTown(r);
         break;
       }
       case 1: {
         if (!(n > Math.min(20, Math.trunc(tick / 20000)) && cooled && hostile)) return;
-        const r = others.find(o => this.strength(o) < me);
+        const r = others.find(o => this.strength(o) < me && !!firstTown(o));
         if (r !== undefined) target = firstTown(r);
         break;
       }
@@ -711,7 +761,7 @@ export class Ai {
         break;
       }
       case 5: {
-        const k = tick < 60000 ? 1 : Math.min(15, Math.trunc(tick / 20000) + 4);
+        const k = tick <= 60000 ? 1 : Math.min(15, Math.trunc(tick / 20000) + 4);
         if (n <= k + 1) return;
         size = k + this.rand() % 3;
         if (!hostile) return;

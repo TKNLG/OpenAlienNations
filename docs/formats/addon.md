@@ -316,7 +316,8 @@ Details:
 
 - **Distance** (type 17) is the torus distance of world-populate.md 2.2:
   `max(|dx|, |dy|) + min(|dx|, |dy|) / 2` with both axes wrapped, using the object's current cell
-  (object +0x10/+0x14).
+  (object +0x10/+0x14). "Exists" is the object-table slot only: a **dead** object that is not
+  yet freed still counts (no alive test; gameplay addon.md 9.2).
 - **"Dead"** (type 18) is the object's alive byte (+0x34) being 0. Type 18 is used as a loss
   condition: "lose when the scout / founder / transport / shipyard #p1 is gone".
 - **Island** (type 19): the settlement's position cell (settlement +0x28/+0x2C) is looked up in
@@ -342,7 +343,7 @@ talk about:
 | Sajiki 0 "Ende an der Meerenge" | lose: #445..448, #451 within 15 of (14,51) | Pimmon destroyers (65) and a battleship (66) | yes |
 | Sajiki 4 "Die Handelsflotte" | **win**: #990, #991 within 10 of (74,62) | two Pimmon destroyers | the briefing says they must **not** reach the Amazon harbour; as stored these are win conditions *(probable data bug: the mission is then only won if both arrive and the Pimmons are eliminated)* |
 | Sajiki 5 "Riskanter Botengang" | lose: #559 (24) gone; win: #559 within 4 of (87,110) | Sajiki scout | yes |
-| Sajiki 8 "Trennungslinie" | lose: #3563..3571 within 15 of (25,136) | resolve to an Amazon large outpost, its archers, houses, porters and a maggot farm (immobile or unrelated) | **no** *(uncertain)*: the Amazon patrol ships the briefing means are #3580..3588, 17 higher (exactly the 17 house porters of section 8.4). Either this map's ids were authored without house porters (then the conditions can never fire) or the original creates no porters for these houses |
+| Sajiki 8 "Trennungslinie" | lose: #3563..3571 within 15 of (25,136) | resolve to an Amazon large outpost at (479,113) with its three archers, two Sajiki small houses at (375..378,316) with their porters and a Sajiki maggot farm: nothing that ever comes near (25,136) | **no**, settled *(C, fidelity audit 2026-11)*: the original creates the house porters at load for certain (8.4 step 3; `dvm.md` "Creation order": happiness 100, no rand()), so these ids resolve exactly as here in the original too. The Amazon warships the briefing means are #3580..3588, 17 higher: the map's ids were evidently counted without the house porters. In the original the nine lose conditions can therefore never fire (data bug, reproduced) |
 
 ### 7.4 Add-on mission table (D)
 
@@ -494,9 +495,11 @@ too (C in `dvge.exe`; I for AN.exe, whose loader has the same structure minus th
    city founder (type 10), then on completion **one builder (11) and two porters (9)**.
 3. **Other buildings**, in file order. Per building: the building; its operator (+0xD8) if any;
    for houses (types 37 and 38) **one porter (9)** spawned by the house's "new resident" rule
-   (odb.md section 5: when there is room, probability 1 / (10 - h/10), always when h >= 80; all
-   shipped houses get one, I: a fresh settlement starts with h >= 80); for outposts (class 6) the
-   +0xDC archers (type 29).
+   (odb.md section 5: when there is room, probability 1 / (10 - h/10), always when h >= 80; a
+   fresh settlement starts with h = 100, so every house gets one and no rand() is drawn: C,
+   town constructor Gold `0045ec60` +0x514 = 100, completion step `00466590`); for outposts
+   (class 6) the +0xDC archers (type 29). Then the building's occupancy is reset to 0 before its
+   activation (`dvm.md` "Creation order": the house porter is not counted).
 4. **Units**, in file order (ships included).
 5. **Cargo** of every type-67 unit, ships in file order, cargo in list order.
 
@@ -1019,7 +1022,7 @@ a rebuild has to pick one per edition.
 ## 13. Open points
 
 - Drawing of quads that mix class-9 and class-10 corners (8.3).
-- Sajiki 8 goal ids and Sajiki 4 win/lose sense (7.3).
-- House-porter rule at map load relies on a fresh settlement's satisfaction being >= 80 (8.4).
+- Sajiki 4 win/lose sense (7.3). (Sajiki 8 goal ids: settled, 7.3. House porters at map load:
+  settled, 8.4, happiness 100 at creation.)
 - Purpose of the multiplayer `LOCALSAVEGAME` copy and the save transfer on "Spiel starten" (11.5).
 - Fish record +0x134 = 4 (types 44, 45), and the exact role of transport +0xDC (gameplay spec).

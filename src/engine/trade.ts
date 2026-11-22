@@ -10,6 +10,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { Town } from './economy.ts';
+import { BuildingFlag } from '../formats/odb.ts';
 import { cellOf, enterDoor, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
 
 export const TradeJob = { Route: 0x20 } as const;
@@ -338,7 +339,7 @@ export class Trade {
           // entered: the trade, then the market ejects him at once; the route job is blocked
           // (+4 = 10) until the leave job is over (4.4 "Entering a market", T4)
           const here = eco.town(m.town);
-          if (here) this.exchange(u, here, here.id === a.id ? b : a, here.id === a.id);
+          if (here) this.exchange(u, here, here.id === a.id ? b : a, here.id === a.id, m);
           if (u.inside >= 0) job.hold = 10;
           this.w.logistics.leave(u);
           if (!this.w.logistics.leaving(u)) job.hold = 0;
@@ -406,15 +407,23 @@ export class Trade {
 
   /**
    * Trading on entering a market of town M; D is the other end of the route (4.4 "At a market").
-   * `atOrigin`: M is the route's origin A. Returns the good loaded (-1 none).
+   * `atOrigin`: M is the route's origin A. `bld`: the market building entered. Returns the good
+   * loaded (-1 none).
    */
-  exchange(u: Entity, m: Town, dTown: Town, atOrigin: boolean): number {
+  exchange(u: Entity, m: Town, dTown: Town, atOrigin: boolean, bld?: Entity): number {
     const eco = this.w.economy;
     // 1. unload into M's stock if M buys the carried good; no money here
     if (u.carryAmount > 0 && u.carryGood >= 0 && this.buys(m, u.carryGood)) {
       const g = u.carryGood;
       const n = Math.min(u.carryAmount, Math.max(0, this.get(m.id, g, MF.MaxStock) - m.stock[g]));
-      if (n > 0) {
+      // a market under construction (or one without the store flag) takes the goods into its own
+      // slots, those of the delivered building materials, without a cap (4.4 step 1)
+      const local = !!bld && (!bld.complete || !((this.w.rules.get(bld.oid)?.flags ?? 0) & BuildingFlag.TownStorage));
+      if (n > 0 && local) {
+        bld!.local[g] = (bld!.local[g] ?? 0) + n;
+        u.carryAmount -= n;
+        if (!u.carryAmount) u.carryGood = -1;
+      } else if (n > 0) {
         eco.addGood(m, g, n);                    // clamped to the capacity, the excess is lost (4.1)
         u.carryAmount -= n;
         if (!u.carryAmount) u.carryGood = -1;
@@ -484,6 +493,15 @@ export class Trade {
   }
 
   // ---------------------------------------------------------------- state
+
+  /**
+   * A route job holds a reference on each of its two towns until it is deleted (`0047cd10`,
+   * combat.md 10.4 "Lifetime of a town object"): a destroyed town it names stays in its nation's list.
+   */
+  holdsTown(id: number): boolean {
+    for (const j of this.w.sched.jobs()) if (j.kind === TradeJob.Route && (j.data[RT.From] === id || j.data[RT.To] === id)) return true;
+    return false;
+  }
 
   snapshot(): TradeSnapshot { return { markets: this.table.map(m => (m ? [...m] : null)) }; }
 

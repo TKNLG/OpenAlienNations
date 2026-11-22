@@ -11,7 +11,7 @@ import { marketPage, tradeRoutePage, diplomacyPage, marketPagesAllowed } from '.
 import type { BitmapFont, FontName } from './ui-assets.ts';
 import { NJ } from '../engine/naval.ts';
 import { TradeJob } from '../engine/trade.ts';
-import { CJ } from '../engine/combat.ts';
+import { CJ, GD } from '../engine/combat.ts';
 import { MJ } from '../engine/motion.ts';
 import { isShip, isTransport, isTrader, hasHome, canPatrol, passengerTypes } from './addon-ui.ts';
 
@@ -404,7 +404,8 @@ function jobText(pc: PageCtx, u: Entity): string {
     case CJ.Arrest: return hud.str(271);
     case CJ.Attack: return hud.str(262, name(d[0]));
     case CJ.Flee: return hud.str(274, name(d[0]));
-    case CJ.Guard: return hud.str(276);
+    // while it fights, the guard shows its attack child's text (`00480d40`)
+    case CJ.Guard: return d[GD.Attacking] ? hud.str(262, name(d[GD.Attack])) : hud.str(276);
     // a priest without a patient: an empty line (`00481380`)
     case CJ.Heal: return d[1] ? hud.str(277, name(d[2])) : '';
     case MJ.TurnIdle: return hud.str(278);

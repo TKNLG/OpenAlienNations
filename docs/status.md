@@ -145,7 +145,10 @@ from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket)
    verified with 3): police manual orders cycle through the town's criminal list (remembered:
    sticking to the clicked one); criminal pauses only 50 ticks; AI-vs-AI raids can wipe out
    computer towns when the human has no town hall.
-5. Add-on data quirks: SajikisAO 2 island ids, SajikisAO 8 goal ids, SajikisAO 4 reversed;
+5. Add-on data quirks: SajikisAO 2 island ids, SajikisAO 4 reversed (both original data, as
+   reproduced); SajikisAO 8 goal ids settled 2026-11 (the original creates the house porters at
+   load too, so its lose conditions point at immobile objects and never fire, formats addon.md
+   7.3);
    an original Gold savegame of a free-play island game would verify the island generator.
 6. AI: the hunter question is settled: the original AI gives its hunter gang (like woodcutters,
    stonemasons and bush porters) the harvest job 0x16 with auto-continue, delay 5, never the
