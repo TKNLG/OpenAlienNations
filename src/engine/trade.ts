@@ -10,7 +10,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { Town } from './economy.ts';
-import { cellOf, enterDoor, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkTo, walkToEntity } from './visit.ts';
+import { cellOf, enterDoor, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
 
 export const TradeJob = { Route: 0x20 } as const;
 export const isTradeJob = (kind: number) => kind === TradeJob.Route;
@@ -34,10 +34,22 @@ export const RECORD = 6;
 export type MarketField = 'maxStock' | 'maxPrice' | 'buy' | 'minStock' | 'minPrice' | 'sell';
 const FIELD_INDEX: Record<MarketField, number> = { maxStock: 0, maxPrice: 1, buy: 2, minStock: 3, minPrice: 4, sell: 5 };
 
-/** route job data slots */
-const RT = { Phase: 0, From: 1, To: 2, Leg: 3, Market: 4, Paused: 5, Size: 6 } as const;
-/** route phases: choose the next market, walk to it, inside it, walking home after the route broke */
-const PH = { Go: 0, Arrive: 1, Inside: 2, Home: 3 } as const;
+/**
+ * Route job data slots (4.4 "Fields"): Leg = the target town (0 A, 1 B; the original's +0x30),
+ * First = the first-leg marker (+0x2C set: the leg starts at A's market as its source), Market =
+ * the market of the stop under way, Dest = the first leg's destination market while its source
+ * stop runs (-1 otherwise).
+ */
+const RT = { Phase: 0, From: 1, To: 2, Leg: 3, Market: 4, Paused: 5, First: 6, Dest: 7, Size: 8 } as const;
+/**
+ * Route phases. State 0 (trading): Go = no leg child, Next = a leg stop chosen whose walk is not
+ * made yet, Arrive = walking to / entering the stop's market. State 1 (homeward after a peace
+ * loss): HomeGo = no child yet, Home = the go-to to A's market. Inside: saves before version 22
+ * (the merchant waited inside a market before leaving).
+ */
+const PH = { Go: 0, Arrive: 1, Inside: 2, Home: 3, HomeGo: 4, Next: 5 } as const;
+/** route job size before snapshot version 22 */
+export const ROUTE_SIZE_V21 = 6;
 
 export type TradeCommand =
   /** set one field of one good's market settings of an own town (4.2; `00452290`, `00452c50`) */
@@ -189,6 +201,11 @@ export class Trade {
     else this.stopRoute(u);
   }
 
+  /** saves before version 22: the route job gets the first-leg marker (off) and the destination slot */
+  migrateRoutesV21(jobs: Iterable<Job>): void {
+    for (const j of jobs) if (j.kind === TradeJob.Route && j.data.length === ROUTE_SIZE_V21) j.data.push(0, -1);
+  }
+
   private routeJob(u: Entity): Job | undefined {
     const j = this.w.logistics.mainJob(u);   // also while it waits behind a leave job
     return j && j.kind === TradeJob.Route ? j : undefined;
@@ -201,38 +218,67 @@ export class Trade {
     return { from: j.data[RT.From], to: j.data[RT.To], leg: j.data[RT.Leg], paused: j.data[RT.Paused] === 1 };
   }
 
-  /** route ends: A must be an own living town, B a living town of the own race or at peace */
+  /**
+   * Route ends as the command finds them (`004522d0`): A an own town, B a town of any player. No
+   * test of life or peace here: the job's runs end or turn the route (4.4 "Each run"). Add-on
+   * merchants only reach towns on their island (addon.md 5.7).
+   */
   private validEnd(u: Entity, id: number, origin: boolean): boolean {
     const t = this.w.economy.town(id);
-    if (!t || !t.alive) return false;
+    if (!t) return false;
     const isl = this.islandFilter(u);
     if (!origin && isl >= 0 && this.w.islandAt(t.x, t.y) !== isl) return false;
-    return origin ? t.race === u.owner : this.open(u.owner, t.race);
+    return !origin || t.race === u.owner;
   }
 
+  /**
+   * The route command (4.4 "Route command"): both ends make a new route job, first run after 1
+   * tick. One end (-1 = not given): a running or paused route job is kept and only that end is
+   * replaced (A also sets the first-leg marker, B also the current target), so a running route is
+   * redirected; without a route job a new one with only that end is made, paused (blocked 599).
+   */
   setRoute(u: Entity, from: number, to: number): void {
     if (from >= 0 && !this.validEnd(u, from, true)) return;
     if (to >= 0 && !this.validEnd(u, to, false)) return;
-    if (from >= 0 && from === to) return;
     if (from >= 0 && to >= 0) { this.startRoute(u, from, to, false); return; }
-    const old = this.routeOf(u);
-    const a = from >= 0 ? from : old?.from ?? -1, b = to >= 0 ? to : old?.to ?? -1;
-    if (a >= 0 && a === b) return;
-    this.startRoute(u, a, b, true);
+    if (from < 0 && to < 0) return;
+    // the test is on the current job: behind a leave job the route is replaced by a new paused one
+    let j = this.currentRoute(u);
+    if (!j) {
+      this.startRoute(u, -1, -1, true, 599);
+      j = this.routeJob(u)!;
+    }
+    const d = j.data;
+    if (from >= 0) { d[RT.From] = from; d[RT.First] = 1; }
+    if (to >= 0) { d[RT.To] = to; d[RT.Leg] = 1; }
   }
 
-  /** new route job: replaces the merchant's job; running routes start at once (4.4 "Start") */
-  startRoute(u: Entity, from: number, to: number, paused: boolean): void {
+  /**
+   * new route job: replaces the merchant's job; running routes start at once (4.4 "Start");
+   * `delay`: first run (the computer's merchants get theirs through the job hand-out with 5, 4.6)
+   */
+  startRoute(u: Entity, from: number, to: number, paused: boolean, delay = 1): void {
     if (u.inside >= 0) this.w.logistics.leave(u);
     const d = new Array<number>(RT.Size).fill(0);
-    d[RT.Phase] = PH.Go; d[RT.From] = from; d[RT.To] = to; d[RT.Leg] = 0; d[RT.Market] = -1; d[RT.Paused] = paused ? 1 : 0;
-    this.w.logistics.assign(u, TradeJob.Route, 1, d);
+    // target B, first leg from A's market (`0047cd10`)
+    d[RT.Phase] = PH.Go; d[RT.From] = from; d[RT.To] = to; d[RT.Leg] = 1; d[RT.Market] = -1; d[RT.Paused] = paused ? 1 : 0;
+    d[RT.First] = 1; d[RT.Dest] = -1;
+    this.w.logistics.assign(u, TradeJob.Route, delay, d);
     if (paused) stopWalking(this.w, u);
   }
 
-  /** "Handelsroute stoppen": the job is kept but blocked (polled every 599 ticks) */
+  /** the merchant's current job if it is the route job (not while a leave job is current) */
+  private currentRoute(u: Entity): Job | undefined {
+    const j = u.job ? this.w.sched.get(u.job) : undefined;
+    return j && !j.cancelled && j.kind === TradeJob.Route ? j : undefined;
+  }
+
+  /**
+   * "Handelsroute stoppen" (`00452620`): the job is kept but blocked (polled every 599 ticks), only
+   * when it is his current job: while he is on his way out of a market the command does nothing.
+   */
   stopRoute(u: Entity): void {
-    const j = this.routeJob(u);
+    const j = this.currentRoute(u);
     if (!j || j.data[RT.Paused]) return;
     j.data[RT.Paused] = 1;
     leaveQueues(this.w, u);
@@ -242,59 +288,99 @@ export class Trade {
 
   // ---------------------------------------------------------------- the route job (0x20, 4.4)
 
+  /**
+   * The route job (0x20, 4.4 "Each run"): A or B gone ends it; a lost peace with B drops the leg on
+   * the spot and turns him to A's nearest market (state 1); both checks on every run, mid-walk
+   * too. A leg is a go-to into the target town's nearest market, the first leg starting with A's
+   * market as its source stop. Each stop's walk outcome is ignored (he asks at the door where he
+   * stands); entering trades and the market ejects him at once, the job blocked until he is out.
+   * A leg that ends, whatever its result, flips the target (after the first leg: A).
+   */
   runJob(job: Job): number {
     if (job.kind !== TradeJob.Route) return 0;
     const u = this.w.get(job.owner), d = job.data;
     if (!u) return 0;
     if (d[RT.Paused]) return 599;
     const eco = this.w.economy;
+    const a = eco.town(d[RT.From]), b = eco.town(d[RT.To]);
+    if (!a || !a.alive || !b || !b.alive) { this.dropLeg(u); return this.finish(u); }
+    const term = this.terminal(u);
+    const homeward = d[RT.Phase] === PH.Home || d[RT.Phase] === PH.HomeGo;
+    if (!homeward && b.race !== u.owner && !this.open(u.owner, b.race)) {
+      this.dropLeg(u);
+      d[RT.Phase] = PH.HomeGo;
+    }
     for (;;) {
       switch (d[RT.Phase]) {
         case PH.Go: {
-          // checks at the start of every trip leg
-          const a = eco.town(d[RT.From]), b = eco.town(d[RT.To]);
-          if (!a || !a.alive || !b || !b.alive) return this.finish(u);
-          const term = this.terminal(u), sea = term !== MARKET;
-          if (b.race !== u.owner && !this.open(u.owner, b.race)) {
-            // peace ended: cancel the trip and go home to A's market; the job ends there
-            const home = nearestTo(this.w, this.marketsOf(a, false, term), ...cellOf(u));
-            if (!home || !walkToEntity(this.w, u, home)) return this.finish(u);
-            d[RT.Phase] = PH.Home;
-            return 1;
-          }
-          const t = d[RT.Leg] === 0 ? a : b;
-          const m = nearestTo(this.w, this.marketsOf(t, false, term), ...cellOf(u));
-          // no market: the merchant walks home; a ship's route just ends (5.7)
-          if (!m) { if (!sea) this.walkHome(u, a); return this.finish(u); }
-          if (!walkToEntity(this.w, u, m)) return this.finish(u);
-          d[RT.Market] = m.id;
+          const m = nearestTo(this.w, this.marketsOf(d[RT.Leg] ? b : a, false, term), ...cellOf(u));
+          // no market in the town he heads for: the route ends, a merchant walks home (T5)
+          if (!m) return this.walkHome(u);
+          const src = d[RT.First] ? nearestTo(this.w, this.marketsOf(a, false, term), ...cellOf(u)) : null;
+          if (src) { d[RT.Market] = src.id; d[RT.Dest] = m.id; } else { d[RT.Market] = m.id; d[RT.Dest] = -1; }
+          d[RT.Phase] = PH.Next;
+          continue;
+        }
+        case PH.Next: {
+          const m = this.w.get(d[RT.Market]);
+          if (!m || !m.alive) return this.legEnd(d);
+          walkToEntity(this.w, u, m);   // the go-to does not look at how its walk ends
           d[RT.Phase] = PH.Arrive;
           return 1;
         }
         case PH.Arrive: {
-          if (u.path) return 1;
+          if (u.path) return walkDelay(this.w, u);
           const m = this.w.get(d[RT.Market]);
-          if (!m) { d[RT.Phase] = PH.Go; return 1; }       // market gone: the next leg check decides
-          if (!nearEntity(this.w, u, m)) { leaveQueues(this.w, u); return this.finish(u); }
+          if (!m || !m.alive || !nearEntity(this.w, u, m)) { this.dropLeg(u); return this.legEnd(d); }
           const e = enterDoor(this.w, u, m);
-          if (e) return e;
-          const here = eco.town(d[d[RT.Leg] === 0 ? RT.From : RT.To]);
-          const there = eco.town(d[d[RT.Leg] === 0 ? RT.To : RT.From]);
-          if (here && there) this.exchange(u, here, there, d[RT.Leg] === 0);
-          d[RT.Phase] = PH.Inside;
-          return 10;
+          if (e > 0) return e;
+          if (e < 0) return this.legEnd(d);            // refused at the door: the leg fails
+          // entered: the trade, then the market ejects him at once; the route job is blocked
+          // (+4 = 10) until the leave job is over (4.4 "Entering a market", T4)
+          const here = eco.town(m.town);
+          if (here) this.exchange(u, here, here.id === a.id ? b : a, here.id === a.id);
+          if (u.inside >= 0) job.hold = 10;
+          this.w.logistics.leave(u);
+          if (!this.w.logistics.leaving(u)) job.hold = 0;
+          if (d[RT.Dest] >= 0) { d[RT.Market] = d[RT.Dest]; d[RT.Dest] = -1; d[RT.Phase] = PH.Next; return 1; }
+          return this.legEnd(d);
         }
-        case PH.Inside:
+        case PH.Inside:                                 // a save from before version 22
           this.w.logistics.leave(u);
           d[RT.Leg] ^= 1;
           d[RT.Phase] = PH.Go;
-          return 1;                                         // the next leg runs after 1 tick
+          return 1;
+        case PH.HomeGo: {
+          // state 1: a go-to into A's nearest market; the route ends when it ends
+          const m = nearestTo(this.w, this.marketsOf(a, false, term), ...cellOf(u));
+          if (!m) return this.walkHome(u);
+          walkToEntity(this.w, u, m);
+          d[RT.Market] = m.id;
+          d[RT.Phase] = PH.Home;
+          return 1;
+        }
         case PH.Home:
-          if (u.path) return 1;
+          // an own-race merchant is not admitted at his market: the go-to ends at its door
+          if (u.path) return walkDelay(this.w, u);
           return this.finish(u);
         default: return this.finish(u);
       }
     }
+  }
+
+  /** a leg child ended, whatever its result (4.4 step 6): the first leg's target becomes A, later legs flip */
+  private legEnd(d: number[]): number {
+    if (d[RT.First]) { d[RT.First] = 0; d[RT.Leg] = 0; } else d[RT.Leg] ^= 1;
+    d[RT.Phase] = PH.Go;
+    d[RT.Dest] = -1;
+    return 1;
+  }
+
+  /** the leg child is deleted: its walk and its place in a door queue go */
+  private dropLeg(u: Entity): void {
+    leaveQueues(this.w, u);
+    this.w.logistics.abortEnter(u);
+    if (u.inside < 0) stopWalking(this.w, u);
   }
 
   private finish(u: Entity): number {
@@ -303,11 +389,19 @@ export class Trade {
     return 0;
   }
 
-  /** the route broke because a town has no market: walk to the home town (its town hall) */
-  private walkHome(u: Entity, fallback: Town): void {
-    const t = this.w.economy.town(u.town) ?? fallback;
-    const hall = this.w.get(t.hall);
-    if (hall) walkTo(this.w, u, ...this.w.logistics.entrance(hall));
+  /**
+   * The route ends because the town he heads for has no market (T5): a merchant gets a plain move
+   * (first run after 1 tick) to the first cell of the square spiral around his own town's position
+   * that is free for his movement mask (0x3E); any other trader just stops.
+   */
+  private walkHome(u: Entity): number {
+    this.finish(u);
+    if ((u.oid & 0xffff) !== MERCHANT || u.inside >= 0) return 0;
+    const t = this.w.economy.town(u.town);
+    if (!t) return 0;
+    const c = this.w.freeSpiral(t.x, t.y, this.w.size, u);
+    if (c) this.w.follow(u, c[0], c[1], 0, 1);
+    return 0;
   }
 
   /**
@@ -349,7 +443,8 @@ export class Trade {
     const seller = eco.players[m.race], buyer = eco.players[dTown.race];
     const buyerHuman = !!buyer && !buyer.computer;
     if (races && buyerHuman && price !== 0) n = Math.min(n, Math.floor(buyer.money / price));
-    if (n <= 0) return -1;
+    // n = 0 (no room, no money): the chosen good is still set, nothing moves (4.4 step 3)
+    if (n <= 0) { u.carryGood = best; return -1; }
     if (races) {
       if (seller) seller.money += price * n;
       if (buyerHuman) buyer.money = Math.max(0, buyer.money - price * n);   // computer imports are free

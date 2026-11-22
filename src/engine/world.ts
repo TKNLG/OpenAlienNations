@@ -179,7 +179,13 @@ export type Command =
   /** crop conversion (command 0x57, economy.md 7): `percent` 0..100 sets the town's ring,
    *  CONVERT_NOW (255) converts the ring's share of the crop stock now */
   | { type: 'convert'; player: number; town: number; percent: number }
-  | { type: 'patrol'; player: number; id: number; points: [number, number][] }
+  /**
+   * PATROL button (command 0x4E, combat.md 8.2): a stationary guard on the unit's cell, first run
+   * after 2 ticks. `points` (optional, older clients): waypoints appended at once, as clicks would.
+   */
+  | { type: 'patrol'; player: number; id: number; points?: [number, number][] }
+  /** a waypoint click in patrol mode (command 0x4F): appended to the unit's guard job while it has < 8 */
+  | { type: 'patrolPoint'; player: number; id: number; x: number; y: number }
   | { type: 'found'; player: number; unit: number; x: number; y: number }
   /** add-on: send out the passengers of a transport ship (AUSSTEIGEN, docs/game/addon.md 5.3, 5.6);
    *  `unit` = a unit type to send out only that type, -1 or absent = everyone */
@@ -238,8 +244,14 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  (cell drawn in its first run, crop made on stepping off, units-and-jobs.md 7.6); older saves are
  *  migrated on restore; 17: a town's given name (rename command), the network-game flag
  *  (economy snapshot), the target of a player-ordered go-to walk (`goTarget`, repeated-order test,
- *  units-and-jobs.md 3.2) */
-export const SNAPSHOT_VERSION = 18;
+ *  units-and-jobs.md 3.2); 18: walks keep no node budget (original planner, units-and-jobs.md
+ *  4.1.1); 19: the towns' free-porter lists (`Town.freePorters`, units-and-jobs.md 5.3, 5.7);
+ *  20: computer players (ai-diplomacy-trade.md 1.8, 1.10, 1.11): gang lists in join order, the
+ *  races' "started" inventions, research chosen by events instead of polling (`AiTown.labSeen` gone);
+ *  22: the trade route job's first-leg marker and first-leg destination (ai-diplomacy-trade.md
+ *  4.4; older route jobs are padded on restore), a chosen-but-not-started heal patient (state 2,
+ *  combat.md 13), the errand blocked inside a foreign embassy (3.4 step 3) */
+export const SNAPSHOT_VERSION = 22;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -469,29 +481,51 @@ export class World {
     if (setup?.orders) this.applyOrders(setup.orders);
   }
 
-  /** initial jobs from the map (dvm.md "Orders") */
+  /**
+   * Initial jobs from the map (dvm.md "Orders", combat.md 8.2 "Map order records"): one record
+   * after the other in file order. The unit on the record's cell gets a new job by its type: a
+   * soldier a guard job (its cell, then the target; no same-cell test), a hunter a hunting ground
+   * on the target, anyone else a harvest job on the object on the target cell (none: skipped).
+   * Each job made draws its first-run delay rand() % 5 + 1 right away.
+   * Deviations: a second record for a soldier replaces his first guard job (the original leaves
+   * it running); a harvest record whose target our harvest job cannot work on still draws, but
+   * makes no job.
+   */
   private applyOrders(orders: MapOrder[]): void {
     const m = this.size - 1;
-    const at = (x: number, y: number, kind?: number) => this.entities.find(e =>
-      (kind === undefined || e.kind === kind) && (Math.floor(e.x / SUB) & m) === (x & m) && (Math.floor(e.y / SUB) & m) === (y & m));
-    const waypoints = new Map<Entity, [number, number][]>();
+    const cellOf = (e: Entity) => [Math.floor(e.x / SUB) & m, Math.floor(e.y / SUB) & m];
+    const unitAt = (x: number, y: number) => this.entities.find(e => {
+      if (e.kind !== Kind.Unit || e.inside >= 0) return false;
+      const [ex, ey] = cellOf(e);
+      return ex === (x & m) && ey === (y & m);
+    });
+    // the object registered on a cell: a unit, a building through any footprint cell, a nature object
+    const objectAt = (x: number, y: number): Entity | undefined => unitAt(x, y) ?? this.entities.find(e => {
+      const [ex, ey] = cellOf(e);
+      if (e.kind === Kind.Building) {
+        const r = this.rules.get(e.oid);
+        const sx = Math.max(1, r?.sizeX || 2), sy = Math.max(1, r?.sizeY || 2);
+        return ((ex - (x & m)) & m) < sx && ((ey - (y & m)) & m) < sy;
+      }
+      return e.kind === Kind.Nature && ex === (x & m) && ey === (y & m);
+    });
+    const delay = () => 1 + (this.rand.next() % 5);
     for (const o of orders) {
-      const src = at(o.x1, o.y1, Kind.Unit);
+      const src = unitAt(o.x1, o.y1);
       if (!src) continue;
       const type = src.oid & 0xffff;
       if (type >= 29 && type <= 36) {
-        const l = waypoints.get(src) ?? [];
-        if (l.length < 7 && !((o.x2 & m) === (o.x1 & m) && (o.y2 & m) === (o.y1 & m))) l.push([o.x2 & m, o.y2 & m]);
-        waypoints.set(src, l);
+        this.combat.startGuard(src, [[o.x2 & m, o.y2 & m]], delay());
       } else if (type === 17) {
         // a hunter: hunting ground at the order cell, no target yet (units-and-jobs.md 7.3.1)
-        this.logistics.startHunt(src, o.x2 & m, o.y2 & m, null, 1 + (this.rand.next() % 5));
+        this.logistics.startHunt(src, o.x2 & m, o.y2 & m, null, delay());
       } else {
-        const obj = at(o.x2, o.y2, Kind.Nature);
-        if (obj && this.logistics.canHarvest(src, obj)) this.logistics.startHarvest(src, obj, true, 1 + (this.rand.next() % 5));
+        const obj = objectAt(o.x2, o.y2);
+        if (!obj) continue;
+        const d = delay();
+        if (obj.kind === Kind.Nature && this.logistics.canHarvest(src, obj)) this.logistics.startHarvest(src, obj, true, d);
       }
     }
-    for (const [u, pts] of waypoints) this.combat.startGuard(u, pts, 1 + (this.rand.next() % 5));
   }
 
   /** the building's resident worker (odb operator type), created inside */
@@ -826,6 +860,8 @@ export class World {
     if (e.action !== act) { e.action = act; e.actionTick = this.tick; }
     e.idleTick = -1;
     if (e.kind === Kind.Unit) this.wearPath(e, nx, ny);
+    // the position setter's AI part (`004621c0`): intruder records, known towns (ai-diplomacy-trade.md 2.2)
+    if (e.kind === Kind.Unit) this.ai.stepped(e, nx, ny);
   }
 
   /** face a cell at once (no turn delay): only where the original sets the facing directly */
@@ -901,6 +937,13 @@ export class World {
    * `intervalMs` ago. Only a call with an interval stamps the slot. Time is ticks x TICK_MS, so
    * the choice is deterministic. Display only: nothing in the simulation reads it.
    */
+  /** EconomyHost: a computer town's laboratory became active (ai-diplomacy-trade.md 1.11, `0045fa40`) */
+  aiLabActive(t: Town): void { this.ai.labActive(t); }
+  /** EconomyHost: a computer town completed its research project (1.11, `0046f490`) */
+  aiResearchDone(t: Town): void { this.ai.researchDone(t); }
+  /** EconomyHost: a computer army targets the town and holds it (combat.md 10.4 "Lifetime") */
+  aiHoldsTown(id: number): boolean { return this.ai.holdsTown(id); }
+
   notify(race: number, mentor: number, queue = true, intervalMs = 0): void {
     const key = race * 1024 + mentor;
     if (intervalMs > 0) {
@@ -1106,10 +1149,16 @@ export class World {
     if (cmd.type === 'order') {
       const target = this.byId.get(cmd.target);
       if (!target) return;
-      const units = [...cmd.ids].sort((a, b) => a - b).map(id => this.byId.get(id))
-        .filter((e): e is Entity => !!e && e.kind === Kind.Unit && e.owner === cmd.player && e.inside < 0 && e.id !== target.id);
-      // an order naming a criminal is refused as a whole (`00450bb0` stops at it; combat.md 12.6)
-      if (units.some(u => (u.oid & 0xffff) === T.Criminal)) return;
+      // the selection is walked in its order; the target itself is skipped and processing stops at
+      // the first unit inside a building or a criminal (`00450bb0`, units-and-jobs.md 3.2)
+      const units: Entity[] = [];
+      for (const id of cmd.ids) {
+        const e = this.byId.get(id);
+        if (!e || e.kind !== Kind.Unit || e.owner !== cmd.player || e.id === target.id) continue;
+        if (e.inside >= 0 || (e.oid & 0xffff) === T.Criminal) break;
+        if (!units.includes(e)) units.push(e);
+      }
+      if (!units.length) return;
       this.logistics.order(units, target);
       // every job the order made is a player order (`00450bb0`, combat.md 7.2); set after the jobs
       // were made, since a new job clears the mark
@@ -1175,7 +1224,16 @@ export class World {
       const pt = u ? u.oid & 0xffff : 0;
       // PATROL: land soldiers 29..36 and the warships 65, 66 (addon.md 4.1)
       if (u && u.kind === Kind.Unit && u.owner === cmd.player && u.inside < 0 && ((pt >= 29 && pt <= 36) || (this.isShip(u) && (pt === 65 || pt === 66)))) {
-        this.combat.startGuard(u, cmd.points.slice(0, 7).map(([x, y]) => [Math.trunc(x), Math.trunc(y)] as [number, number]), 2);
+        this.combat.startGuard(u, [], 2);
+        for (const [x, y] of cmd.points ?? []) this.combat.addWaypoint(u, Math.trunc(x), Math.trunc(y));
+      }
+      return;
+    }
+    if (cmd.type === 'patrolPoint') {
+      const u = this.byId.get(cmd.id);
+      const pt = u ? u.oid & 0xffff : 0;
+      if (u && u.kind === Kind.Unit && u.owner === cmd.player && u.inside < 0 && ((pt >= 29 && pt <= 36) || (this.isShip(u) && (pt === 65 || pt === 66)))) {
+        this.combat.addWaypoint(u, Math.trunc(cmd.x), Math.trunc(cmd.y));
       }
       return;
     }
@@ -1241,7 +1299,7 @@ export class World {
       e.ordered = true;
       const t = targets[k];
       if (!t) return;
-      if ((e.oid & 0xffff) === 64) { this.naval.startFishing(e, t[0], t[1], 1); return; }
+      if ((e.oid & 0xffff) === 64) { this.naval.startFishing(e, t[0], t[1], 1); e.ordered = true; return; }
       this.naval.walkShip(e, t[0], t[1]);
     });
   }
@@ -1283,7 +1341,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1337,7 +1395,7 @@ export class World {
     for (const [race, mentor, t] of snap.advisor ?? []) w.advisorLast.set(race * 1024 + mentor, t);
     w.respawns = snap.respawns.map(r => ({ ...r })); w.respawnJob = snap.respawnJob;
     w.logistics.ensureRespawnManager();   // saves from before October 2026 ran it only while it had entries
-    w.trade.restore(snap.trade); w.diplomacy.restore(snap.diplomacy); w.ai.restore(snap.ai); w.naval.restore(snap.naval);
+    w.trade.restore(snap.trade); w.diplomacy.restore(snap.diplomacy); w.ai.restore(snap.ai, snap.v); w.naval.restore(snap.naval);
     // before version 14 the planner's ship counter limited nothing: every ship starts at 100 (addon.md 8.4)
     if (snap.v < 14) w.naval.migrateCounters();
     // before version 15 destroyed towns stayed in their nation's town list for good (combat.md 10.4
@@ -1346,6 +1404,15 @@ export class World {
     // before version 16 the plant job drew its cell in the operator run and made the crop after
     // the work (units-and-jobs.md 7.6): map running plant jobs onto the new phases
     if (snap.v < 16) w.logistics.migratePlantJobs();
+    // before version 19 the towns kept no free-porter list (the leisure job re-tested every porter,
+    // units-and-jobs.md 5.7): it starts as the porters free now, as a transport pass would leave it
+    if (snap.v < 19) w.logistics.migrateFreePorters();
+    // before version 21 a fishing job kept no record id of its fish (the catch reads it without a
+    // test of the fish, addon.md 6.2): running jobs take it from their fish if it still exists
+    if (snap.v < 21) w.naval.migrateFishingJobs();
+    // before version 22 the route job had no first-leg marker and no first-leg destination
+    // (ai-diplomacy-trade.md 4.4): running routes go on as later legs
+    if (snap.v < 22) w.trade.migrateRoutesV21(w.sched.jobs());
     if (snap.lists) w.lists = snap.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (snap.territory) w.territory.restore(snap.territory);
     else w.migrateTerritory();

@@ -123,9 +123,13 @@ test('shipyard trains a ship: the porter goes in, the ship comes out on open sea
   w.schedule({ type: 'train', player: h, building: yard.id, unit: 67 });
   let ship: Entity | undefined;
   const ticks = runUntil(w, 4000, () => !!(ship = w.entities.find(e => w.isShip(e) && !old.has(e.id))));
-  assert.ok(ticks > 0, 'a transport ship was launched');
+  assert.ok(ticks > 0, 'a transport ship was trained');
   // duration: ceil(350 / 5) x 30 ticks of training after the porter arrived (addon.md 3.4)
   assert.ok(ticks >= 2100 && ticks < 3000, `trained in ${ticks} ticks`);
+  // launched by the leave job: still inside the shipyard, it comes out 35 ticks after the eject
+  assert.equal(ship!.inside, yard.id);
+  const out = runUntil(w, 100, () => ship!.inside < 0);
+  assert.ok(out >= 34 && out <= 36, `out after ${out} ticks`);
   const [x, y] = cell(ship!);
   assert.equal(ship!.inside, -1);
   assert.equal(w.naval.isSea(x, y), true, 'on open sea');
@@ -183,8 +187,10 @@ test('harbour placement at the waterline; no foundation, no rubble; shipyard goo
 
 // ---------------------------------------------------------------- transport ships
 
-test('transport: units board from the shore, sail to another island and unload there', { skip }, () => {
-  const { world: w, mission: m } = aoWorld('PimmonsAO.mdb', 1);
+test('transport: units board from the shore (a sixth passenger, addon.md 5.1), sail to another island and unload there', { skip }, () => {
+  // the ship's owner is a computer player (no AI runs): the head of the door queue is admitted
+  // wherever it stands (5.2), so a crowd at the shore cell cannot stall the door
+  const { world: w, mission: m } = aoWorld('PimmonsAO.mdb', 1, { allComputer: true });
   const h = m.humanRace;
   w.combat.setRelation(1, 2, 3);   // peace with the Sajiki: their outposts leave the ship alone
   for (let i = 0; i < 40; i++) w.step();   // births come out of their doors (units-and-jobs.md 4.10)
@@ -199,11 +205,17 @@ test('transport: units board from the shore, sail to another island and unload t
   assert.ok(runUntil(w, 3000, () => w.tick > t0 + 2 && !ship.path) >= 0);
   assert.deepEqual(cell(ship), pickup);
   w.schedule({ type: 'order', player: h, ids: units.map(u => u.id), target: ship.id });
-  runUntil(w, 1500, () => ship.passengers.length === 5);
+  runUntil(w, 1500, () => ship.passengers.length === 6);
   for (let i = 0; i < 200; i++) w.step();
-  assert.equal(ship.passengers.length, 5, 'capacity 5');
+  // seven queued while fewer than 5 were aboard: "entered" admits while passengers <= 5, so six
+  // get in; the seventh is not taken in, its boarding ends and it stands on the shore with no job
+  assert.equal(ship.passengers.length, 6, 'capacity 5 + 1 (quirk)');
   const aboard = units.filter(u => u.inside === ship.id);
-  assert.equal(aboard.length, 5);
+  assert.equal(aboard.length, 6);
+  const left = units.filter(u => u.inside < 0);
+  assert.equal(left.length, 1);
+  assert.equal(left[0].job, 0, 'the seventh has no job');
+  assert.equal(ship.doorQueue.length, 0, 'it left the door queue');
   assert.deepEqual(aboard.map(u => u.id).sort(), [...ship.passengers].sort());
   // passengers are hidden: not targetable, not scanned
   assert.equal(w.combat.valid(aboard[0]), false);
@@ -319,7 +331,8 @@ test('fishing boat on a fish with the original harvest bug: harvest job, endless
   for (let i = 0; i < 600; i++) w.step();
   assert.equal(jobKind(w, boat), 0x16, 'harvest job');
   assert.equal(fish.alive, false, 'the boat killed the fish');
-  assert.ok(boat.carryAmount > 0, 'it carries food it can never deliver (the store is on land)');
+  assert.ok(w.get(fish.id), 'the dead fish stays as a carcass (its die only clears the living flag)');
+  assert.equal(boat.carryAmount, 1, 'one unit per trip, never delivered (the store is on land)');
 });
 
 // ---------------------------------------------------------------- sea combat
@@ -442,8 +455,8 @@ test('naval planner: a computer transport ferries waiting units to another islan
   const req = w.naval.request(2, units.length, 0, ...cell(units[0]), ...dest);
   for (const u of units) { w.naval.addWaiting(2, req, u); assert.equal(jobKind(w, u), NJ.Wait); }
   const states = new Set<number>();
-  // where each unit first stands outside again after boarding (a unit landed may get other work
-  // later, e.g. a trainee order, and leave the island again)
+  // where each unit first stands outside again after boarding: a job given to a passenger ejects
+  // it through the ship's leave job (addon.md 5.1, 5.3), never a walk from inside the ship
   const landed = new Map<number, [number, number]>();
   const aboard = new Set<number>();
   runUntil(w, 6000, () => {
@@ -458,6 +471,9 @@ test('naval planner: a computer transport ferries waiting units to another islan
   for (const u of units) {
     assert.ok(landed.has(u.id), 'boarded and left the ship');
     assert.equal(w.islandAt(...landed.get(u.id)!), w.islandAt(...dest), 'ferried over');
+    // later work cannot take a landed unit off the island (island test, addon.md 2.5)
+    assert.ok(u.alive && u.inside < 0, 'still outside');
+    assert.equal(w.islandAt(...cell(u)), w.islandAt(...dest), 'still on the destination island');
   }
 });
 
@@ -595,4 +611,128 @@ test('speed: AmazonsAO 4 with computer players stays below 1 ms per tick', { ski
   const ms = (performance.now() - t0) / N;
   console.log(`AmazonsAO 4: ${ms.toFixed(3)} ms/tick (${w.entities.length} entities)`);
   assert.ok(ms < 1, `${ms.toFixed(3)} ms/tick`);
+});
+
+// ---------------------------------------------------------------- fidelity batch 3 (addon.md 5, 6)
+
+/** an open-sea cell with no land within 6 cells, reachable from the ship, searched outward */
+function openSea(w: World, from: Entity): [number, number] {
+  const n = w.size;
+  for (let r = 1; r < 80; r++) for (const [dx, dy] of [[r, 0], [0, r], [-r, 0], [0, -r]]) {
+    const x = (cell(from)[0] + dx) & (n - 1), y = (cell(from)[1] + dy) & (n - 1);
+    let land = false;
+    for (let yy = -6; yy <= 6 && !land; yy++) for (let xx = -6; xx <= 6; xx++) if (!w.naval.isWater(x + xx, y + yy)) { land = true; break; }
+    if (!land && w.naval.shipFree(x, y) && w.naval.seaComp[(y << w.bits) | x] === w.naval.seaComp[(cell(from)[1] << w.bits) | cell(from)[0]]) return [x, y];
+  }
+  throw new Error('no open sea');
+}
+
+test('a job given to a passenger ejects it through the ship\'s leave job (addon.md 5.1, 5.3): never onto water, facing 5', { skip }, () => {
+  const { world: w, mission: m } = aoWorld('PimmonsAO.mdb', 1);
+  const h = m.humanRace;
+  for (let i = 0; i < 40; i++) w.step();
+  const ship = w.entities.find(e => w.isShip(e) && e.owner === h && (e.oid & 0xffff) === 67)!;
+  const porter = w.entities.find(e => e.kind === 0 && e.owner === h && (e.oid & 0xffff) === 9 && e.inside < 0 && !e.job)!;
+  const far = openSea(w, ship);
+  w.schedule({ type: 'move', player: h, ids: [ship.id], x: far[0], y: far[1] });
+  const t0 = w.tick;
+  runUntil(w, 3000, () => w.tick > t0 + 2 && !ship.path);
+  assert.ok(w.naval.embark(porter, ship));
+  const hall = w.get(w.economy.town(porter.town)!.hall)!;
+  // the general job assignment (dispatcher, gang release, ...) ejects a passenger first
+  w.logistics.goInto(porter, hall, 1);
+  assert.equal(jobKind(w, porter), NJ.LeaveShip, 'the leave job comes first');
+  assert.equal(porter.inside, ship.id, 'still aboard');
+  assert.equal(ship.passengers.length, 0, 'off the passenger list at once');
+  for (let i = 0; i < 12; i++) w.step();
+  assert.equal(porter.inside, ship.id, 'no land within 5 cells: still aboard after the first run');
+  assert.equal(jobKind(w, ship), NJ.Sail, 'the idle ship sails toward the coast');
+  let landedAt = -1;
+  runUntil(w, 3000, () => { if (porter.inside < 0 && landedAt < 0) landedAt = w.tick; return porter.inside < 0; });
+  assert.ok(landedAt > 0, 'landed');
+  assert.ok(w.islandAt(...cell(porter)) > 0 && !w.naval.isWater(...cell(porter)), 'on land');
+  assert.equal(porter.dir, 5, 'facing 5 (the ship\'s place method)');
+  assert.ok(jobKind(w, porter) !== NJ.LeaveShip, 'the job behind the leave job goes on');
+});
+
+test('sail to coast (5.4): a coastal landing cell ends the walk next to it with success', { skip }, () => {
+  const { world: w, mission: m } = aoWorld('PimmonsAO.mdb', 1);
+  const h = m.humanRace;
+  const ship = w.entities.find(e => w.isShip(e) && e.owner === h && (e.oid & 0xffff) === 67)!;
+  const n = w.size, [sx, sy] = cell(ship);
+  const comp = w.naval.seaComp[(sy << w.bits) | sx];
+  // the nearest coastal water cell next to open sea of the ship's body
+  let goal: [number, number] | null = null;
+  for (let r = 1; r < 60 && !goal; r++) for (let dy = -r; dy <= r && !goal; dy++) for (let dx = -r; dx <= r; dx++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+    const x = (sx + dx) & (n - 1), y = (sy + dy) & (n - 1);
+    if (!w.naval.isWater(x, y) || w.naval.isSea(x, y)) continue;
+    let ok = false;
+    for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (w.naval.seaComp[(((y + ay) & (n - 1)) << w.bits) | ((x + ax) & (n - 1))] === comp) ok = true;
+    if (ok) { goal = [x, y]; break; }
+  }
+  assert.ok(goal, 'a coastal cell');
+  assert.ok(w.naval.followShip(ship, goal![0], goal![1]), 'the plan leads onto the goal (never blocked in planning)');
+  runUntil(w, 3000, () => !ship.path);
+  assert.equal(w.walkOk(ship), true, 'a success');
+  assert.equal(w.logistics.dist(...cell(ship), ...goal!), 1, 'one cell short of the coastal cell');
+});
+
+test('fishing (6.2): the search runs when the job is made (rand draws at the order), the catch does not re-check the fish', { skip }, () => {
+  const { world: w, mission: m } = aoWorld('SajikisAO.mdb', 2);
+  const h = m.humanRace;
+  const harb = w.entities.find(e => e.kind === 1 && e.owner === h && (e.oid & 0xffff) === 62)!;
+  const t = w.economy.town(harb.town)!;
+  const boat = w.spawnUnit(h, 64, ...w.logistics.entrance(harb), t.id);
+  w.economy.joinTown(boat, t);
+  const fishes = w.entities.filter(e => w.naval.isFish(e));
+  // grounds with no fish within 10 rings: the fallback draws two rand() per try at once
+  const far = openSea(w, boat);
+  const noFish = fishes.every(f => w.logistics.dist(...cell(f), ...far) > 16);
+  if (noFish) {
+    const r0 = w.rand.state;
+    w.naval.startFishing(boat, far[0], far[1], 1);
+    assert.ok(w.rand.state !== r0, 'the draws happen in the constructor');
+  }
+  // a fish next to the grounds: no draws; the catch adds the record's amount even after the fish
+  // was removed by someone else meanwhile (every boat holding the fish catches it)
+  const fish = fishes.sort((a, b) => w.logistics.dist(...cell(a), ...cell(harb)) - w.logistics.dist(...cell(b), ...cell(harb)))[0];
+  const r1 = w.rand.state;
+  w.naval.startFishing(boat, ...cell(fish), 1, fish.id);
+  assert.equal(w.rand.state, r1, 'a fish found: no draws');
+  const amount = w.rules.get(fish.oid)!.amount;
+  assert.ok(runUntil(w, 1500, () => w.naval.fishingPhase(boat) === 1) > 0, 'fishing');
+  w.removeEntity(fish);
+  assert.ok(runUntil(w, 200, () => boat.carryAmount > 0) > 0, 'caught');
+  assert.equal(boat.carryAmount, amount, 'the record\'s amount');
+  // docking: the goods move at once, the harbour then holds the boat 35 ticks (5.8)
+  const f0 = t.stock[4];
+  assert.ok(runUntil(w, 1500, () => t.stock[4] > f0 || boat.carryAmount === 0) > 0, 'delivered');
+  const [bx, by] = cell(boat);
+  assert.equal(jobKind(w, boat), NJ.LeaveShip, 'held by the leave job');
+  const held = runUntil(w, 100, () => jobKind(w, boat) !== NJ.LeaveShip);
+  assert.ok(held >= 34 && held <= 36, `held ${held} ticks`);
+  assert.deepEqual(cell(boat), [bx, by], 'the ship stays where it docked');
+  assert.equal(jobKind(w, boat), NJ.Fishing, 'the fishing job goes on');
+});
+
+test('naval planner (8.4): a dead waiting unit still re-aims the ship at its last cell', { skip }, () => {
+  const { world: w } = aoWorld('PimmonsAO.mdb', 5, { ai: true });
+  runUntil(w, 1000, () => w.tick >= 200 && (w.naval.planner(2)?.ships.length ?? 0) > 0);
+  const pl = w.naval.planner(2)!;
+  const s = pl.ships[0];
+  const ship = w.get(s.id)!;
+  const t = w.economy.towns.find(x => x.race === 2 && x.alive)!;
+  const home = w.islandAt(t.x, t.y);
+  const units = w.entities.filter(e => e.kind === 0 && e.town === t.id && !w.isShip(e) && e.inside < 0 && w.islandAt(...cell(e)) === home).slice(0, 2);
+  const req = w.naval.request(2, 2, 0, ...cell(units[0]), 135, 0);
+  for (const u of units) w.naval.addWaiting(2, req, u);
+  // the last entry dies: the ship ends up aimed at its last cell
+  const last = cell(units[1]);
+  w.combat.die(units[1]);
+  runUntil(w, 3000, () => s.state === 3);
+  const j = ship.job ? w.sched.get(ship.job) : undefined;
+  assert.equal(j?.kind, NJ.Sail, 're-aimed');
+  assert.deepEqual([j!.data[1], j!.data[2]], last, 'toward the dead unit\'s last cell');
+  assert.equal(s.counter, 2, 'both entries counted');
 });

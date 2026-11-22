@@ -64,6 +64,10 @@ test('leisure: targets are active buildings with a free or visit slot; a house s
   const perRun = new Map<string, number>();
   let houseVisits = 0, tavernVisits = 0, nonFullSeen = 0;
   for (let i = 0; i < 6000; i++) {
+    // the leisure job reads the free-porter list of the dispatcher's last transport pass (5.3,
+    // 5.7); this town has little to transport, so a pass is triggered now and then (an entry for
+    // an object that does not exist, dropped at once)
+    if (i % 150 === 0) w.logistics.requestTransport(t, 1, -5);
     w.step();
     for (const u of w.entities) {
       if (u.kind !== Kind.Unit || type(u) !== T.Porter || u.town !== t.id) continue;

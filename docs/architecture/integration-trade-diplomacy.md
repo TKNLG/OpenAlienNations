@@ -155,8 +155,11 @@ in with a plain go-to, ai-diplomacy-trade.md 3.4 step 6.)
 - Dispatcher: merchants and diplomats are never free units while on these jobs, and the trade
   code never uses porters (markets are not stores for porters, 4.1).
 - Economy: no change. Goal type 11 reads `Player.relations`, which `setRelation` keeps symmetric.
-- The embassy's operator job (ejects foreign occupants, 8.3): the errand leaves the foreign
-  embassy by itself 10 ticks after the decision, so the existing 0x22 job may stay as it is.
+- *(Superseded November 2026: the embassy's operator job ejects foreign diplomats as in the
+  original, `Logistics.foreignOperatorEntered` and the embassy branch of `runOperator`; the
+  errand is blocked inside until then and decides outside, ai-diplomacy-trade.md 3.3, 3.4 step 3.
+  The trade and errand trips walk with `World.follow` and ask at the door wherever the walk
+  ended, `visit.ts`, units-and-jobs.md 4.2.)*
 
 ### For the AI task later
 

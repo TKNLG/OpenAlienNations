@@ -44,7 +44,7 @@ const attackOf = (w: World, u: Entity): number => {
 const setRel = (w: World, a: number, b: number, s: number) => { w.economy.players[a]!.relations[b] = s; w.economy.players[b]!.relations[a] = s; };
 const pendingImpact = (w: World, target: Entity) => [...w.sched.jobs()].some(j => !j.cancelled && j.kind === IMPACT && j.owner === target.id);
 function player(race: number): AiPlayer {
-  return { race, profile: 0, think: 0, army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0, founding: 0, noSite: 0 };
+  return { race, profile: 0, think: 0, army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0, started: [], founding: 0, noSite: 0 };
 }
 
 /** Pimmons mission 7: the human town and a computer race with a town far away (76 cells) */

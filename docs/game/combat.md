@@ -181,11 +181,11 @@ Every creator sets the anchor to the target's position at that moment.
 |---|---|---|---|
 | player right-click on an object that 2.1 allows (`00450bb0`; target must not be of the player's own race, see 12.6) | unit | 1 | 1 tick. Marked as a player order (job+8 = 1) |
 | retaliation / help (`00464ce0`, section 7) | unit | 1 | 1 tick. The previous job is suspended behind it |
-| guard/patrol scan (`00480a10`) | child of 0x27 | 1 | runs in the same call |
+| guard/patrol scan (`00480a10`) | child of 0x27 | 1 | created without running: first run at the guard's next run, 1 tick later (8.1) |
 | hunter approaching a living animal (`00476930`) | child of 0x16 | 1 | runs in the same call |
 | criminal (`004784d0`) | child of 0x17 | **0** | |
 | police arrest (`0047b860`) | child of 0x18 | **0** | |
-| priest heal (`00481180`) | child of 0x29 | **0** | |
+| priest heal (`00481180`) | child of 0x29 | **0** | created without running: the heal job returns 1, the child first runs 1 tick later (13) |
 | AI strategy routines (`00466020`, `00466e20`, `0046d3a0`) | unit | 1 | 5 (via `00465650`) |
 
 A right-click of a **police officer** on one of the player's own criminals creates **no** attack
@@ -211,7 +211,9 @@ The target counts as valid while all of these hold:
 ### 3.3 One run of the attack job
 
 1. **Attacker dead**: end, failure.
-2. **Target invalid**: go to retarget (3.6).
+2. **Target invalid**: go to retarget (3.6). Its result is the job's return value: 1 when a new
+   target was found (the new target is first looked at in the **next** run, nothing else happens
+   in this one), 0 (end) otherwise (C, `00472b20` tail).
 3. **Leash**: d = torus distance (max + min/2) between the target's *current* cell and the
    **anchor**. If d > 29, end with failure. No retarget is attempted. The anchor is never moved,
    not even by a retarget.
@@ -356,51 +358,104 @@ spread out) and keeps that cell as the plan's end. Ships keep their one-search-p
 the sea grid (`addon.md` 7). Our walk ends at the motion run after the jobs, so the end is seen
 at the next run, which is the original's next run (1 tick later), and goes on at once.*
 
-### 3.4 Range and line of fire (C, `00472b20`, `004709b0`, `004712d0`)
+### 3.4 Range and line of fire (C, `00472b20` inline walk `472f74..4731a6`, `004709b0`, `004712d0`; Gold `0047a420`/`0047c590` identical)
 
-The target footprint is the rectangle [x - size_x + 1 .. x] × [y - size_y + 1 .. y] (odb.md 2.2).
+The target footprint is the rectangle [x - size_x + 1 .. x] × [y - size_y + 1 .. y] (odb.md 2.2),
+taken from the target's stored cell (`00462870`): raw, unwrapped coordinates, so its minimum can
+be negative near the map edge.
 
 **Melee (range = 0):** in range when the attacker's cell lies inside the footprint grown by one
-cell on every side, i.e. in the 8-neighbourhood of the target, diagonals included. All tests
-wrap around the torus. The same test applies to heal and bomb weapons, whose range is also 0.
+cell on every side, i.e. in the 8-neighbourhood of the target, diagonals included. This test
+wraps around the torus. The same test applies to heal and bomb weapons, whose range is also 0.
 
-**Ranged (range R > 0):**
+**Ranged (range R > 0).** The attack job runs the walk inline; plans (3.5), the stored-plan test
+(3.3) and garrisons (9.5) call `004709b0`, which runs the same walk. Let O be the shooter's
+stored cell and C the footprint centre ((min + max) >> 1 per axis). D = C − O is taken
+**unwrapped** (raw coordinates, no torus correction).
 
-1. Quick reject: the distance (max + min/2) from the footprint centre ((minx+maxx)/2,
-   (miny+maxy)/2) to the attacker must be **≤ 2R**.
-2. Line of fire: walk a Bresenham line from the attacker's cell toward the footprint centre and
-   add a cost for every cell entered:
+1. Quick reject: the **wrapped** distance (max + min/2) from C to O must be **≤ 2R**.
+2. Budget B = 2R + floor(e/2), where e = max(size_x, size_y) − 1 (0 for a unit).
+3. The walk. The **major axis** is x when |Dx| > |Dy|, otherwise y (ties, pure diagonals and
+   pure verticals take y). It makes at most |D_major| iterations. A counter and an accumulator
+   start at 0; the current cell P and the previous cell Q both start at O; the cost starts at 0.
+   Each iteration:
+   1. if the cost so far is ≥ B: out of range (stop);
+   2. price P against Q (below) and add it to the cost;
+   3. **x-major only:** Q := P. In the y-major case Q is never moved: **every cell is priced
+      against the shooter's own cell O** (the stepper "lags");
+   4. if the accumulator ≥ |D_major|: step P's minor coordinate one cell toward C and subtract
+      |D_major| from the accumulator;
+   5. if the cell at P (after step 4, before the major step) holds the target's object (the
+      object index of the footprint's max corner cell), this is the last iteration;
+   6. add |D_minor| to the accumulator, step P's major coordinate one cell toward C, count the
+      iteration.
+4. After the loop: in range iff the cost is **< B**.
 
-   | cell | cost |
-   |---|---|
-   | the attacker's own cell | 0 |
-   | any cell occupied by the target itself | 0, and the walk ends there |
-   | a cell carrying flag 0x04 (any other building) | blocked: infinite |
-   | a straight step (x or y unchanged) | 2 |
-   | a diagonal step | 3 |
-   | terrain rises by ≥ 32 height units against the previous cell | +1 |
-   | terrain falls by ≥ 32 height units | -1 |
+**Pricing a cell P.** Nothing when P = O, nor when P's object index equals the one of the centre
+cell C (cells of the target itself). Otherwise:
 
-3. In range when the total is **< 2R + floor(e/2)**, where e = max(size_x, size_y) - 1 (0 for a
-   unit).
+| condition | cost |
+|---|---|
+| P's flags meet the weapon's block mask (4: a building) | blocked: infinite |
+| the ray height (below) is under P's height / 64 | blocked: infinite |
+| P shares its x **or** its y with Q | 2 |
+| otherwise (diagonal to Q) | 3 |
+| (height(P) − height(Q)) >> 4 > 1, i.e. P is 32 or more height units **above** Q | + 1 |
+| (height(P) − height(Q)) >> 4 < −1, i.e. P is 17 or more height units **below** Q (arithmetic shift) | − 1 |
 
-Consequences on flat open ground:
+The ray height starts at height(O) + 64 and is stepped toward height(C) + 64 by the same
+accumulator scheme. Since it is compared with height / 64, it never blocks in practice (I).
+Cell lookups wrap (the cell index is masked), only the deltas do not.
 
-- straight line: in range up to **R cells**;
-- pure diagonal: in range up to **floor((2R + 2)/3) cells**.
+Consequences:
 
-| weapon | straight | diagonal |
-|---|---|---|
-| hunter bow, R 5 | 5 | 4 |
-| archer, R 6 | 6 | 4 |
-| catapult, cannon, crossbow, R 8 | 8 | 6 |
+- **No shots across the map seam** (C, `004709b0`/`00472b20`): the quick reject wraps, but the
+  walk follows the unwrapped delta, so a target just across the map edge is walked the long way
+  round and the budget runs out. Ranged units and towers cannot fire across the seam; melee
+  (wrapped adjacency) can.
+- The target cell itself is never priced: for a unit target the loop has made its |D_major|
+  iterations when P reaches it. A building target ends the walk at the first cell (after the
+  minor step) that belongs to it.
+- In the y-major case a diagonal-looking line is priced 2 for every cell sharing x or y with O
+  and 3 for all others, and every cell 32 or more height units above O costs + 1 (17 or more
+  below: − 1), **cell by cell**, not per step. Uphill shots along y therefore lose reach quickly;
+  along x only the actual steps count.
+- The minor step comes before the major step and the accumulator starts at 0, so the priced
+  cells trail the true line. Worked example, R 6, target unit at (5, 5) (y-major, B = 12): the
+  priced cells are O (free), (0, 1) 2, (1, 2) 3, (2, 3) 3, (3, 4) 3: total 11 < 12, in range
+  (a centred line would cost 12 and fail).
+- The shape is **asymmetric** between x and y. Garrison example (9.5): for the crossbow tower
+  (13, 7) is in range but (7, 13) is not.
+- Buildings block arrows; units, trees and stones do not. There is no minimum range: a ranged
+  unit can shoot an adjacent enemy.
 
-Other things that follow:
+Reach against a unit on flat open ground (first quadrant; the other quadrants mirror it):
 
-- Buildings block arrows; units, trees and stones do not.
-- There is no minimum range: a ranged unit can shoot an adjacent enemy.
-- A height test of the ray against the terrain exists, but it compares the ray (height + 64)
-  with height / 64, so in practice it never blocks (I).
+| weapon | straight (x or y) | pure diagonal | cells in range, all quadrants |
+|---|---|---|---|
+| hunter bow, R 5 | 5 | 4 | 104 |
+| archer, R 6 | 6 | **5** | 136 |
+| catapult, cannon, crossbow, R 8 | 8 | 6 | 220 |
+
+Example, R 6, first quadrant (row y = 6 at the top, column x = 0 at the left; `#` in range,
+`o` the shooter):
+
+```
+y=6  ##.....
+y=5  ######.
+y=4  ######.
+y=3  ######.
+y=2  #######
+y=1  #######
+y=0  o######
+```
+
+Uphill example: a shooter at height 0 with all ground at y ≥ 1 at height 64 reaches only 4
+cells along y with R 6 (every cell + 1), but 6 along x (one + 1 for the single step up).
+
+*Our build (fixed November 2026, `combat.ts inRange`): the walk above, exactly. Before, a
+centred Bresenham walk priced each step against the previous cell in both directions, wrapped
+the delta (shots across the seam) and treated drops like rises (32 units).*
 
 ### 3.5 Path search for a firing position (C, `004725e0`, `004706e0`)
 
@@ -557,7 +612,12 @@ tick. It is saved with the game.
 
 1. If the target is dead or its HP is 0: nothing happens and the job ends.
 2. Remember h0 = the target's HP. Call the attacker's weapon routine with the attacker's
-   **rank** (+0x80) as the strength argument (5.2).
+   **rank** (+0x80) as the strength argument (5.2). Both the weapon (+0x74) and the rank are
+   read from the attacker **at the impact** (the job holds a reference to the attacker, dead or
+   alive), not taken over from the strike: a rank-up between the strike and the impact already
+   counts (C, `00481c40`). The race for step 6 is the attacker's record race, also read here.
+   *Our build: read from the attacker at the impact while he is in the world; the values kept
+   at the strike stand in once he has been removed (dead units leave our world).*
 3. **Dealt** = h0 - the target's new HP. When the target died this is h0, so overkill does not
    count. A heal gives a negative value.
 4. **Experience** (5.3) for the attacker.
@@ -649,8 +709,10 @@ Example: an archer (H = 100) needs more than 200 experience for bronze, which is
   message, the impact effect and the death effect. They have no simulation state, no position
   in the simulation and no collision.
 - The flight time is fixed when the shot fires (4.1). The impact lands on the target wherever
-  the target is by then (**perfect homing**). If the target has died, entered a building or been
-  removed, nothing happens. Nothing else stops it: a relation change while the projectile flies
+  the target is by then (**perfect homing**). If the target has died (or its HP is 0), nothing
+  happens. A unit that has **entered a building** meanwhile is still hit and can die inside: the
+  impact tests only "alive" and "HP ≠ 0" (C, `00481c40` `481c5e..481c71`; the attack job's
+  validity test 3.2 is a different test, for the chase). Nothing else stops it: a relation change while the projectile flies
   does not, and its impact then declares war again (5.1 step 6, `ai-diplomacy-trade.md` 3.8).
 - At the end of the flight the display spawns the projectile record's **impact effect** (+0x148)
   at the aim cell: 17 `expl1` (alchemy 1, catapult, magic 1, fire) or 18 `expl2` (alchemy 2,
@@ -684,17 +746,17 @@ rel × 10/7 ticks from the strike to the release.
 | race | unit (type) | weapon | reach | projectile → sprite (dirs × frames) | speed (flight/cell) | impact effect | hit sound | ST frames, rel | shooter sound |
 |---|---|---|---|---|---|---|---|---|---|
 | Amazons | Jägerin (17), **hunter** | 1 JägerBogen, 70 % | 5 / 4 | 10 Bogen → `BULLET\VE\BOGEN\MS0..7` (8 × 1) | 900 (0.71 t, 71 ms) | none | 65 | 12, 7 | 6 |
-| Amazons | Bogenschützin (29) | 3 KampfBogen | 6 / 4 | 10 Bogen (same arrow) | 1000 (0.64 t, 64 ms) | none | 65 | 12 (`LANGBOGENSCHUETZIN`), 7 | 45 |
+| Amazons | Bogenschützin (29) | 3 KampfBogen | 6 / 5 | 10 Bogen (same arrow) | 1000 (0.64 t, 64 ms) | none | 65 | 12 (`LANGBOGENSCHUETZIN`), 7 | 45 |
 | Amazons | Alchemistin (33) | 7 Alchemistin1 | 5 / 4 | 0 Alchemie1 → `ALCHEMIE1\MS0..7` (8 × 8) | 700 (0.91 t, 91 ms) | 17 expl1 | 52 | 10 (`ALCHEMISTIN2`), 7 | 7 |
 | Amazons | Mächtige Alchemistin (32) | 8 Alchemistin2 | 5 / 4 | **0 Alchemie1** (not 1) | 800 (0.80 t, 80 ms) | 17 expl1 | 52 | 11 (`ALCHEMISTIN`), 7 | 7 |
 | Amazons | Katapult (34) | 9 Katapult | 8 / 6 | 3 Katapult → `KATAPULT\MS0..7` (8 × 6) | 900 | 17 expl1 | 18 | 7 (`REITTIER1`), 6 | 16 |
 | Amazons | Kanone (35) | 10 Kanone | 8 / 6 | 3 Katapult (same stone) | 900 | 17 expl1 | 18 | 10 (`REITTIER2`), 7 | 17 |
 | Amazons | Armbrustschützin (36) | 11 Armbrust | 8 / 6 | 2 Armbrust → `ARMBRUST\MS0..7` (8 × 1), the **bolt** | 1100 (0.58 t, 58 ms) | none | 65 | 8 (`BOGENSCHUETZIN`), 4 | 46 |
-| Pimmons | Bogenschütze (29) | 3 KampfBogen | 6 / 4 | 10 Bogen | 1000 | none | 65 | 14, 8 | 45 |
+| Pimmons | Bogenschütze (29) | 3 KampfBogen | 6 / 5 | 10 Bogen | 1000 | none | 65 | 14, 8 | 45 |
 | Pimmons | Magier (33) | 12 MagierPimmon | 5 / 4 | 4 Magie1 → `MAGIE1\MS0` (1 × 10) | 700 | 17 expl1 | 52 | 12 (`MAGIER2`), 6 | 20 |
 | Pimmons | Mächtiger Magier (32) | 13 MächtigerMagierPimmon | 5 / 4 | 5 Magie2 → `MAGIE2\MS0` (1 × 10) | 800 | 18 expl2 | 53 | 17 (`MAGIER`), 7 | 21 |
 | Pimmons | Drachofiterus (34) | 14 Drachofiterus | 8 / 6 | **10 Bogen** (an ordinary arrow) | 900 | none | 65 | 12 (`REITTIER1`), 7 | 46 |
-| Sajiki | Pyro (29) | 18 Feuerkugel | 6 / 4 | 9 Feuer → `FEUER\MS0` (1 × 10) | 1200 (0.53 t, 53 ms) | 17 expl1 | 52 | 6, 3 | 24 |
+| Sajiki | Pyro (29) | 18 Feuerkugel | 6 / 5 | 9 Feuer → `FEUER\MS0` (1 × 10) | 1200 (0.53 t, 53 ms) | 17 expl1 | 52 | 6, 3 | 24 |
 | Sajiki | Beschwörer (32) | 12 MagierPimmon | 5 / 4 | **4 Magie1** (the Pimmon spell) | 700 | 17 expl1 | 52 | 12 (`MAGIER1`), 8 | 25 |
 | Sajiki | Gottesanbeter (33) | 13 MächtigerMagierPimmon | 5 / 4 | **5 Magie2** | 800 | 18 expl2 | 53 | 10 (`MAGIER2`), 8 | 26 |
 | Sajiki | Spitpack (34) | 19 SpitPack | 8 / 6 | 8 Säure → `SAEURE\MS0` (1 × 10) | 1000 | none | 65 | 10 (`REITTIER1`), 6 | 27 |
@@ -853,12 +915,22 @@ outcome is the same (test `test/engagement.test.ts`).*
 Fields: home cell (V's cell at creation), attacker A, "returning" flag.
 
 1. If V or A is dead: success. This is tested on every run, also during the walks: if A dies
-   while V runs away or walks home, V stops on the spot and the suspended job resumes from there.
+   while V runs away or walks home, V stops and the suspended job resumes from there. While a
+   walk runs, the flee job returns its walk child's delay (a step's D, a turn, a wait), so it
+   runs, and tests this, only at those boundaries: V finishes the step under way (audit reading of
+   `0047da50`; the same child-delay rule as 3.3 and 8.1).
 2. With no child, compute d = distance (max + min/2) from V to A, using wrapped deltas.
    - If d ≥ **A's sight + 2**: success, the flee is over.
-   - Otherwise walk to the point **A + (V - A) × (sight + 3) / d**. The direction is computed in
-     float32 and truncated toward zero per axis. **Float in the simulation:** the rebuild should
-     use (V - A) × (sight + 3) / d in integers and accept rare off-by-one cells (I).
+   - Otherwise walk to the point **A + offset**, with dx, dy = V − A (wrapped) and
+     (C, instruction level `0x47dcee..0x47dd1a`):
+     - x offset = trunc(float32(dx / d) × (sight + 3)): the quotient dx / d is **stored as a
+       float32** before the multiplication;
+     - y offset = trunc((dy / d) × (sight + 3)): the quotient stays in the FPU register.
+     The FPU runs at the MSVC default precision (53-bit mantissa), so both are plain double
+     arithmetic with one float32 rounding of the x quotient; truncation is toward zero. Example:
+     sight 9, d 6, dx 5: 5/6 as float32 × 12 = 9.9999995 → 9 (the integer formula gives 10).
+     The point is wrapped onto the map. *Our build (November 2026): `Math.fround` on the x
+     quotient, plain doubles for y.*
      This walk is the flee job's **own** follow-path child. Its planning mask is V's
      **movement** mask 0x3E instead of 0x3C, so the escape route is planned around every unit
      (not only nearby ones, `units-and-jobs.md` 4.1).
@@ -954,13 +1026,51 @@ is no child left (the walk or attack has just finished, or none existed) does th
 walk to the current waypoint and return 3. While an attack child runs, its own delay is returned
 and there is no scan.
 
+Because the walk child runs first, a run that starts the next step scans from the **new** cell:
+the step's destination is the unit's registered cell from the step's start (8.3,
+`units-and-jobs.md` 4.7). *Our build: the guard scans from the cell it stands on and the step
+starts in the same tick's motion pass, after the jobs, so the scan centre is one step behind
+(deviation, LOW).*
+
 ### 8.2 How guard jobs come into being (C)
 
 | source | effect |
 |---|---|
-| "Patrol" button (`00452790`) | only when **exactly one** unit is selected, it is a soldier (29..36) and it is not inside a building. Its job is cancelled and a guard job is created at its cell (delay 2) |
-| waypoint clicks (`00452840`) | same selection condition; appends the clicked cell to the unit's current job while count < 8. The code assumes that job is the guard job |
-| map load (`00411200`) | each soldier listed in the map's order records gets a guard job with waypoint 1 = the record's target cell, so it patrols between its start and that cell. First run after rand() % 5 + 1 ticks |
+| "Patrol" button (command 0x4E, `00452790`) | sent **when the button is pressed**. Only when **exactly one** unit is selected, it is a soldier (29..36) and it is not inside a building: its current job gets the cancel flag and is unhooked, and a guard job with count 1 (its own cell) becomes its job, first run after **2** ticks. So the unit is a stationary guard from that moment, whether or not points follow |
+| waypoint clicks (command 0x4F, `00452840`) | **one command per left click** in patrol mode, carrying the clicked cell. Same selection condition; the cell is appended to the unit's current job while its count < 8. The code assumes that job is the guard job (no type test) |
+| map load (`00411200`) | see "Map order records" below |
+
+**Patrol mode on the client** (`004404a0`, C): the button puts the map view into patrol mode and
+resets its click counter. Each left click (not a double click) counts, sends 0x4F with the cell,
+and the mode ends when Ctrl was not held or the counter has passed 7 (after the 8th click; the
+8th point is dropped by the count < 8 test, since the guard already holds its own cell). A
+right-click leaves the mode; a guard made by the button without any point stays a stationary
+guard.
+
+**Map order records** (`00411200`, C). The records (x1, y1, z1, x2, y2, z2) are kept in file order
+and processed one by one, after all objects of the map exist. For each record the object
+registered on the cell (x1, y1) is looked up (the cell's object index); no object: the record is
+skipped. Then by that object's type:
+
+- soldier (29..36): a **new** guard job (count 1, its own cell) becomes its current job and the
+  target (x2, y2, z2) is appended as waypoint 1 (no same-cell test). A job it had before is
+  neither cancelled nor descheduled (U: a second record for the same soldier leaves the first
+  guard job running on the timer, see 18);
+- hunter (17): a new hunting-ground job (0x2B) on the target cell;
+- any other object: if some object is registered on the target cell, a new harvest job (0x16)
+  on it (its phase 0, or 2 when the unit carries something); otherwise the record is skipped
+  without a job;
+- every job made gets its first run after **rand() % 5 + 1** ticks: **one draw per job made**,
+  in file order, right after making it. So the world RNG is used in record order from tick 0.
+
+*Our build (November 2026, `World.applyOrders`, `combat.ts startGuard`/`addWaypoint`, client
+`main.ts startPatrol`; test `combat-social5.test.ts`): the PATROL button sends command `patrol`
+(guard at once, delay 2), every click `patrolPoint`; map records one by one in file order with
+one draw per job. Deviations: a second record for the same soldier replaces his first guard job
+(the original leaves it running on the timer); a harvest record on an object our harvest job
+cannot work on (a unit or a building) still draws its delay but makes no job. The waypoint
+command keeps a type test (it only appends to a guard job, 18 / F14).*
+
 
 There is **no "hold position" command**. The unit command strings are "Nach Hause",
 "Restaurieren", "Patrouillieren", "Stadt gründen" and "Abreißen" (`DV.tdb` 3..8). The only
@@ -972,12 +1082,21 @@ after a patrol/guard order or an explicit attack order (C).
 
 ### 8.3 Area scan and target chooser (C, `0044a7c0`, `00464580`)
 
-**Area scan:**
+**Area scan** (`0044a7c0` Map::GetObjects, C):
 
-- covers cells with dx² + dy² < r² around the centre;
-- returns the distinct units and buildings found (or only nature objects, in the second mode);
-- in the original the result is a set ordered by **memory address**, so its iteration order is
-  arbitrary. **The rebuild must define an order: ascending object id** (I).
+- visits every cell with dx² + dy² < r² around the centre (rows dy = −r..r, columns dx = −r..r,
+  wrapped) and reads the cell's **single object index** (`units-and-jobs.md` 4.7);
+- mode 0 keeps the objects of category unit or building, mode 1 only nature objects;
+- so a **building is found through any of its footprint cells** (every footprint cell holds its
+  index): a building whose anchor lies outside the disc is found when one footprint cell lies
+  inside. A unit is found only on the one cell it is registered on (the destination of its step
+  from the step's start); a unit inside a building is off the map and never found;
+- the result is a set keyed by object pointer, so a building appears once and the iteration
+  order is **memory-address** order, which is not reproducible. **The rebuild uses ascending
+  object id** (I).
+
+Every user goes through this scan: the help radius (7.1), the retarget (3.6), guards (8.1),
+outposts (9.3), the priest's patient search (13) and the computer players' searches.
 
 **Chooser** (inputs: chooser unit C, candidate set, race filter, maximum tier T):
 
@@ -1237,33 +1356,35 @@ The garrison uses a variant of 3.4. With R = the soldier's weapon range:
 - **Ranged weapons** (R > 0):
   1. quick reject: the distance (max + min/2) from the target footprint's centre to the origin
      must be ≤ **3E** (the code takes max(2R, 2E) + E, which is 3E for every R ≥ 1);
-  2. line of fire: the same Bresenham walk as 3.4 from the origin toward the footprint centre,
-     ending when it reaches the target, but:
+  2. line of fire: the same walk as 3.4 (lagging stepper, unwrapped delta, no shots across the
+     map seam) from the origin toward the footprint centre, but:
      - **buildings never block**, the outpost's own cells included;
-     - the **origin cell is charged** like every other cell (2), it is not free as in 3.4;
-     - straight step 2, diagonal step 3, ±1 for height steps of 32 or more, as in 3.4;
+     - **every cell is priced**, the origin cell and cells of the target included (in 3.4 they
+       are free); the Q rule is the same (in the y-major case every cell is priced against the
+       origin);
+     - 2 when the cell shares x or y with Q, else 3; + 1 / − 1 for the height rule of 3.4;
   3. in range when the total is **< 3E + floor(e/2)** (e = max(size_x, size_y) − 1 of the
      target, 0 for a unit).
 - **Range-0 weapons** (Explodus, Harak): the plain melee test of 3.4: the origin cell must lie
   in the target's footprint grown by one cell. E is 0.
 
-Reach against a unit on flat open ground. The origin cell counts, so the straight reach is
-floor((3E − 1) / 2) cells and the diagonal reach is E cells:
+Reach against a unit on flat open ground (computed from the rule; the origin cell counts):
 
-| weapon | R | E | straight | diagonal |
-|---|---|---|---|---|
-| alchemists, mages, Beschwörer, Gottesanbeter | 5 | 7 | 10 | 7 |
-| archers, Pyro | 6 | 9 | 13 | 9 |
-| Armbrustschützin | 8 | 12 | 17 | 12 |
-| Explodus, Harak | 0 | 0 | adjacent | adjacent |
+| weapon | R | E | straight | diagonal | cells in range |
+|---|---|---|---|---|---|
+| alchemists, mages, Beschwörer, Gottesanbeter | 5 | 7 | 10 | 7 | 296 |
+| archers, Pyro | 6 | 9 | 13 | 9 | 480 |
+| Armbrustschützin | 8 | 12 | 17 | 12 | 816 |
+| Explodus, Harak | 0 | 0 | adjacent | adjacent | |
+
+The shape is lopsided between x and y (3.4): for the crossbow tower (13, 7) is in range, (7, 13)
+is not.
 
 The scan disc limits this further: the small outpost (r 15) finds nothing beyond 14 cells
 straight or 10 diagonal, the large one (r 25) nothing beyond 24 / 17. A crossbow in a small
 outpost therefore reaches 14 / 10, everything else in the table fits inside the disc. Building
 targets add floor(e/2) and are measured to their footprint. For comparison, the same archer on the
-ground reaches 6 / 4 (3.4): a tower roughly doubles the reach and ignores buildings in the way.
-The exact endpoint rule of the walk is as uncertain as in 3.4 (18.2): one cell at the very edge
-may differ.
+ground reaches 6 / 5 (3.4): a tower roughly doubles the reach and ignores buildings in the way.
 
 ### 9.6 Garrison-fire job (0x1B) (C, `004736c0`)
 
@@ -1368,7 +1489,8 @@ tests in `test/garrison.test.ts`. The thirteen deviations listed here before are
 - the outpost job returns 20 forever, cancels any other job of an idle soldier in every run, and
   is cancelled only by a collapse or when the unit put outside is class 2 and the occupant list is
   empty;
-- garrison range: E = R × 3 / 2, budget 3E, the origin cell charged, buildings never block,
+- garrison range: E = R × 3 / 2, budget 3E, every cell priced (the walk of 3.4 since November
+  2026: lagging stepper, no shots across the seam), buildings never block,
   range-0 weapons adjacent only; the fire job tests from the soldier's stored cell (quirk of
   9.6), ends only on a dead target or out of range, creates its strike child on the first
   in-range run (returns 1) and runs it from the next;
@@ -1540,6 +1662,9 @@ already on their way out keep their leave job.
    job (`economy.md` 3.3).
 4. Every remaining building of the town dies (phase 1 → collapse → phase 2, with no mentor line
    and no rubble pickup, because the town is dead).
+   Then, for each race slot 0..2 whose nation is a living computer player, the town's id is
+   removed from that nation's known-town set (AI general +0x3C, `ai-diplomacy-trade.md` 2.2 and
+   2.4 profile 2) (C, `0x459836..0x459899`).
 5. If the nation has no **living** town left (the size of its used-name set, +0x254, is 0), it is
    **defeated** (`0045d2a0`):
    - a human nation's diplomacy/town panel is refreshed (`0044fc20` = SendDialogData, a display
@@ -1569,7 +1694,9 @@ already on their way out keep their leave job.
   `ai-diplomacy-trade.md` 0);
 - every game object whose town it is (+0x50) holds one: units and buildings drop it when they
   are deleted (`00462a06`) or change town (`0046441b`, resettling and founding,
-  `units-and-jobs.md` 11.2 step 4).
+  `units-and-jobs.md` 11.2 step 4);
+- a computer army (`00465710`) holds one on its target town until the army ends
+  (`ai-diplomacy-trade.md` 2.5 "When the target town falls").
 
 When the count reaches 0 the destructor (`00459210`) removes the town from its nation's town
 list (`0045d570`: the entry is unlinked and +0x238 drops by 1) and frees it. So a destroyed town
@@ -1583,8 +1710,8 @@ in a nation's list (UI only).
 *Our build* (`src/engine/economy.ts releaseTowns`): destroyed towns keep their record in the
 town table (the id is its index), and leave the nation's list (`Player.towns`) at the end of the
 tick in which the last reference went: no own job of the town (dispatcher, consumption, status,
-idle stroll, research, the AI town jobs) is left in the scheduler and no unit or building has the
-town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
+idle stroll, research, the AI town jobs) is left in the scheduler, no computer army targets it
+and no unit or building has the town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
 destroyed town in the list (the 10-town limit of the training page then blocked founders for
 good after ten failed foundings); they are cleaned up on load.
 
@@ -1695,6 +1822,10 @@ a porter in a house, the warehouse or a workshop. Such an assault ends at the ch
 (target inside) and costs the criminal just the 50-tick wait. There is **no** distance limit
 on the pick (any porter of the town, however far), no "nearest", no search radius, no
 preference for porters that carry goods.
+
+*Our build (deviation, LOW): the index is applied to the town's porters in entity creation order,
+not in the order they joined the town. Same distribution; a porter who joined later (resettled,
+released prisoner) can be a different victim for the same draw.*
 
 What the criminal job does **not** do (C, by the absence of any other branch in `004784d0`):
 
@@ -1864,10 +1995,16 @@ attack jobs are children), so the chase is at porter speed.
 
 1. The **criminal walks by itself** into the station (go-to + enter). The station admits
    criminals (`units-and-jobs.md` 4.4).
-2. When the walk ends: wait **599** ticks.
-3. Then, if the criminal is inside a building: **retype it to a porter** (type 9) in place
-   (`00464840`: new record, HP 50, weapon removed, needs re-evaluated) and eject it. The job
-   ends.
+2. When the walk ends, **whatever its outcome** (entered, refused, no way): wait **599** ticks
+   (audit reading of `0047cca0`, not re-checked at instruction level). During that time the criminal still has job 0x19, so the arrest pick (12.3)
+   skips him.
+3. Then, if the criminal is inside a building: **retype it to a porter** (type 9) in place and
+   eject it. The job ends. The retype (`00464840`; the list below is the audit's reading, not
+   re-checked at instruction level) sets the new record, clears the carried good
+   and amount, recomputes the target tier (1.3), sets HP to the **new record's maximum** (the
+   porter's, 50 in the shipped data), takes the weapon from the new record (+0x144; a porter
+   has none), re-evaluates the town's needs, and would start a criminal job (first run after
+   50 ticks) if the new type were 12.
 4. If it never got inside, the job just ends and the ex-arrestee stays a criminal **without**
    its criminal job (it is idle from then on) (C; probably rare).
 
@@ -1936,18 +2073,31 @@ between (`economy.md` 3.2, 6).
 
 Both set **auto-continue on**.
 
-**Each run:**
+**Each run** (C, `00481180`):
 
 1. No patient:
-   - with auto-continue: scan a circle of the priest's **sight** (5) around the priest. Pick the
-     **nearest** unit that 2.1 allows (same race, HP < max; distance max + min/2, the first one
-     in scan order wins ties). If found, return 3; otherwise end;
+   - with auto-continue: the patient search (`00480e70`): scan a circle of the priest's
+     **sight** (5) around his stored cell (8.3). Pick the **nearest** unit that 2.1 allows with
+     the ally flag **off** (same race only, HP < max; allies at peace are healed only through
+     the help rule 7.1); distance max + min/2 wrapped; the best starts at 0x7FFF and is replaced
+     only by a strictly smaller distance, so the first in scan order wins ties. There is **no
+     self test**: a wounded priest is found on his own cell at distance 0 and **heals himself
+     first**. No rand(). If found, return 3; otherwise end;
    - without auto-continue: end.
 2. Patient dead or at full HP: drop the child, release the patient and return 3 (look for the
    next one).
-3. No child: create an attack child on the patient (no retarget). The priest walks next to it
-   (range 0) and strikes with the **heal weapon**.
-4. When the child ends: release the patient and return 3.
+3. No child: create an attack child on the patient (no retarget) and **return 1**; the child is
+   not run in this call, its first run comes with the heal job's next run, 1 tick later. The
+   priest walks next to the patient (range 0; for himself he is already in range) and strikes
+   with the **heal weapon**.
+4. Otherwise run the child and return its delay. When it ends (returns 0): drop it, release the
+   patient and return 3.
+
+So a patient found by the search is approached 3 + 1 ticks later; one given by the order or the
+help rule (created with the patient) 1 + 1 ticks after the job's first run.
+
+*Our build (November 2026, `combat.ts runHeal`): as above; the job's patient state 2 is "chosen,
+child not made yet" (snapshot version 22).*
 
 **Rate and cost:**
 
@@ -2025,12 +2175,31 @@ Hunting uses the same attack job:
 
 ---
 
-## 15. Job 0x28 is not a formation move (correction)
+## 15. Job 0x28 is the scout job, not a formation move (correction)
 
-`0047c970` (job 0x28) picks a **random map cell** (x = rand() % map size, y = rand() % map size,
-stepping on if that cell is impassable for the unit). It walks there and repeats after
-rand() % 5 + 1 ticks. It is created only by the AI strategy routines (`00468e10`, called with
-unit type 24) for **AI scouts exploring**.
+`0047c970` (job 0x28, DVScoutJob, C at instruction level `47c9b6..47cba5`). Each run:
+
+1. If it has a walk child, run it; while the child returns a delay, that is the job's delay.
+2. When the child has ended (returned 0, any result), or there is none: delete it. Then
+   x = rand() % map size, y = rand() % map size (**two draws, x first**).
+3. Find the goal: the first cell of the square spiral of `units-and-jobs.md` 4.8 around (x, y)
+   (the cell itself, then ring 1 from (x+1, y−1): +y side, −x, −y, +x; then ring 2 from
+   (x+2, y−2), and so on, wrapped, with no limit) whose flags miss the unit's **path mask**
+   (+0x28: 0x3C, units do not count; ships 0xA01C).
+4. Create **one** follow-path walk (job 0x06) to that cell as the child, **not run** now.
+5. Return rand() % 5 + 1 (**third draw**): the walk's first run, which makes its first plan,
+   comes 1..5 ticks later.
+
+So a scout walks to one random map cell after the other, each new walk starting 1..5 ticks
+after the last one ended (arrived, or given up by the follow-path rules of `units-and-jobs.md`
+4.1). The job never ends by itself. It is created by the AI strategy routine (`00468e10`,
+`ai-diplomacy-trade.md` 2.3) for **AI scouts exploring** and by the Gold warship gang
+(`addon.md` 8.2).
+
+*Our build (November 2026, `ai.ts runExplore`): exact for land units: the draws, the unbounded
+spiral on the planning grid, `World.follow` with the drawn delay as the walk's first run; while
+the walk runs the job runs at its step delays. The warship's variant (`exploreShip`) keeps its
+own spiral and polls its walk every 10 ticks (add-on code).*
 
 Player group moves are plain follow-path jobs to free cells around the clicked point (`00465ad0`,
 `units-and-jobs.md` 3.2). **There are no formations** (C).
@@ -2134,9 +2303,7 @@ From 50/175 to full is ≈ 13 strikes × 26 ≈ **340 ticks**.
 
 1. *(Resolved: `ai-diplomacy-trade.md` 2.2 and 2.5.)* The AI side of combat: the intruder list
    (`0046cab0`) and the AI attack routines (`00466020`, `00466e20`, `0046d3a0`).
-2. The exact Bresenham stepping at the line's endpoints (3.4). Whether the cell just before the
-   target is always counted is inferred from the loop order; one-cell edge cases at maximum
-   range are possible.
+2. *(Resolved November 2026: the walk of 3.4 is specified at instruction level.)*
 3. The per-race/type sprite table at 0x4B3914 that chooses `ST` or `WO` for the strike animation
    (I).
 4. The unit attached-object list (+0x54/+0x58) killed with a unit (10.1): who uses it.
@@ -2154,11 +2321,7 @@ From 50/175 to full is ≈ 13 strikes × 26 ≈ **340 ticks**.
 ## 19. Notes for other documents
 
 - `units-and-jobs.md`:
-  - 3.1 should read:
-    - 0x09 C: strike, fires repeatedly;
-    - **0x15 impact** (new row, `00481c40`);
-    - 0x25 **building collapse**, owned by the building, not a unit;
-    - 0x28 **AI scout random exploration**, not a group move.
+  - 3.1: *(done November 2026: rows 0x08, 0x09, 0x15, 0x17..0x19, 0x20, 0x25..0x29, 0x38.)*
   - Section 1.1's "insertion order" is LIFO in the code (16.2).
 - `idb-wdb.md`:
   - the cooldown is in ticks;

@@ -155,9 +155,14 @@ export class Combat {
 
   /**
    * In range from a cell (3.4). `fromBuilding`: the garrison variant (9.5, `004709b0` called with a
-   * building id): bonus E = 1.5 R, quick reject and budget 3E, buildings never block, the origin
-   * cell is charged like every other cell. Range-0 weapons (melee, heal, bomb) always use the
-   * adjacency test, also from a tower.
+   * building id): bonus E = 1.5 R, quick reject and budget 3E, buildings never block, every cell
+   * (the origin and the target's own cells too) is priced. Range-0 weapons (melee, heal, bomb)
+   * always use the adjacency test (wrapped), also from a tower.
+   *
+   * The line of fire is the original's lagging stepper: the delta to the footprint centre is taken
+   * unwrapped (no shots across the map seam), the major axis is x only when |dx| > |dy|, each
+   * iteration prices the current cell P against the previous cell Q, then steps the minor and the
+   * major coordinate; in the y-major case Q stays the shooter's cell for the whole walk.
    */
   inRange(ox: number, oy: number, t: Entity, wpn: Weapon, fromBuilding?: Entity): boolean {
     const [x0, y0, x1, y1] = this.footprint(t);
@@ -170,28 +175,38 @@ export class Combat {
       return dx0 >= -1 && dx0 <= x1 - x0 + 1 && dy0 >= -1 && dy0 <= y1 - y0 + 1;
     }
     const reach = fromBuilding ? 3 * Combat.garrisonBonus(wpn.range) : 2 * wpn.range;
-    const budget = reach + Math.floor(Math.max(x1 - x0, y1 - y0) / 2);
-    const cx = x0 + Math.floor((x1 - x0) / 2), cy = y0 + Math.floor((y1 - y0) / 2);
-    const tx = ox + this.wrapD(cx - ox), ty = oy + this.wrapD(cy - oy);
-    if (this.dist(ox, oy, tx, ty) > reach) return false;
-    // Bresenham walk from the shooter to the footprint centre; from a tower the origin cell costs 2
-    const ddx = Math.abs(tx - ox), ddy = Math.abs(ty - oy), sxs = tx > ox ? 1 : -1, sys = ty > oy ? 1 : -1;
-    let err = ddx - ddy, x = ox, y = oy, cost = fromBuilding ? 2 : 0;
-    let prevH = this.w.heightAt(x, y);
-    for (let guard = 0; guard < 200; guard++) {
-      if (x === tx && y === ty) break;
-      const e2 = 2 * err;
-      let stepX = false, stepY = false;
-      if (e2 > -ddy) { err -= ddy; x += sxs; stepX = true; }
-      if (e2 < ddx) { err += ddx; y += sys; stepY = true; }
-      if (inFoot(x, y)) break;
-      const i = ((y & (this.w.size - 1)) << this.w.bits) | (x & (this.w.size - 1));
-      if (!fromBuilding && this.w.buildingAt(i)) return false;
-      cost += stepX && stepY ? 3 : 2;
-      const h = this.w.heightAt(x, y);
-      if (h - prevH >= 32) cost++; else if (prevH - h >= 32) cost--;
-      prevH = h;
+    const budget = reach + (Math.max(x1 - x0, y1 - y0) >> 1);
+    // footprint centre (min + max) >> 1 from the raw stored cell; the quick reject wraps, the walk not
+    const cx = (x0 + x1) >> 1, cy = (y0 + y1) >> 1;
+    if (this.dist(ox, oy, cx & (this.w.size - 1), cy & (this.w.size - 1)) > reach) return false;
+    const Dx = cx - ox, Dy = cy - oy;
+    const ax = Math.abs(Dx), ay = Math.abs(Dy), sx = Dx < 0 ? -1 : 1, sy = Dy < 0 ? -1 : 1;
+    const xMajor = ax > ay;
+    const major = xMajor ? ax : ay, minor = xMajor ? ay : ax;
+    // the ray height: from the shooter's height + 64 toward the centre's, stepped like the minor axis
+    const hO = this.w.heightAt(ox, oy);
+    const dz = this.w.heightAt(cx, cy) + 64 - (hO + 64), az = Math.abs(dz), sz = dz < 0 ? -1 : 1;
+    let px = ox, py = oy, qx = ox, qy = oy, z = hO + 64;
+    let cost = 0, acc = 0, accZ = 0;
+    for (let n = 0; n < major; n++) {
       if (cost >= budget) return false;
+      // price P against Q: the shooter's cell and the target's own cells are free for normal shots
+      if (fromBuilding || !((px === ox && py === oy) || inFoot(px, py))) {
+        const i = ((py & (this.w.size - 1)) << this.w.bits) | (px & (this.w.size - 1));
+        const h = this.w.heightAt(px, py);
+        if (!fromBuilding && this.w.buildingAt(i)) return false;
+        if (z < (h >> 6)) return false;
+        cost += px === qx || py === qy ? 2 : 3;
+        const d = (h - this.w.heightAt(qx, qy)) >> 4;
+        if (d > 1) cost++; else if (d < -1) cost--;
+      }
+      if (xMajor) { qx = px; qy = py; }
+      if (acc >= major) { if (xMajor) py += sy; else px += sx; acc -= major; }
+      if (accZ >= major) { z += sz; accZ -= major; }
+      // the cell after the minor step holds the target: this is the last iteration
+      if (inFoot(px, py)) n = major;
+      acc += minor; accZ += az;
+      if (xMajor) px += sx; else py += sy;
     }
     return cost < budget;
   }
@@ -218,10 +233,11 @@ export class Combat {
    */
   attackStep(u: Entity, d: number[], base: number, top: boolean): number {
     if (!u.alive) return 0;
-    let t = this.w.get(d[base + A.Target]);
+    const t = this.w.get(d[base + A.Target]);
     if (!this.valid(t)) {
-      t = this.retarget(u, d, base);
-      if (!t) return this.endAttack(u, d, base);
+      // the retarget's result is the run's result: a new target is first looked at in the next
+      // run (3.3 step 2)
+      return this.retarget(u, d, base) ? 1 : this.endAttack(u, d, base);
     }
     const [tx, ty] = this.cell(t!);
     if (this.dist(tx, ty, d[base + A.AX], d[base + A.AY]) > LEASH) return this.endAttack(u, d, base);
@@ -494,11 +510,17 @@ export class Combat {
 
   private runImpact(job: Job): number {
     const t = this.w.get(job.owner);
-    const [attackerId, wIndex, rank, aRace, aType] = job.data;
+    const [attackerId, wIndex0, rank0, aRace0, aType0] = job.data;
     if (!t || !t.alive || t.hp <= 0) return 0;
+    // weapon, rank and race are the attacker's at the impact (5.1 step 2: the job holds a reference
+    // to him, dead or alive); the values kept at the strike stand in once he has left the world
+    const attacker = this.w.get(attackerId);
+    const wIndex = attacker ? this.rule(attacker)?.weapon ?? -1 : wIndex0;
+    const rank = attacker ? attacker.rank : rank0;
+    const aRace = attacker ? this.race(attacker) : aRace0;
+    const aType = attacker ? this.type(attacker) : aType0;
     const wpn = this.w.weapons[wIndex];
     if (!wpn) return 0;
-    const attacker = this.w.get(attackerId);
     const maxHp = this.rule(t)?.hp ?? t.hp;
     const h0 = t.hp;
     if (wpn.kind === WeaponKind.Heal) {
@@ -545,15 +567,26 @@ export class Combat {
 
   // ---------------------------------------------------------------- reactions (7)
 
-  /** circle scan dx^2 + dy^2 < r^2 for units and buildings, ascending id (8.3, 16.3) */
+  /**
+   * Circle scan dx^2 + dy^2 < r^2 for units and buildings, ascending id (8.3, 16.3). The original
+   * reads each cell's object index, so a building counts when any of its footprint cells lies in
+   * the disc; a unit only on its own cell, and not while it is inside a building.
+   */
   scan(cx: number, cy: number, r: number): Entity[] {
     const out: Entity[] = [];
     const r2 = r * r;
+    const inDisc = (x: number, y: number) => { const dx = this.wrapD(x - cx), dy = this.wrapD(y - cy); return dx * dx + dy * dy < r2; };
     for (const e of this.w.entities) {
       if (e.kind === Kind.Nature || !e.alive || (e.kind === Kind.Unit && e.inside >= 0)) continue;
+      if (e.kind === Kind.Building) {
+        const [x0, y0, x1, y1] = this.footprint(e);
+        let hit = false;
+        for (let y = y0; y <= y1 && !hit; y++) for (let x = x0; x <= x1 && !hit; x++) hit = inDisc(x, y);
+        if (hit) out.push(e);
+        continue;
+      }
       const [x, y] = this.cell(e);
-      const dx = this.wrapD(x - cx), dy = this.wrapD(y - cy);
-      if (dx * dx + dy * dy < r2) out.push(e);
+      if (inDisc(x, y)) out.push(e);
     }
     return out;
   }
@@ -644,13 +677,22 @@ export class Combat {
       const dd = Math.max(1, Math.max(Math.abs(dx), Math.abs(dy)) + Math.floor(Math.min(Math.abs(dx), Math.abs(dy)) / 2));
       const sight = this.rule(a)?.radius ?? 5;
       if (dd >= sight + 2) return this.endUnitJob(v);
+      // the flee point (7.3): the x quotient is stored as a float32 before the multiplication, the
+      // y quotient is not (double precision, the MSVC FPU default); both truncated toward zero
       const m = this.w.size - 1;
-      const px = (ax + Math.trunc((dx * (sight + 3)) / dd)) & m, py = (ay + Math.trunc((dy * (sight + 3)) / dd)) & m;
+      const ox = Math.trunc(Math.fround(dx / dd) * (sight + 3)), oy = Math.trunc((dy / dd) * (sight + 3));
+      const px = (ax + ox) & m, py = (ay + oy) & m;
       this.w.follow(v, px, py, 1);
       d[3] = 1;
       return 1;
     }
-    if (v.path) return 1;
+    if (v.path) {
+      // the job returns its walk child's delay: it runs (and tests for a dead party) only when a
+      // step, turn or wait of the walk is over (7.3 step 1)
+      const tick = this.w.tick, stepEnd = v.stepStart + v.stepTicks;
+      if (v.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
+      return v.moveAt > tick ? v.moveAt - tick : 1;
+    }
     if (d[3] === 1) {
       d[3] = 2;
       v.action = Action.Idle; v.actionTick = this.w.tick;
@@ -881,6 +923,8 @@ export class Combat {
       this.w.removeEntity(e);
     } else if (e.kind === Kind.Building) this.collapse(e, true);
     else if (this.rule(e)?.cls === 7) this.w.logistics.killAnimal(e);
+    // add-on: a living fish only loses its living flag and stays with its amount (addon.md 6.2, 6.3)
+    else if (this.rule(e)?.cls === 15 && this.w.gold.fishTwice) e.alive = false;
     else this.w.removeEntity(e);
   }
 
@@ -1112,16 +1156,20 @@ export class Combat {
     if (d[1] === 0) { this.w.logistics.walkTo(c, st); d[1] = 1; return 1; }
     if (d[1] === 1) {
       if (c.path) return 1;
-      const e = this.w.logistics.enterNow(c, st);
-      if (e < 0) { c.job = 0; return 0; }
+      // the go-to enters from wherever its walk ended (units-and-jobs.md 4.2, 4.10)
+      const e = this.w.logistics.enter(c, st);
       if (e > 0) return e;
+      // the go-to has ended, whatever its outcome (inside, refused, no way): 599 ticks, still on
+      // job 0x19, so the arrest pick skips him (12.4 step 2)
       d[1] = 2;
       return 599;
     }
-    // released as a porter (12.4 step 3)
-    if (c.inside === st.id) {
-      // a type change: the needs are re-evaluated twice (economy.md 5.4, `00464840`)
+    // released as a porter (12.4 step 3): inside any building
+    if (c.inside >= 0 && this.w.get(c.inside)?.kind === Kind.Building) {
+      // the retype (`00464840`): new record, carried goods cleared, HP = the new record's
+      // maximum; the needs are re-evaluated twice (economy.md 5.4)
       this.w.economy.changeType(c, ((this.race(c) << 16) | T.Porter) >>> 0);
+      c.carryGood = -1; c.carryAmount = 0;
       c.hp = this.rule(c)?.hp ?? 50;
       c.job = 0;
       this.w.logistics.leave(c);
@@ -1133,19 +1181,35 @@ export class Combat {
 
   // ---------------------------------------------------------------- healing (13)
 
-  /** heal job data: [auto, active, attack state...]; owner = priest */
+  /**
+   * heal job data: [auto, patient state, attack state...]; owner = priest. Patient state: 0 none,
+   * 2 a patient is chosen (the attack slot's target) but the attack child is not made yet, 1 the
+   * attack child runs.
+   */
   startHeal(priest: Entity, patient: Entity | undefined, auto: boolean, delay: number): void {
     const d = [auto ? 1 : 0, 0, ...new Array(A.Size).fill(0)];
-    if (patient) { this.initAttack(d, 2, patient, false, false); d[1] = 1; }
+    if (patient) { d[2 + A.Target] = patient.id; d[1] = 2; }
     priest.job = this.w.sched.create(CJ.Heal, priest.id, delay, d).id;
     priest.ordered = false;   // the order command marks it afterwards (7.2)
   }
 
+  /**
+   * Heal job (0x29, 13): a dead or healed patient is released (3); a chosen patient gets the attack
+   * child, which is made without running (1) and first runs at the next run; the child's delay is
+   * the job's. Without a patient and with auto-continue: the nearest wounded unit of the own race
+   * within sight, the priest himself included (no self test, distance 0), then 3.
+   */
   private runHeal(job: Job): number {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || !u.alive) return 0;
     const p = d[1] ? this.w.get(d[2 + A.Target]) : undefined;
     if (d[1] && (!p || !p.alive || p.hp >= (this.rule(p)?.hp ?? 0))) { d[1] = 0; this.stopWalk(u); return 3; }
+    if (d[1] === 2) {
+      // the attack child: no retarget, anchor = the patient's cell now
+      this.initAttack(d, 2, p!, false, false);
+      d[1] = 1;
+      return 1;
+    }
     if (d[1]) {
       const r = this.attackStep(u, d, 2, false);
       if (r > 0) return r;
@@ -1153,18 +1217,18 @@ export class Combat {
       return 3;
     }
     if (!d[0]) return this.endUnitJob(u);
-    // next patient: the nearest wounded unit within sight
+    // next patient: the nearest wounded unit within sight (strictly nearer replaces)
     const [x, y] = this.cell(u);
-    let best: Entity | undefined, bd = Infinity;
+    let best: Entity | undefined, bd = 0x7fff;
     for (const e of this.scan(x, y, this.rule(u)?.radius ?? 5)) {
-      if (e.kind !== Kind.Unit || e.id === u.id || !this.mayAct(u, e)) continue;
+      if (e.kind !== Kind.Unit || !this.mayAct(u, e)) continue;
       const [ex, ey] = this.cell(e);
       const dd = this.dist(x, y, ex, ey);
       if (dd < bd) { best = e; bd = dd; }
     }
     if (!best) return this.endUnitJob(u);
-    this.initAttack(d, 2, best, false, false);
-    d[1] = 1;
+    d[2 + A.Target] = best.id;
+    d[1] = 2;
     return 3;
   }
 

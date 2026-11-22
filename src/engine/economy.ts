@@ -95,6 +95,11 @@ export interface Town {
   lists: number[][];
   rr: number[];
   dispatcher: number;
+  /**
+   * the free-porter list (town+0x4D8, units-and-jobs.md 5.3): porter ids free at the start of the
+   * dispatcher's last transport pass and not handed out; read by the leisure job (5.7)
+   */
+  freePorters: number[];
   /** units queued for training, per unit type */
   pending: Record<number, number>;
   /**
@@ -158,6 +163,12 @@ export interface EconomyHost {
   islandAt?(x: number, y: number): number;
   /** torus size, for the distance of goal 17 */
   readonly size?: number;
+  /** computer players (ai-diplomacy-trade.md 1.11): a laboratory of a computer town became active */
+  aiLabActive?(t: Town): void;
+  /** computer players (1.11): a computer town completed its research project */
+  aiResearchDone?(t: Town): void;
+  /** a computer army targets the town (it holds a reference, combat.md 10.4 "Lifetime") */
+  aiHoldsTown?(id: number): boolean;
 }
 
 /** the entity fields the economy reads and writes */
@@ -251,7 +262,7 @@ export class Economy {
       stock: new Array(GOODS).fill(0), income: 0, motivationSpent: 0, researchSpent: 0, overheads: 0,
       crime: 0, foodPct: 100, needsPct: 100, condition: 100, happiness: 100,
       needs: [], open: [], homeless: [], researchJob: 0,
-      workerReqs: [], lists: [[], [], [], []], rr: [0, 0, 0], dispatcher: 0, pending: {}, criminals: [],
+      workerReqs: [], lists: [[], [], [], []], rr: [0, 0, 0], dispatcher: 0, freePorters: [], pending: {}, criminals: [],
     };
     // building needs (5.3): every building type of the race with a need threshold
     for (const r of this.host.rules.values()) {
@@ -311,6 +322,7 @@ export class Economy {
 
   private referenced(t: Town): boolean {
     for (const j of this.host.sched.jobs()) if (j.owner === t.id && TOWN_JOBS.has(j.kind)) return true;
+    if (this.host.aiHoldsTown?.(t.id)) return true;
     return this.host.entities.some(e => e.town === t.id);
   }
 
@@ -336,6 +348,9 @@ export class Economy {
       this.birth(b, T.Porter, false);
     }
     if (r.residents > 0 && !b.houseJob) b.houseJob = this.host.sched.create(JobKind.House, b.id, 599).id;
+    // a computer town's laboratory: the race's research cursor is reset and a project picked at
+    // once, on every activation (ai-diplomacy-trade.md 1.11, `0045fa40`)
+    if (this.typeOf(b) === T.Lab && this.players[t.race]?.computer) this.host.aiLabActive?.(t);
   }
 
   /** storage capacity: the store flag (GOG); in add-on games Gold's flag 0x10, so the harbour adds none (addon.md 1.2, 3.3) */
@@ -868,6 +883,8 @@ export class Economy {
         t.research = -1;
         if (!p.computer) this.host.notify(t.race, 15);   // mentor#15 "Forschung abgeschlossen."
         t.researchJob = 0;
+        // a computer town chooses its next project in the same run (ai-diplomacy-trade.md 1.11)
+        if (p.computer) this.host.aiResearchDone?.(t);
         return 0;
       }
     }
@@ -1012,6 +1029,7 @@ export class Economy {
       for (const s of t.stock) mix(s);
       mix(t.criminals.length); for (const id of t.criminals) mix(id);
       mix(t.cropPct); mix(Math.round(t.cropAcc * 4096));
+      mix(t.freePorters.length); for (const id of t.freePorters) mix(id);
       if (t.name !== undefined) { mix(-5); mix(t.name.length); for (let i = 0; i < t.name.length; i++) mix(t.name.charCodeAt(i)); }
     }
   }

@@ -161,9 +161,10 @@ test('island diplomacy: a target embassy on the same island is walked to and ent
   }, 6000, 'inside the Sajiki embassy');
   assert.ok(far > 10, 'he walked over');
   assert.deepEqual(changes, [], 'not decided before he is inside');
-  until(w, () => changes.length > 0, 20, 'decided inside');
+  // decided after the host embassy has ejected him (100 ticks) and he is outside (3.4 step 3)
+  until(w, () => changes.length > 0, 200, 'decided after the eject');
   assert.equal(changes[0][1], Rel.Peace);
-  assert.equal(pm.d.inside, sj.b.id);
+  assert.equal(pm.d.inside, -1, 'outside when it is decided');
   until(w, () => pm.d.inside === pm.b.id && !pm.d.job, 6000, 'back home');
   assert.equal(pm.b.active, true);
 });

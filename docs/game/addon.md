@@ -188,12 +188,16 @@ research cursor walks the table in file order, so it reaches 30..32 last (8.6).
 The save-game factory (`004031c0`, AN `00402dc0`) knows types 0..0x3E. `AN.exe` stops at 0x3C
 and has no 0x3A or 0x3B.
 
-| id | name | owner | ctor / run | vtable | section |
-|---|---|---|---|---|---|
-| 0x3A | fishing | unit (type 64) | `00482f70` (grounds), `00482fe0` (fish) / `004830b0` | 0x4B2384 | 6.2 |
-| 0x3B | sail to coast | ship | `0048b830` / `0048b8c0` | 0x4B2814 | 5.4 |
-| 0x3D | AI naval planner | computer nation | `00472270` / `00472b30` | 0x4B2828 | 8.4 |
-| 0x3E | wait for a ship | unit (AI) | `00488760` / `00488790` | 0x4B2838 | 8.4 |
+| id | name | original class (`original-names.md` 2) | owner | ctor / run | vtable | section |
+|---|---|---|---|---|---|---|
+| 0x3A | fishing | `DVFishermanJob` | unit (type 64) | `00482f70` (grounds), `00482fe0` (fish) / `004830b0` | 0x4B2384 | 6.2 |
+| 0x3B | sail to coast | `MoveToIsleJob` | ship | `0048b830` / `0048b8c0` | 0x4B2814 | 5.4 |
+| 0x3D | AI naval planner | `AIReedOfficer` ("Reederei", shipping line) | computer nation | `00472270` / `00472b30` | 0x4B2828 | 8.4 |
+| 0x3E | wait for a ship | `DVWaitJob` | unit (AI) | `00488760` / `00488790` | 0x4B2838 | 8.4 |
+
+The Mac build has these four source files but compiled them empty, so the names come from the
+file names and the constructors (the planner calls the `AIOfficer` base constructor with type
+0x3D).
 
 ---
 
@@ -614,16 +618,44 @@ count +0x5C), and capacity in record +0xDC. Nothing used them. Gold uses them fo
 
 | method | Gold | rule |
 |---|---|---|
-| may enter (+0x14) | `0046b5c0` | occupants < capacity **and the entrant is not a ship**. **No race test** |
-| request entry (+0x10) | `0046b3d0` | on the first request, refuse (2) if "may enter" fails, else append to the door queue. Then, if the unit is the head of the queue: enter (0) when the ship's owner is a **computer** nation (nation +0x294), or when the wrapped distance unit–ship (max + min/2) is **< 4**. Otherwise wait (1, re-asked after 10 ticks). A dead head is dropped |
-| entered (+0x18) | `0046b5f0` | if occupants ≤ capacity: the unit's "inside" pointer = ship, add it to the occupant list, pop the door queue, send display message (5,9) |
-| place (+0x1C) | `0046b770` | clear "inside", set the position, display message (0x16,100) |
-| eject (+0x20) | `0046b8c0` | remove from the list (occupants − 1), give the unit a leave job (0x0D) after 10 ticks, chaining its current job behind (blocked 5) |
+| request entry (+0x10, `DVUnit::Knock`) | `0046b3d0` | only on the unit's **first** request (the enter job's "first" flag +0x28, cleared after a "wait" answer): refuse (2) if "may enter" fails, else append the unit to the door queue. Then, if the unit is the head of the queue: enter (0) when the ship's owner is a **computer** nation (nation +0x294), or when the wrapped distance unit–ship (max + min/2) is **< 4**; otherwise wait (1, asked again after 10 ticks). A unit that is not the head waits (1). A dead head is dropped from the queue |
+| may enter (+0x14, `DVUnit::UnitMayWait`) | `0046b5c0` | occupants < capacity **and the entrant is not a ship** (record +0xC0 ≠ 14). **No race test** |
+| entered (+0x18) | `0046b5f0` | if occupants **≤** capacity (instruction level: `cmp` / `ja` at `0x46b618`): the unit's "inside" pointer (+0x6C) = ship, add it to the occupant list, count + 1, pop the head of the door queue, display message (5,9). Otherwise nothing at all |
+| place (+0x1C, `DVUnit::UnitDrivesOut`, unnamed in the Gold name list) | `0046b770` | clear "inside", set the position to the given cell, facing := **5** (3 only for a negative door x offset in the ship's record, +0x94; it is 0 for every ship), display message (0x16,100), the same placement message as a building's place method (vision, worn-path roll) |
+| eject (+0x20, `DVUnit::DismissInhabitant`) | `0046b8c0` | remove the unit from the occupant list (count − 1) if it is there; **always** give it a new leave job (0x0D, 5.3), first run after **10** ticks, with its current job chained behind it (that job's block counter set to 5 if it was 0) |
+
+**Quirk: a sixth passenger (C).** "May enter" is asked only at a unit's first request; the
+"entered" test admits while occupants ≤ capacity. Every unit that made its first request while
+fewer than 5 were aboard is in the door queue for good, and is admitted in turn. So when six or
+more units queue before the fifth has entered, the sixth admitted unit still enters (**6
+aboard**). A seventh admitted unit is not taken in ("entered" does nothing), but its enter job
+still ends **successfully** and the job's destructor (`004844e0`) removes it from the door
+queue, so it does not block the door: it stands on the shore with **no job**. A group of six or
+more ordered together usually queues before the fifth is in (each entry costs a walk plus the
+5-tick admission delay, the others poll every 10 ticks). Later units are refused at their first
+request while 5 or 6 are aboard.
 
 Passengers are inside a container, so:
 - they cannot be targeted (`combat.md` 3.2);
 - they have no vision;
-- a porter on board is never "free";
+- the free test of the dispatcher and the computer players (`units-and-jobs.md` 5.4, Gold
+  `Town::GetFreeUnit` `00461360`, `Town::GetFreeUnits` `00461180`; identical to AN) is not
+  ship-specific: a passenger has no job, so it is free only by the leisure clause, when its
+  +0x78 is −1. +0x78 is reset to 0 only by the general job assignment (`AssignJobInHouse`), which
+  the boarding paths do not use: the player's order (`004567a0`) and the planner's boarding step
+  set the job directly. So a porter released from a leisure visit (+0x78 = −1, 5.7 of
+  `units-and-jobs.md`) who is then ordered aboard by the player stays **free while aboard**, and
+  the dispatcher can pick him *(quirk, C by reading)*;
+- **a job given to a passenger through the general job assignment ejects it** (Gold
+  `DVUnit::AssignJobInHouse` `0046bbd0` = AN `00465650`, `units-and-jobs.md` 1.2): the container
+  test is "+0x6C is set", whatever the container, so a ship's eject (above) runs and the new job
+  waits behind the leave job, blocked 5. This covers the dispatcher (a free passenger, above),
+  the computer players' gang release (a released gatherer gets a go-to job, 0x07, to the first
+  school, `CheckUnitList` `00477f90`), and every other caller of that routine. The passenger is
+  then put ashore by the leave job's ship branch (5.3): near the ship if land is within 5 cells,
+  else the job retries every 50 ticks while the ship sails on (its own job is not changed when it
+  has one). The new job runs from wherever he lands; a walk to a building of another island then
+  fails by the island test (2.5);
 - **when the ship dies, every passenger dies with it**: the unit death kills its attached list
   (`combat.md` 10.1, unchanged code).
 
@@ -634,12 +666,40 @@ object" job (`units-and-jobs.md` 3.2: "any other unit"). For a target of **type 
 changes how the walk target is chosen:
 
 1. Search the ship's 20 near cells (2.4) for a cell whose island id equals **the unit's
-   island**.
+   island**. This search runs at every run of the go-to job.
 2. If none is found: if the ship's current job is a **sail-to-coast job (0x3B) that already has
    its landing cell** (+0x40 set), walk to that landing cell. Otherwise **wait**: the job returns
    5 and checks again.
-3. Path to the cell with the normal target chooser, then turn and **enter** (job 0x0B against
-   the ship, 5.1). On a human player's ship the unit must be within distance < 4 of it.
+3. Walk (follow path 0x06, flag 1) to the cell chosen by the normal target chooser
+   (`Map::GetFreeNeighbour` `00485dc0`: the cell, then its four orthogonal neighbours, then the
+   nearest cell of an unlimited spiral that the unit's planning mask allows). Returns 1.
+4. When that walk ends, **whether or not it succeeded** (instruction level: the child's result
+   is not read), turn toward the ship (one turn call per run), then start the enter job (0x0B,
+   `DVKnockJob`, `00484690`) against the ship with its "first request" flag set; return 1.
+5. The enter job, each run while it is not yet admitted, sends a request (5.1):
+   - **wait** (1): clear the "first request" flag, return 10;
+   - **refused** (2, ship full at the first request): the enter job fails, so the go-to fails;
+     the unit stands where it is with no job;
+   - **admitted** (0): spiral (unlimited) from the **ship's cell** to the first cell that the
+     unit's planning mask (+0x28, 0x3C: no building, nature, special object or water; units do
+     not count) allows, start a follow path (flag 1) there, return 5. When that walk ends,
+     **whether or not it succeeded**, call "entered" (5.1) and end with success.
+6. The go-to's result is the enter job's result.
+
+So on a **human** player's ship the head of the queue is admitted only within distance < 4 of
+the ship, i.e. after its walk to the near cell; it then steps to the land cell nearest the ship
+(often the cell it stands on) and enters. On a **computer** player's ship the head is admitted
+at once, wherever it stands, and enters after its walk toward the land cell nearest the ship,
+**even when that walk failed** (another island, a ship still out at sea): a computer unit sent
+to a computer ship is taken aboard as soon as it is the head of the queue and its own walks
+have ended *(quirk, C)*.
+
+Every unit of a group walks to the **same** shore cell (units do not count for the target
+chooser), so a crowd forms there and later arrivals stop short by the arrival tolerance. On a
+human player's ship a head of the queue that stopped 4 or more cells from the ship is never
+admitted and asks again every 10 ticks for ever; the units queued behind it wait with it *(quirk
+by reading: nothing in the go-to or enter job repeats the walk)*. A new order (which ends the old
+enter job and so its queue entry) starts the walks again.
 
 **The ship comes to the unit** (C, instruction level, go-to constructor `00485670`,
 `0x4856c3..0x485729`): whenever a go-to-object job is **created** with a type-67 target, the
@@ -661,30 +721,46 @@ Consequences:
   cell.
 - Units of any race, foreign included, can board any transport ship, because neither the order
   nor the container checks the race *(quirk by reading)*.
+- The player's order and the planner's boarding step set the go-to job directly (cancel the old
+  job, schedule the new one); they do not use the general job assignment, so they neither eject
+  a unit that is inside something nor reset its +0x78 (5.1).
 
 ### 5.3 Unloading (C, leave job `00484e00` = AN `0047a530`)
 
-`AUSSTEIGEN` sends the base "send out" command (`00457b70` = AN `004520e0`) with type −1: every
-occupant of the selected ship is ejected (5.1). The passengers page can send out one unit type
-(5.6). Each passenger then runs the leave job. When the container is a ship (class 14):
+Every way a passenger leaves a ship is the container eject (5.1, `0046b8c0`) followed by the
+leave job: `AUSSTEIGEN` (the base "send out" command `00457b70` = AN `004520e0` with type −1:
+every occupant of the selected ship), the passengers page's send-out of one unit type (5.6), the
+naval planner's unloading (8.4), and a job given to a passenger through the general job
+assignment (5.1). The leave job's first run comes **10 ticks** after the eject; the passenger's
+current job, if any, waits behind it (blocked 5) and resumes when the passenger is ashore.
+
+The leave job (0x0D) branches on the container's class. For a ship (record +0xC0 = 14) there is
+no door and no run counter phase: **every** run, from the first one on, does this:
 
 1. Search the ship's surroundings with the site-search ring walk (`0044ed90`, radius **5**: the
    centre first, then rings outward, `world-populate.md` 2.3). The cell test is `00484a30`:
    - the cell is not water (0x20 clear);
    - if a unit with no job stands there, it is told to step aside (job 0x0F) as a side effect;
-   - the test passes when (passenger's blocking mask & cell flags) = 0. The flags are read
+   - the test passes when (passenger's movement mask +0x24 & cell flags) = 0 (0x3E for land
+     units: no unit, building, special object, nature object or water). The flags are read
      **before** the step-aside, so a cell with a standing unit fails this time.
-2. If a cell is found, the passenger is placed there (container +0x1C) and the job ends.
+2. If a cell is found, the passenger is placed there (ship place method, 5.1: facing 5) and the
+   leave job ends; a job chained behind it resumes.
 3. If not, and the **ship has no current job**:
    - take the nearest cell around the ship that the passenger could stand on (spiral `004853c0`
-     with the passenger's mask);
-   - give the ship a **sail-to-coast job (0x3B)** toward that cell's island, scheduled after 1
-     tick.
+     from the ship's cell with the passenger's mask +0x24, **no radius limit**);
+   - give the ship a **sail-to-coast job (0x3B)** toward that cell, first run after 1 tick.
 
-   Either way the leave job returns **50** and tries again.
+   Either way the leave job returns **50** and tries again. A ship that has a job (sailing for
+   the planner, a trade route) is not touched: the passenger simply waits aboard the ship, still
+   off its occupant list, until a run finds land within 5 cells of where the ship is then.
 
-There is no door animation for a ship. Several passengers retry independently. Each one
-re-scans, so they land on different cells as the first ones take theirs.
+Nothing in this path ever puts a land unit on water: a passenger stays aboard (and dies with the
+ship) until land is in reach. There is no door animation for a ship. Several passengers retry
+independently. Each one re-scans, so they land on different cells as the first ones take theirs.
+The leave job does not test whether the unit is still inside; a passenger ejected while the ship
+is far out at sea can land on **any** island the ship passes within 5 cells of, not only the one
+it is heading for.
 
 ### 5.4 Sail-to-coast job (0x3B) (C, `0048b830` / `0048b8c0`)
 
@@ -705,11 +781,28 @@ Each run without a child:
 3. Store it as the landing cell, set +0x40, create a follow-path child (0x06) to it, and return 2.
 
 With a child, the child runs. When it ends: on failure the job fails. On success it returns 1, so
-the next run repeats step 1. Typical use: a ship that cannot unload sails until it is within
-2 cells of the island, and the waiting passengers' 50-tick retries then find land.
+the next run repeats step 1 (and, if that finds nothing, a fresh step 2 from where the ship is
+now). There is **no round limit** (`0048b8c0` keeps no counter). Typical use: a ship that cannot
+unload sails until it is within 2 cells of the island, and the waiting passengers' 50-tick
+retries then find land.
 
-If the chosen cell is coastal water, the ship cannot reach it. The follow-path job re-plans and
-fails after 15 attempts (`units-and-jobs.md` 4.1), and the 0x3B job fails with it *(by reading)*.
+Step 2's spiral fallback tests the cell's flags (`004565a0`) against **0xA01E**: no land, unit,
+building, special object, nature object or coastal water. The ring search's test `0044cb40`
+rejects land (0x2000), units (0x02), buildings (0x04), special objects (0x08) and nature objects
+(0x10) and needs a near cell of the target island.
+
+**A coastal landing cell (C, corrected November 2026).** The ring search does not test 0x8000, so
+the landing cell may be coastal water, which a ship may not enter. It is chosen whenever the
+ring order meets a coastal cell before an open-sea one (island corners, diagonal approaches), so
+this is common. The child is a plain follow path (0x06, `004842b0` with flag 1) to that exact
+cell, with the base rules of `units-and-jobs.md` 4.1: the goal cell is never blocked in planning,
+so the plan leads onto it; the last step is blocked (the cell's flags meet the ship's mask);
+the job re-plans, and the arrival tolerance (distance ≤ plan counter, 1 after the first plan)
+ends the walk **with success one cell short**. The 0x3B job then repeats step 1 from there; the
+cell next to a coastal cell is normally within 2 cells of the island, so step 1 succeeds. (Until
+November 2026 this section said the walk fails after 15 re-plans; it does not.) A loop is
+possible only if the ship stops next to a coastal cell from which no near cell reaches the
+island; the original then repeats step 2 for ever *(by reading)*.
 
 ### 5.5 Goods transport
 
@@ -769,11 +862,32 @@ map:
    that corner.
 2. The enter job asks the building. **Buildings have no distance check**, only the door queue
    (`units-and-jobs.md` 4.4), so the ship docks from where it stopped.
-3. The "unit entered" handler sees a class-14 unit. It sets "inside", skips the occupant list,
-   operators and activation, pops the door queue, runs the goods handler (transport drop/pickup,
-   or trade), and ejects the ship at once.
-4. The building's place method sees that the ship still owns its map cell and only clears
-   "inside". The ship stays where it was.
+3. The "unit entered" handler (`DVBuilding::UnitDrivesIn` `004671b0`, class-14 branch, for a unit
+   whose job chain holds a transport job 0x05; the trade job reaches it through its child) sets
+   "inside", skips the occupant list, operators and activation, pops the door queue, runs the
+   goods handler (transport drop/pickup, `DVResourceJob::Trade`, or trade), and then ejects the
+   ship with the building eject (+0x20): a leave job (0x0D) whose first run comes 10 ticks
+   later, the ship's current job chained behind it (blocked 5).
+4. The leave job is the building one (3.7): run 1 at +10 raises the door counter (door message
+   on 0 → 1), runs 2..4 at +20, +25, +30 find the entrance held by the building itself and
+   return 5, run 5 at **+35** calls the building's place method (`004676d0`). That method sees a
+   class-14 unit whose map cell still holds its own index and only clears "inside" and unblocks
+   the chained job: the ship stays where it was, and the door counter is **not** lowered *(quirk:
+   each docking leaves the harbour's door counter one higher)*.
+
+So the ship is **held 35 ticks** after docking: the job that docked it (the fishing job's
+transport child, the trade job) goes on only when the leave job has ended. The goods move at
+the moment of docking. While held, the ship is "inside" the harbour (+0x6C set): not a target,
+no vision (5.1).
+
+The job that docked continues in the same run as the docking: the transport child ends with
+success at once, so the fishing job's phase-2 step (6.2: stop fishing, a new search with its
+rand() draws, a new path child) runs at the moment of docking; only its next run (the walk) waits
+for the leave job.
+
+The shipyard launch (3.4) is the same leave job: the ship is inside the shipyard, so run 5 puts
+it on the first cell of the spiral with its mask (0xA01E, units included), 35 ticks after the
+eject.
 
 ---
 
@@ -814,9 +928,13 @@ Fields: fish +0x24 (referenced), grounds +0x28..+0x30, phase +0x34 (0 going, 1 f
 2 delivering). Status text: phase 0 T327 "Unterwegs zu Fischgründen", phase 1 T328 "Fischt",
 phase 2 that of the transport child (`004836e0`).
 
-**Search** (`004834e0`, also run by the constructors):
+**Search** (`004834e0`). Both constructors call it directly (`00482f70` with the grounds and no
+fish, `00482fe0` with a fish and grounds 0), so the search, its rand() draws and the creation of
+the path child happen **when the job is created**, not at its first run: in the move command at
+the command, in the AI pass (8.3) between that boat's random-cell draws and the next boat's. The
+child only starts walking at the job's first run.
 
-1. If there is no fish, or it is gone:
+1. If there is no fish, or it is gone (alive byte +0x34 clear):
    - spiral search (`004689c0` = AN `00462630`, up to 10 rings) around the grounds for a fish
      that passes `00482f30`: type 41..45, object alive (+0x34), remaining ≠ reserved.
 2. If no fish is found:
@@ -835,10 +953,14 @@ phase 2 that of the transport child (`004836e0`).
 |---|---|
 | child running | run it; return its delay |
 | child ended **with failure**, any phase | the job fails (return 0) |
-| phase 0, child succeeded, fish set and alive | start fishing (below). Phase 1. Return **50 + rand() % 50** (50..99 ticks) |
-| phase 0, child succeeded, no fish or fish gone | search again; return 50 |
+| phase 0, child succeeded, fish set and alive (+0x34) | start fishing (below). Phase 1. Return **50 + rand() % 50** (50..99 ticks) |
+| phase 0, child succeeded, no fish or fish gone | search again (a new child is created at once); return **50**, so the boat starts moving 50 ticks later |
 | phase 1, no child (the wait is over) | **catch** (below) |
-| phase 2, child succeeded | stop fishing (below); search again; return 1 |
+| phase 2, child succeeded | stop fishing (below); search again; return **1** |
+
+The child of phases 0 and 2 is a plain follow path to the grounds cell. A fish's cell is blocked
+for a ship, as is coastal water: the base rules (`units-and-jobs.md` 4.1: goal never blocked in
+planning, arrival tolerance) end such a walk with success next to the cell.
 
 **Start fishing**:
 - Sajiki: action message (0x19,11) with action 2 (work), sound frame record +0x04 and parameter
@@ -849,7 +971,7 @@ phase 2 that of the transport child (`004836e0`).
 - Sajiki: stop message (0x27,11);
 - others: base action back to 0, message (7,7).
 
-**Catch**:
+**Catch** (no test of the fish at all at this point, C):
 
 1. The boat's carried good := the fish record's yield good (+0x11C = 4, food).
 2. **Carried amount += the fish record's amount** (+0x120 = 2 or 3). It is added, not set: a
@@ -857,18 +979,25 @@ phase 2 that of the transport child (`004836e0`).
 3. The fish is released (refcount − 1) and its die method is called. A living fish only loses
    its living flag and **stays with its full amount**. It still passes the search predicate, so
    the next catch takes it again, and that second die call removes it. **Each fish yields its
-   amount twice** (4 or 6 food) *(quirk, C by reading)*.
+   amount twice** (4 or 6 food) *(quirk, C by reading)*. A die call on a fish that is already
+   removed does nothing.
+4. Since the catch reads only the job's own reference, **every boat that took a reference while
+   the fish was still alive catches it**, even when other boats removed it in the meantime: with
+   several boats on one fish, a fish can yield its amount more than twice *(quirk, C)*.
 4. Phase = 2. Find the town's **harbour nearest to the boat** (type 62, any state; `00460db0`).
    - Found: give the job a transport child (0x05) with no source, destination = that harbour, and
      the carried good. Return 1.
    - **No harbour**: the job fails and the boat keeps its load.
 
 The transport child docks at the harbour (5.8) and drops everything into the town stock, clamped
-to capacity (3.3).
+to capacity (3.3). The child ends with the docking; the boat is then held 35 ticks by the leave
+job (5.8), so the phase-2 step (stop fishing, search, return 1) runs at the docking tick and the
+next walk starts when the leave job ends.
 
 Rough timing (Pimmon fishing boat, harbour 10 cells away, fish 2 cells from the grounds):
-2 × 6 ticks to the fish + 50..99 fishing + about 60 ticks to the harbour + docking (door queue,
-10 + 1 ticks) + about 60 ticks back. That is about 3 food per **200..250 ticks** per boat.
+2 × 6 ticks to the fish + 50..99 fishing + about 60 ticks to the harbour + docking (door queue
+and the 35-tick hold of 5.8) + about 60 ticks back. That is about 3 food per **230..280 ticks**
+per boat.
 
 ### 6.3 Ordering a boat onto a fish (quirk, C, `004567a0`)
 
@@ -877,12 +1006,25 @@ fishing job and throws it away** (leaked, never scheduled). Its constructor has 
 reference on the fish and created a path child. The order then gives the boat a normal **harvest
 job (0x16)** with auto-continue on the fish:
 
-- phase 0: the fish is a living animal, so the boat attacks it (weapon 27, 20 damage, 100 %; one
-  hit kills);
+Details (C, `004567a0`, fish branch for record type 0x40; harvest job `units-and-jobs.md` 7.1):
+
+- The leaked constructor (`00482fe0`, fish variant) runs the search (6.2) on a living fish: no
+  spiral, **no rand() draw**; it takes a reference on the fish (never released) and creates a
+  path child that never runs. Nothing else in the simulation changes.
+- The order is skipped when the boat's current job is already a player-ordered harvest of this
+  fish (the base repeated-order rule).
+- The harvest job starts in phase 0, or in **phase 2 when the boat carries something** (a catch
+  kept from a fishing trip whose delivery failed): it tries to deposit first.
+- phase 0: the fish is a living animal (+0x4C set), so the boat gets an attack child (weapon 27,
+  melee: the firing position is an open-sea cell next to the fish; 20 damage, 100 %; one hit
+  kills the 10-HP fish). The fish's die method only clears its living flag: it stays on its cell
+  with its full amount, as a carcass;
+- phase 7 → go-to the carcass (the go-to target chooser picks an open-sea neighbour), phase 1;
 - it then works the carcass for 100 ticks per unit (1 food per trip; only hunters take 4);
 - it carries the food to the **nearest store**, i.e. the town hall or a warehouse. That store is
-  on land, so the go-to fails at once (2.5);
-- the harvest job retries delivery every min(5 × trips, 25) + 2 ticks, forever.
+  on land, so the delivery's go-to fails at once by the island test (2.5);
+- phase 3 with the load still aboard: trips + 1 and a new try after min(5 × trips, 25) + 2 ticks
+  (7, 12, 17, 22, 27, 27, ...), **forever**; the boat stays where it worked.
 
 The working way to fish is the move order. A rebuild should copy this for fidelity but may offer
 a fix that gives the fishing job instead.
@@ -910,8 +1052,9 @@ impact 0x15 `0048ced0`, range and line of fire `0047a420` / `0047ad40`, firing-p
   | Schlachtschiff | 12 straight | 768 × 1000 / 700 = 1097, so 11 + 1 = 12 ticks |
   | melee (Zangen, Angel) | adjacent | 1 tick |
 
-- **Range and line of fire**: the base Bresenham cost. Water is flat, so ranges are the plain
-  "R straight, floor((2R + 2)/3) diagonal". Only buildings block shots, and a harbour or shipyard
+- **Range and line of fire**: the base walk of `combat.md` 3.4 (lagging stepper, no shots across
+  the map seam). Water is flat, so ranges are the flat-ground ones there (R straight; diagonal
+  4 / 5 / 6 / 7 for R 5 / 6 / 8 / 10). Only buildings block shots, and a harbour or shipyard
   is a building. Trees, units and fish do not block.
 - **Firing position search**: the attacker's own path mask. Ships look for firing cells on open
   sea, land units on land.
@@ -1029,16 +1172,25 @@ trip**, when a ship in state 2 has no job any more (ship pass above):
 2. Otherwise, if c = 100, c := 0. Then for the entries of the waiting list in list order, while
    n > 0: cancel the unit's job, give it a go-to job to the ship (boarding, 5.2; its constructor
    also re-aims the ship at that unit), first delay 5, drop the planner's reference, remove the
-   entry, n − 1, c + 1. **There is no test of the unit**: a unit that has died meanwhile (the
-   list's reference keeps the object), one already aboard another ship or one inside a building
-   is sent and counted like any other. A dead unit's job never does anything.
+   entry, n − 1, c + 1. The job is set directly, not through the general job assignment, so
+   nobody is ejected. **There is no test of the unit**: a unit that has died meanwhile (the
+   list's reference keeps the object, with its last position), one already aboard another ship
+   or one inside a building is sent and counted like any other. A dead unit's job never does
+   anything, but its constructor still **re-aims the ship** toward the dead unit's last cell
+   (0x3B, first run after 1 tick), like every go-to at a transport (5.2). Since every entry
+   re-aims the ship, the ship ends up sailing toward the last entry sent.
 3. When the request's list is empty, request state = 3 (served).
 
 Nothing else happens at the pickup: the ship waits 50 runs (state 3) whatever happens, then
 sails. Who actually gets aboard is decided by the units' boarding walks and the ship's door
-(5.1): the first **5** (capacity) to reach their shore cell enter, a later one is refused at its
-first entry request (ship full) and stands idle on the shore, out of the request for good; one
-that has not arrived when the ship leaves follows the ship's new job (5.2 step 2) or waits.
+(5.1, 5.2). The ship is a computer ship, so the head of the door queue is admitted at once
+wherever it stands. Every unit whose first request came while fewer than 5 were aboard is in
+the queue and is admitted in turn; "entered" takes it while occupants ≤ 5. So when six or more
+are sent (a request-service ship sends every waiting unit), **six** get aboard and a seventh
+admitted one is not taken in: its boarding ends as a success, it stands on the shore with **no
+job**, out of the request for good. A unit whose first request comes while 5 or 6 are aboard is
+refused (its go-to fails, no job). One that has not reached the door when the ship leaves
+follows the ship's new job (5.2 step 2) or waits.
 
 **The ship counter c** (record +0x0C; all writes, instruction level):
 
@@ -1071,7 +1223,9 @@ entries sent to this ship since it last received 100**. Consequences *(quirk)*:
 **Request service** (each run, for each request with state < 3, in id order):
 
 1. Sum the free places (capacity − passengers) of the ships already assigned to it (state 2,
-   this request).
+   this request). The sum and the comparison below are **unsigned** 32-bit: a ship with 6
+   aboard (5.1) adds 0xFFFFFFFF, so it wraps the sum (one place less with other ships, or a huge
+   number alone) *(quirk, C)*.
 2. If that is less than the number of units still waiting in its list, take the next ship of
    the **idle list**: the ships that were in state 1 during this run's ship pass, in ship-id
    order (a ship that turned idle in this pass is not in it); each idle ship is used once:
@@ -1221,10 +1375,10 @@ Parameters p1, p2 and p3 are as in `mdb.md`. The file side belongs to `docs/form
 
 | type | condition | function |
 |---|---|---|
-| 17 | object with map id p1 exists and its wrapped distance (max + min/2) to the point (x = p2 & 0xFFFF, y = p2 >> 16) is ≤ p3 | `00478b60` |
+| 17 | object with map id p1 exists and its wrapped distance (max + min/2) to the point (**x = p2 >> 16, y = p2 & 0xFFFF**; C, the low half is compared with the object's y) is ≤ p3 | `00478b60` |
 | 18 | object id p1 is gone, dead, or not of type p2 (true = "destroyed") | `00478d50` |
 | 19 | sum over the player's living towns **whose town position is on island p1** of the count of objects of type p2 ≥ p3 | `00478db0` |
-| 20 | stock of good p1 in city p3 ≤ p2 (inverse of type 1) | `00478e90` |
+| 20 | stock of good p1 in city p3 ≤ p2 (inverse of type 1). The city is found by counting p3 down along the player's town list and stopping when it reaches 0, so **p3 ≤ 0 never matches a city and the goal is false**, as is a p3 beyond the list (C; shipped missions only use p3 = 1) | `00478e90` |
 
 ### 9.3 Diplomacy (C)
 
@@ -1329,8 +1483,9 @@ construction, training, production, harvest and the town dispatcher are the same
 2. The free-play world populate for add-on maps (`00491080`; it replaces AN `00485770` and
    contains the messages "Zu wenige Punkte gefunden" and "Sowas. Riesen-Insel und kein
    Startpunkt."): start points on islands, fish and palm placement. Not traced here.
-3. The follow-path flag +0x44 used for fishing paths: does arrival next to a blocked fish count
-   as success? *(I: yes)*.
+3. The follow-path flag +0x44 used for fishing and sail-to-coast paths. Arrival next to a
+   blocked goal (a fish, coastal water) counts as success anyway, by the base arrival tolerance
+   (5.4, 6.2); what the flag itself changes is not traced.
 4. The exact float handling in the raw-material branch of the shipyard top-up (3.5), which never
    runs on shipped data.
 5. In-game confirmation of the quirks: a fish caught twice (6.2), the harbour-less harvest loop

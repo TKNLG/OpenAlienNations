@@ -29,7 +29,11 @@ Legend: **C** = confirmed in code, **I** = inferred (data pattern, partial trace
   function is `00482ca0`. Every entry in the wheel is a **job** (see 1.2), never a game object.
 - Insert(job, delay) puts the job into slot (current + delay) mod 600. The largest usable delay
   is therefore 599, which is why many periods are 599, 299 or 199.
-- On each tick the scheduler takes every job out of the current slot, in insertion order:
+- On each tick the scheduler takes every job out of the current slot **from its back** (LIFO:
+  the job inserted last runs first; C, `00482ca0` unlinks the slot list's last node each time,
+  as `economy.md` 1.3 and `src/engine/scheduler.ts` have it). A job inserted into the current
+  slot while it is being processed (delay 0) becomes the back element and runs in the same tick.
+  For each job taken out:
   1. A job that is cancelled (job+0x18) and not blocked (job+4 = 0) is deleted.
   2. Otherwise, if the job is not blocked (job+4 = 0), its `run` method (vtable slot 1) is
      called. `run` returns the delay until its next call.
@@ -75,6 +79,9 @@ Giving a unit a new job (`00465650`, used by the town dispatcher with first dela
 - Otherwise the current job is cancelled and replaced.
 - If the unit is inside a building, the new job is blocked for 5 ticks and the building ejects
   the unit (building vtable +0x20 = `00460be0`, which creates a "leave" job in front).
+  The test is only "+0x6C is set" and the eject is the container's own method, so in Gold
+  (`DVUnit::AssignJobInHouse` `0046bbd0`) a passenger of a transport ship is ejected the same way
+  through the ship's eject (`addon.md` 5.1, 5.3).
 - In every case unit+0x78 is set to 0 and the job is scheduled.
 
 A player order (`00450bb0`) cancels the current job, sets the new one with delay 1 and marks it
@@ -179,8 +186,8 @@ The type id is job+0x10. The run function is vtable slot 1. Animation actions ar
 | 0x05 | transport | unit | `0047c2b0` | carry goods from a source to a destination (5.5) | C |
 | 0x06 | follow path | unit | `00480410` | walk a planned path cell by cell (4.1) | C |
 | 0x07 | go to object | unit | `0047ac90` | path to an object or entrance, turn to face it, enter if it is a building | C |
-| 0x08 | attack | unit | `00472b20` | chase a target and strike when in range; gives up beyond 29 cells | C (outline) |
-| 0x09 | strike / shoot | unit | `00481450` | one attack, child of 0x08 | I |
+| 0x08 | attack (`DVAttackJob`) | unit | `00472b20` | chase and strike: gives up when the target is more than 29 cells from its cell at job creation (the anchor), or retargets after the 6th path search; strike child when in range (`combat.md` 3) | C |
+| 0x09 | strike / shoot (`DVShootJob`) | unit | `00481450` | child of 0x08 / 0x1B: turns one 45° step per run, fires when the cooldown is over and schedules an impact job 0x15 (`combat.md` 4) | C |
 | 0x0A | house | building | `004749e0` | resident job, period 599 (see economy.md) | C |
 | 0x0B | enter building | unit | `0047a0f0` | door queue and entering (4.4) | C |
 | 0x0C | builder | unit | `00477ce0` | build or repair a building (6.4) | C |
@@ -190,28 +197,29 @@ The type id is job+0x10. The run function is vtable slot 1. Animation actions ar
 | 0x11 | construction | building | `00475470` | passive order queue, run only returns 10; the builder drives it (6.3) | C |
 | 0x12 | training | building | `00475d50` | 9 | C |
 | 0x13 | production | building | `00476380` | 8.2 | C |
+| 0x15 | impact (`HitJob`) | none | `00481c40` | holds target and attacker; runs once at the impact tick: hit / damage / heal / bomb, experience, mentor 20 / 22, war at ceasefire or peace (`combat.md` 5) | C |
 | 0x16 | harvest | unit | `00476a70` | gather from a nature object (7.1) | C |
-| 0x17 | criminal | unit | `004784d0` | criminal behaviour, started 50 ticks after creation | I |
-| 0x18 | arrest | unit | `0047b860` | police officer chases a criminal | I |
-| 0x19 | escort | unit | `0047cca0` | created by 0x18 | I |
+| 0x17 | criminal (`DVCrimeJob`) | unit | `004784d0` | started 50 ticks after the criminal is made; picks a random porter of the town and beats him (`combat.md` 12.1) | C |
+| 0x18 | arrest (`DVPoliceJob`) | unit | `0047b860` | police officer chases the town's first free criminal and arrests him at 80 % HP (`combat.md` 12.3) | C |
+| 0x19 | jail (`DVTortureJob`) | unit (the criminal) | `0047cca0` | the arrested criminal walks into the station by himself; 599 ticks after that walk ends (any outcome), if he is inside a building he is retyped to a porter (porter max HP, no weapon, carry cleared) and ejected, otherwise the job ends and he stays a criminal without a job (`combat.md` 12.4) | C |
 | 0x1A | news round | unit | `0047b490` | the news seller visits every house of his town, then walks back into his stand (8.6) | C |
 | 0x1B / 0x1C | garrison fire / outpost | unit / building | `004736c0` / `00473850` | 0x1C: every 20 ticks, gives idle class-2 occupants of an outpost a 0x1B job on the first enemy in garrison range; 0x1B: one target, strike child while in range (`combat.md` 9) | C |
 | 0x1D | growth | nature | `00481e90` | crop ripening and sapling growth, period 599 (7.5) | C |
 | 0x1E | bush regrowth | nature | `00482110` | period 299 (7.5) | C |
 | 0x1F | turn / idle | unit | `0047f030` | turn to a direction, then optionally play action 3 (idle) (4.9) | C |
-| 0x20 | trade | unit | `0047ce00` | merchant (`0047cd10`) | I |
+| 0x20 | trade (`DVTraderJob`) | unit | `0047ce00` | merchant route A ↔ B (`0047cd10`), trading on entering the markets; town and peace checks on every run, a war turns him round (`ai-diplomacy-trade.md` 4.4) | C |
 | 0x21 | plant | unit | `0047ead0` | farmer plants one crop (7.6) | C |
 | 0x22 | operator / visit | building | `00478cb0` | 8.3 | C |
 | 0x24 | animal | nature | `004743b0` | wander, idle, eat crops (7.7) | C |
 | 0x25 | building collapse (`DVPullDownJob`) | building | `0047bd60` | created by the destroyed building's die method, phase 1 (`0045f5a0`): waits until the ejected occupants are out, sends the collapse steps, then runs phase 2 (`combat.md` 10.3) | C |
-| 0x26 | flee | unit | `0047da50` | unarmed unit runs from an attacker (`00462e30`) | I |
-| 0x27 | guard / patrol | unit | `00480a10` | created at map load and by a command (`00452790`) | I |
-| 0x28 | group move | unit | `0047c970` | formation movement (`00468e10`) | I |
-| 0x29 | heal | unit | `00481180` | priest heals a damaged unit of its own race | I |
+| 0x26 | flee (`DVEscapeJob`) | unit | `0047da50` | a unit hit while unarmed, a priest or a criminal (and not on a player order) runs to sight + 3 from the attacker if closer than sight + 2, waits 50 ticks, walks back to where it was hit and resumes the suspended job; ends early if either party dies (`combat.md` 7.3) | C |
+| 0x27 | guard / patrol (`DVPatrolJob`) | unit | `00480a10` | cycles up to 8 waypoints (the first is its start cell); at every run, after the walk step, scans sight + 1 for targets at war or without contact of tier ≤ 1 and attacks the best (retarget on), then returns to its waypoint. Made by the PATROL button (`00452790`) and map order records (`combat.md` 8) | C |
+| 0x28 | scout (`DVScoutJob`) | unit | `0047c970` | exploration: a random map cell, the square spiral (4.8) to a cell free for the path mask, one follow-path walk, the next round rand() % 5 + 1 ticks after the walk ends. Made by the AI's `00468e10` and the Gold warship gang; **not** a group move (`combat.md` 15) | C |
+| 0x29 | heal (`DVPriestJob`) | unit | `00481180` | walks next to the patient and strikes with the heal weapon until he is at full HP; with auto-continue it then takes the nearest wounded own-race unit within sight, himself included (`combat.md` 13) | C |
 | 0x2A | eat crop | animal | `00473d50` | the animal eats 1 unit of a bush or crop | C |
 | 0x2B | hunting ground | unit | `00479800` | hunters only: wait at a spot, scan for animals every 20 ticks, hunt, deliver, return (7.3) | C |
 | 0x37 | nature respawn | global | `004826a0` | period 299 (7.5) | C |
-| 0x38 | operator errand | unit | `00478910` | operator sent out by its building (`004618b0`) | I |
+| 0x38 | diplomat errand (`DVDiplomacyJob`) | unit | `00478910` | carries an offer to the nearest active first embassy of the target race (chosen in the constructor), is decided after the host embassy has ejected him, then walks home. Made by `DVBuilding::SendDiplomat` `004618b0`; recall `00452d40` (`ai-diplomacy-trade.md` 3.4) | C |
 | 0x3C | answer request | unit | `0047d940` | walk to a building and enter it; re-files the request on failure (5.2) | C |
 
 ### 3.2 Orders to jobs (C, `00450bb0` and related commands)
@@ -671,9 +679,22 @@ So a go-to to a building fails only if the building dies or refuses the unit at 
 request (4.4). Walking problems never make it fail; they only cost time (up to 15 plans here and
 up to 15 more in the enter job's last walk, 4.10).
 
+Timing (C, `0047ac90`): the go-to's first run only creates its walk child (0x06) and returns 1;
+the walk plans in its own first run one tick later. The walk is a child job, run inside its
+parent's scheduler slot (1.1, 1.2). When the walk ends, the go-to turns the unit in its next run
+(1 tick later), then creates the enter job.
+
+*Deviation (known approximation, movement audit M14):* our go-to (`logistics.ts` `goEntity` →
+`World.follow`) requests the plan in the go-to's own first run, so the plan is about 1 tick early,
+and walking is a world pass outside the job wheel, so the turn follows the walk's end after 0 to 1
+tick instead of exactly 1. Timelines of 4.10 and 5.7 are therefore up to about 1 tick early at
+each end of a go-to.
+
 ### 4.3 Store selection (C, `0045b3f0` Town::GetNearestStore)
 
-"Nearest store" for a point P (the caller's point: the requester's entrance, the gatherer's cell):
+"Nearest store" for a point P (the caller's point: the requester building's **position**
++0x10/+0x14, its anchor cell, not its entrance, in the dispatcher (5.3, C `0x46ffe2`) and in the
+transport's turn-round (5.5, the destination's position); the gatherer's cell (5.6)):
 
 - Candidates: the town's **first town hall** (first entry of its town-hall list, +0x298) with
   **no state test** (a town-hall site counts, so does a collapsing hall), then every entry of the
@@ -1534,28 +1555,41 @@ What a building entry stands for is held in the building itself:
 
 ### 5.2 Dispatcher, part A: worker requests (C, `0046fa10`)
 
-For each worker request:
+For each worker request, in this order (C, re-checked for batch 7):
 
-1. If the building is gone, drop the request.
-2. Search the town's list of that unit type for the **nearest free unit** (`0045b2f0`). "Free"
-   is the same rule as for porters (5.4).
+1. If the building is gone (dead), drop the request.
+2. Search the town's list of that unit type for the **nearest free unit** (`0045b2f0`) to the
+   building's **position** (+0x10, its anchor cell, not the entrance). "Free" is the same rule as
+   for porters (5.4), always with group id 0 (also in a computer town). Ties: the first in list
+   order (strict <, no early stop).
 3. If one is found:
 
    | type | job given |
    |---|---|
-   | porter | answer-request job 0x3C (walk there and enter). Only if the building's training job has more orders queued than people inside (+0x5C) |
-   | builder | builder job 0x0C, if the building is a site whose construction job is not blocked, or if it is complete and HP < max |
-   | anything else (operators) | 0x3C, scheduled after 1 tick |
+   | porter (trainee) | answer-request job 0x3C (walk there and enter), given through `00465650` (1.2) with first delay **5**. Only if the building's current job exists, is the training job (0x12) and its order count is greater than the number of units inside (+0x5C); otherwise the porter gets nothing |
+   | builder | builder job 0x0C, if the building is a site (state 1) whose construction job (0x11) is not blocked, or if it is not a site and HP ≠ max. Set as the unit's current job directly and scheduled after 1 tick |
+   | anything else (operators, the computer players' archers) | 0x3C, set as the unit's current job directly (not through `00465650`) and scheduled after **1** tick. There is no test whether the building already has its operator inside |
 
-   The request is then removed. This includes a builder request for a **paused** site (its
-   construction job blocked, 6.8) or a site already at full HP: the free builder found gets
-   **no** job and the request is dropped anyway (C, `0046fa10`: the job is only created inside
-   the test, the removal follows it unconditionally). While no free builder exists the request
-   stays, and it is dropped the same way at the first run that finds one.
+   The request is then removed **in every case**. This includes a builder request for a
+   **paused** site (its construction job blocked, 6.8) or a site already at full HP: the free
+   builder found gets **no** job and the request is dropped anyway (C, `0046fa10`: the job is only
+   created inside the test, the removal follows it unconditionally). While no free builder exists
+   the request stays, and it is dropped the same way at the first run that finds one. The same
+   holds for a trainee request: the search comes **first**; while no free porter exists the request
+   stays even if the training no longer needs anyone, and it is dropped (without a job) at the first
+   run that finds a free porter while the training job has no unfilled order.
 4. If none is found the request stays. Advisor lines:
-   - porter: mentor#14 "no free porter", when the town has no porters at all or every busy
-     porter is only harvesting (job 0x16);
-   - builder: mentor#9 "no builder", when the town has no builder at all.
+   - porter: mentor#14 "no free porter", when the town has no porters at all (porter list count
+     town+0x128 = 0) or no porter that is not free has a current job other than a harvest (0x16)
+     (the flag of `0045b2f0` starts true and is cleared by every non-free porter whose job is not
+     0x16; a free porter does not clear it, but then one is found and nothing is said);
+   - builder: mentor#9 "no builder", when the town has no builder at all (town+0x140 = 0).
+
+An operator request for a building whose operator is already inside (for example one the player
+walked in by hand after the completion request was filed) therefore stays open: each free unit of
+that type the dispatcher finds is sent there, refused at the door of the active building (4.4), and
+the failed 0x3C re-files the request (below), so such a unit keeps being sent back every 20 ticks
+while it stands free (quirk, C by reading).
 
 If a 0x3C job is destroyed without success (for example the unit died or could not enter), its
 destructor files the worker request again (`0047d8d0`) (C).
@@ -1564,7 +1598,12 @@ destructor files the worker request again (`0047d8d0`) (C).
 
 Runs only when at least one list is non-empty:
 
-1. Rebuild the free-porter list (5.4).
+1. Rebuild the town's **free-porter list** (town+0x4D8, count +0x4DC; `0045aed0`, 5.4): the old
+   list is emptied, then every porter of the town's porter list that is free (with group id 0, or
+   50 in a computer town) is appended in that list's order. The same pass computes the
+   mentor#14 flag: it starts true and is cleared by **every free porter appended** and by every
+   non-free porter whose current job is not a harvest (0x16). So the line can only be said in a
+   pass that began with no free porter at all.
 2. Pick the **starting list** with weighted round-robin. Three counters c0, c1, c2 are kept at
    town+0x5C4..:
    - start with list 0 while c0 < 8;
@@ -1575,35 +1614,71 @@ Runs only when at least one list is non-empty:
    The chosen counter is incremented. Over a full round, the starting list is 0, 1, 2 and 3 in
    the ratio 8 : 4 : 2 : 1.
 3. Walk **all four lists** cyclically from the starting list (s, s+1, ..., wrapping at 4). In
-   each list, take entries in order while free porters remain. With no free porter left the
-   list is abandoned, and mentor#14 may fire under the same condition as in 5.2.
+   each list, take entries in order. **Before each entry** the free-porter list is checked: if it
+   is empty, the rest of this list is abandoned (the entry is not even looked at: no drop, no "you
+   lack X") and mentor#14 is said when the town has no porters (town+0x128 = 0) or the flag of
+   step 1 is set; then the next list. So the line can come once per non-empty list reached with
+   no free porter left (the per-line cooldown, `side-panel.md` 1.1, makes that one line).
 
-Building entry (the building must be a site, state 1, or active, state 2; otherwise the entry is
-skipped and kept):
+Porters are handed out **from that list** (`0045afc0`), not re-tested: the nearest entry to the
+search point is taken (wrapped max + min / 2 distance from the porter's position, strict <, the
+scan stops at the first porter closer than 3) and removed from the list. Entries met during the
+scan that are dead or no longer porters are removed. The list is **left as it is** when the pass
+ends: it holds the porters that were free at the start of the last transport pass and were not
+handed out, and the leisure job (5.7) reads exactly that list until the next transport pass
+rebuilds it (C). A town that never had a transport request has an empty list.
+
+Building entry (dead building: the entry is dropped; otherwise it must be a site, state 1, or
+active, state 2, or the entry is skipped and kept):
 
 - If it has nothing needed and no output, the entry is dropped.
 - If it has needed goods: find the first needed good with **town stock > 0** and move it to the
   front of the needed list.
-  - Source = nearest store to the building; destination = the building.
+  - Source = nearest store to the building's position (4.3); destination = the building.
   - If an output is also waiting, the same porter will take it back (combined trip, 5.5).
+  - If no store exists (no town hall, 4.3) and no output is waiting: advisor "you lack X" for the
+    **first** needed good (the one just moved to the front) and the entry stays. With no store but
+    an output waiting, the output trip below is tried (I: with no store at all the original then
+    reads through a null destination; our build keeps the entry).
 - If nothing needed is in stock but an output is waiting: source = the building, destination =
-  the nearest store to the building.
+  the nearest store to the building's position.
 - If nothing needed is in stock and no output is waiting: advisor "you lack X" (good record
-  +0x130, the race index is added for raw material). The entry stays.
-- The porter is the **nearest free porter to the source** (`0045afc0`). The search stops early
-  at the first porter closer than 3.
-- It is given a transport job (0x05, `0047bfd0`) with first delay 5, and the entry is removed.
+  +0x130, the race index is added for raw material; only for a human player, player+0x260 = 0).
+  The entry stays.
+- The porter is the **nearest free porter to the source's position** (+0x10, `0045afc0`, above).
+  The search stops early at the first porter closer than 3.
+- **A porter who already carries the good** (C, `0x47012e`): if the chosen porter's carried amount
+  (+0x3C) is not 0 and his carried good (+0x38) equals the **first entry of the destination's
+  needed list**, the transport is made **without a source**: he goes straight to the destination
+  (no stop at the store). The constructor still pops the requester's first needed good as the good
+  to fetch (5.5). This is how a porter left carrying after an interrupted transport (5.5
+  destructor) delivers directly. For an output trip the destination is the store, whose needed
+  list is normally empty; the original then compares with an undefined value (I); treat an empty
+  list as "no match" (a town-hall **site** chosen as the store has a real needed list and is
+  compared normally).
+- It is given a transport job (0x05, `0047bfd0`) through `00465650` (1.2) with first delay 5, and
+  the entry is removed.
 
 Nature entry (list 3):
 
 - It is skipped (and kept) while it has nothing unreserved, i.e. remaining = reserved. This
   happens with an unripe crop.
 - It is also skipped while the town has no room for that good (capacity − stock < 1).
-- Otherwise the nearest free porter to the object gets a harvest job (0x16) **without**
-  auto-continue, and the entry is removed.
+- Otherwise the nearest free porter to the object (from the list, as above) gets a harvest job
+  (0x16) **without** auto-continue, through `00465650` with first delay 5, and the entry is removed.
 
 The dispatcher returns 20 while any request (of either kind) remains. Otherwise it returns 0 and
 ends. **Requests are matched every 20 ticks.**
+
+*Our build (batch 7, November 2026):* the free-porter list is town state (`Town.freePorters`,
+porter ids, saved since snapshot version 19); `logistics.ts` `runDispatcher`, `dispatchBuilding`,
+`takeFreePorter`; tests `test/dispatcher-details.test.ts`. Fixed with it: the direct trip of a
+porter already carrying the good, entries not looked at once no porter is left, search points at
+building positions instead of entrances, the trainee request order and delay 5, the operator
+request no longer dropped when an operator is inside, the dispatcher's harvest jobs with first
+delay 5 (ours used 1), the source pickup without output fallback and the destination outputs of
+5.5. Deviation: dead units leave our world at once, so their list entries vanish
+(the original keeps them until a scan removes them; only the leisure job could notice, 5.7).
 
 ### 5.4 Free porter (C, `0045aed0`, `0045afc0`)
 
@@ -1618,6 +1693,15 @@ Leisure visitors are therefore taken back for work at once. A porter released fr
 +0x78 = −1 while he stands outside with no job (5.7 "After leaving"); he is free by the first
 clause anyway.
 
+Gold uses the same test (`Town::GetFreeUnit` `00461360`, `Town::GetFreeUnits` `00461180`); "inside"
+is unit+0x6C, which is also set aboard a transport ship. A passenger is therefore free only by
+the leisure clause (+0x78 = −1), and a job given to it ejects it from the ship (1.2; `addon.md`
+5.1).
+
+For porters the test is applied once per transport pass, when the dispatcher rebuilds the town's
+free-porter list (5.3 step 1); handing out (`0045afc0`) and the leisure job (5.7) work from that
+list. Worker requests (5.2) test their units directly (`0045b2f0`, group 0).
+
 ### 5.5 Transport job (type 0x05) (C)
 
 Fields: destination +0x24, source +0x28 (0 = none), requester +0x2C, good to fetch +0x30
@@ -1626,9 +1710,13 @@ destination).
 
 At creation (`0047bfd0`):
 
-- The requester's first needed-goods entry is popped into +0x30. If the source is not a store,
-  +0x30 = −1 instead.
+- The requester's first needed-goods entry is popped into +0x30 (−1 when the list is empty). If
+  there **is** a source and it is not a store (record flag 0x1 clear), +0x30 = −1 instead and
+  nothing is popped. With **no source** (the porter already carries the good, 5.3) the entry is
+  popped as with a store source (C, `0047bfd0`: only the "source given, not a store" branch skips
+  the pop).
 - The requester's first output entry, if any, is popped into +0x34.
+- No source: the job starts in the "to destination" phase (+0x38 = 1).
 
 This is the dispatcher's constructor. A second constructor (`0047bee0`) takes all five fields as
 arguments and pops nothing; the player's delivery order uses it with no source, the building as
@@ -1647,18 +1735,42 @@ goods move inside the building's "unit entered" handler (`00460ed0` calls `0047c
    - With no room, the advisor says mentor#17 "stores full" (to the porter's nation).
    - Either way the carried amount drops by 1 (not below 0, `47c538`): with no room that unit
      is lost. So the pickup in step 2 starts from the reduced amount.
-2. Then pick up **1 unit**: the requested good +0x30 if the source stock has it, otherwise the
-   output good +0x34. The stock is decremented, unit+0x38 = good and unit+0x3C += 1.
+2. Then pick up **1 unit** (C, `0047c400` source branch, movement audit M7):
+   - if a good to fetch is set (+0x30 ≠ −1): that good, when the source holds any; otherwise
+     **nothing** (no fallback to the output);
+   - only if no good to fetch is set (+0x30 = −1, the output trip): the output good +0x34, when the
+     source holds any; it is then cleared (+0x34 = −1).
+
+   The stock is decremented (a store's town stock clamped at 0), unit+0x38 = good and
+   unit+0x3C += 1. "Holds any" is the town stock for a completed store, the local stock otherwise.
+   When nothing was picked up and the porter carries nothing, the job fails at the end of the
+   source trip (run function below) and its destructor re-files the good to fetch and the output
+   (case: two porters sent for the last unit in stock; the second comes back empty and the need
+   waits for new stock).
 
 **At any other building** (normally the destination):
 
 1. **Everything carried is dropped** into the building's stock. The town stock is clamped to its
    capacity (`0046e820`). A local stock is not clamped.
-2. If +0x34 (an output to collect) is set, the porter takes 1 unit of it. The job is then turned
-   round: the new destination is the source or, if there was none, the nearest store to this
-   building; the new source is this building.
-3. Otherwise, if this building has outputs waiting and the unit is a porter, the porter takes 1
-   output and heads for the nearest store.
+   The good to fetch is cleared (+0x30 = −1).
+2. If +0x34 (an output to collect) is set, the porter takes 1 unit of it **without a stock
+   test**: the local stock (non-store or site) is decremented and may go below 0; a completed
+   store's town stock is decremented clamped at 0 (movement audit M12). The output becomes the
+   good to fetch (+0x30 = that good, +0x34 = −1). The job is then turned round: the new
+   destination is the source or, if there was none, the nearest store to this building's position
+   (4.3); the new source is this building; the **requester becomes the new destination** (the
+   store).
+3. Otherwise, if this building has outputs waiting and the unit is a porter (type 9), the porter
+   pops the first output entry and takes 1 unit of it, again **without a stock test** (as in
+   step 2); +0x30 = that good; source = this building; destination and requester = the nearest
+   store to this building's position.
+
+On the return trip the good to fetch is set, so the run function sends the porter on to the new
+destination (the "again" go-to below), where step 1 drops the load and clears it. An early end on
+the return trip re-files nothing, because the requester is now a completed store (destructor
+below); only a town-hall site chosen as the store (4.3) would get the good appended to its needed
+list (quirk). With no store at all the original reads through a null pointer (I); our build then
+leaves the output where it is (step 3) or keeps the collected unit in the porter's hands (step 2).
 
 The run function (`0047c2b0`):
 
@@ -1672,8 +1784,9 @@ The run function (`0047c2b0`):
   except for merchants (type 28).
 - Otherwise it continues to the destination. When a go-to to the destination succeeds, the job
   ends if the good to fetch (+0x30) is −1 (delivered); if it is still set, the porter is sent to
-  the destination **again** with a new go-to (a retry loop; it only matters if the entry did not
-  run the delivery).
+  the destination **again** with a new go-to. This is how a turned-round job (steps 2 and 3
+  above, which set +0x30 to the collected output) reaches its new destination; it would also
+  retry a delivery the entry did not run.
 
 Note that the good to fetch (+0x30) is **not** cleared at pickup. It stays set while the porter
 carries it and is set to −1 only when the goods are dropped at the destination (or replaced by
@@ -1742,6 +1855,17 @@ If a store refuses or none exists, the harvest job retries (7.1).
 
 One leisure job per town, every **199 ticks** (Gold `00479db0`, identical).
 
+**Which porters (C, `00470340`, movement audit M8).** The job does not look for free porters
+itself. It reads the town's **free-porter list** (town+0x4D8/+0x4DC) exactly as the dispatcher's
+last transport pass left it (5.3): the porters that were free when that pass began and were not
+handed a transport or harvest. It does nothing at all (no candidate lists, no rand()) while that
+list is empty. It never rebuilds the list, and it does not re-test the free rule: no alive,
+inside or group test (only "porter, no job, +0x78 ≠ −1" below). So a porter who became free after
+the last transport pass is no leisure candidate until the next one, and in a town whose
+dispatcher has nothing to transport (it has ended, or it only serves worker requests) the list
+stays as it was for as long as that lasts. Entries that are no longer porters (retrained) are
+removed from the list here.
+
 **Candidate lists, built once per run** (`0045b1d0`, Gold `00461240`): three lists of the town's
 buildings, in the town's per-type building lists' order:
 
@@ -1761,8 +1885,9 @@ A building is listed only if it is **active** (state +0xB0 = 2) **and** its job 
 - the temple (59, flag 0x8 too) and the town hall are never leisure targets. No add-on (Gold)
   building is a leisure target (the Gold job reads the same four types).
 
-**Each run**, for each porter (type 9) in the town's free list (5.4; other entries are dropped from
-the list) that has **no job** and +0x78 ≠ −1:
+**Each run**, for each entry of that list in its order: an entry that is not a porter (type 9) is
+removed from the list; a porter that has **no job** and +0x78 ≠ −1 is handled as follows (other
+porters are skipped and stay in the list):
 
 1. Increase +0x78. Act only once it exceeds 1, i.e. on the second run that finds him idle
    (about 200 to 400 ticks).
@@ -1824,6 +1949,15 @@ at about E₀ + 299·k, E₀ = the entry that started the job.
 circus, so porters walked into non-full houses (house job in the slot, no visit job) and never
 came out without work; the visit job also reset the released porter's counter to 0. Code:
 `logistics.ts` `runLeisure`, `runOperator` (visit branch), `slotJob`; tests `test/leisure.test.ts`.
+
+*Our build (batch 7, November 2026):* until then the leisure job re-tested every porter of the town
+at each run; it now reads `Town.freePorters`, the list the dispatcher's last transport pass left
+(snapshot version 19; older saves start with the porters free at load). Deviations: (a) a dead
+porter leaves our world at once, so its entry is gone; the original keeps the entry and may spend
+the rand() draws of a visit on it (its go-to then ends at its first run, the unit being dead);
+(b) a listed porter who is **inside** a building with no job (a pupil who entered a school after
+the list was made) is skipped; the original would hand him the go-to without ejecting him, which
+our engine cannot represent.
 
 ### 5.8 Our build: lost transports and starving sites (deviations found and fixed October 2026)
 

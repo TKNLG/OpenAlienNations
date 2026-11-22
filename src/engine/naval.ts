@@ -49,6 +49,9 @@ const KIND_UNIT = 0, KIND_BUILDING = 1, KIND_NATURE = 2;
 const ACT_WALK = 0, ACT_WORK = 2, ACT_IDLE = 3;
 const FOOD = 4;
 
+/** the go-to target chooser's orthogonal candidates after the cell itself: N, W, S, E (units-and-jobs.md 4.8) */
+const GOTO4: readonly [number, number][] = [[0, -1], [-1, 0], [0, 1], [1, 0]];
+
 /** the 20 "near" cells of a ship (2.4, table 0x4BCD30), in the original's order */
 export const NEAR20: readonly [number, number][] = [
   [-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1],
@@ -85,12 +88,17 @@ export function goldDefaults(addon: boolean): GoldOptions {
   };
 }
 
-/** sail-to-coast job data (5.4): target island, given cell, landing cell, flag, walking, attempts */
-const SA = { Island: 0, GX: 1, GY: 2, LX: 3, LY: 4, LandSet: 5, Walking: 6, Tries: 7, Size: 8 } as const;
-/** fishing job data (6.2): fish, grounds, phase, walking, harbour, goal of the walk, started */
-const FI = { Fish: 0, GX: 1, GY: 2, Phase: 3, Walking: 4, Harbour: 5, WX: 6, WY: 7, Started: 8, Size: 9 } as const;
-/** boarding job data (5.2): ship, phase, walk target */
-const BO = { Ship: 0, Phase: 1, TX: 2, TY: 3, Tries: 4, Size: 5 } as const;
+/** sail-to-coast job data (5.4): target island, given cell, landing cell, flag, walking (slot 7 unused since v20) */
+const SA = { Island: 0, GX: 1, GY: 2, LX: 3, LY: 4, LandSet: 5, Walking: 6, Size: 8 } as const;
+/**
+ * fishing job data (6.2): fish, grounds, phase, walking (1 under way, 2 child made but not started),
+ * harbour, (unused), started (the search ran), the fish's record id (its catch, 6.2 "Catch")
+ */
+const FI = { Fish: 0, GX: 1, GY: 2, Phase: 3, Walking: 4, Harbour: 5, WX: 6, WY: 7, Started: 8, FishOid: 9, Size: 10 } as const;
+/** boarding job data (5.2): ship, phase (BP), walk target, asked (the first door request was made) */
+const BO = { Ship: 0, Phase: 1, TX: 2, TY: 3, Asked: 4, Size: 5 } as const;
+/** boarding phases: choose the cell, walking there, turning, at the door, the admitted unit's last walk */
+const BP = { Choose: 0, Walk: 1, Turn: 2, Knock: 3, Enter: 4 } as const;
 
 // ---------------------------------------------------------------- planner state (8.4)
 
@@ -100,6 +108,8 @@ export interface PlannerRequest {
   /** units still waiting to be sent to a ship, in list order */
   waiting: number[];
   goods: number;
+  /** waiting units that left the world: id, last x, last y (the boarding step still re-aims the ship there, 8.4) */
+  gone?: number[];
 }
 export interface Planner {
   race: number;
@@ -192,22 +202,38 @@ export class Naval {
   // ---------------------------------------------------------------- ship movement (2.3, 4.1)
 
   /**
-   * Plan a ship's walk (`00485dc0` + follow path 0x06 with the ship mask). A land destination
-   * fails at once (2.5: the ship's island is 0). A water cell the ship may not use is replaced by
-   * the nearest usable cell of the same sea body (the go-to target chooser); a cell of another sea
-   * body fails at once instead of a search over the whole sea.
+   * Plan a ship's walk to an object or point (go-to target chooser `00485dc0` + follow path 0x06
+   * with the ship mask). A land destination fails at once (2.5: the ship's island is 0). A water
+   * cell the ship may not use is replaced like every go-to target: the cell, then its four
+   * orthogonal neighbours (N, W, S, E), then the nearest usable cell of an unlimited spiral, of any
+   * sea body; a cell in another sea body than the ship's fails at once (the planner would fail).
    */
   walkShip(e: Entity, x: number, y: number): boolean {
     const w = this.w;
-    const [cx, cy] = this.cellOf(e);
     let gx = this.m(x), gy = this.m(y);
     if (this.island(gx, gy) !== 0) return false;
-    const comp = this.seaComp[this.idx(cx, cy)];
-    if (w.shipBlocked[this.idx(gx, gy)] || (comp > 0 && this.seaComp[this.idx(gx, gy)] !== comp)) {
-      const c = this.spiral(gx, gy, 6, (px, py) => w.shipBlocked[this.idx(px, py)] === 0 && (comp === 0 || this.seaComp[this.idx(px, py)] === comp));
+    if (w.shipBlocked[this.idx(gx, gy)]) {
+      const c = GOTO4.map(([dx, dy]) => [this.m(gx + dx), this.m(gy + dy)] as [number, number]).find(([px, py]) => w.shipBlocked[this.idx(px, py)] === 0)
+        ?? this.spiral(gx, gy, w.size >> 1, (px, py) => w.shipBlocked[this.idx(px, py)] === 0);
       if (!c) return false;
       [gx, gy] = c;
     }
+    return this.followShip(e, gx, gy);
+  }
+
+  /**
+   * Follow path (0x06) of a ship to exactly (x, y), with no target chooser (the sail-to-coast and
+   * fishing children, 5.4, 6.2). The goal is never blocked in planning, so a blocked goal (coastal
+   * water, a fish) is approached and the walk ends next to it by the arrival tolerance (a success,
+   * `units-and-jobs.md` 4.1). A goal of open sea in another body fails at once.
+   */
+  followShip(e: Entity, x: number, y: number): boolean {
+    const w = this.w;
+    const [cx, cy] = this.cellOf(e);
+    const gx = this.m(x), gy = this.m(y);
+    if (this.island(gx, gy) !== 0) return false;
+    const comp = this.seaComp[this.idx(cx, cy)], gc = this.seaComp[this.idx(gx, gy)];
+    if (comp > 0 && gc > 0 && gc !== comp) return false;
     this.goal = [gx, gy];
     if (cx === gx && cy === gy) { w.setPath(e, null, gx, gy); return true; }
     // the original planner with the ship grid and the ship's step times (units-and-jobs.md 4.1.1)
@@ -246,21 +272,15 @@ export class Naval {
     return out;
   }
 
-  /** put a ship on the nearest open-sea cell without a unit (training launch 3.4, leave fallback) */
+  /**
+   * Put a ship on the first cell of the spiral (`004853c0`, no radius limit) that its mask 0xA01E
+   * allows, units included (the shipyard launch at the leave job's run 5, 3.4; map ships)
+   */
   placeShip(e: Entity, x: number, y: number): void {
     const busy = this.unitCells(e);
-    const c = this.spiral(x, y, 32, (px, py) => this.w.shipBlocked[this.idx(px, py)] === 0 && !busy.has(this.idx(px, py))) ?? [this.m(x), this.m(y)];
+    const c = this.spiral(x, y, this.w.size >> 1, (px, py) => this.w.shipBlocked[this.idx(px, py)] === 0 && !busy.has(this.idx(px, py))) ?? [this.m(x), this.m(y)];
     this.w.teleport(e, c[0], c[1]);
     this.w.halt(e);
-  }
-
-  /** a ship leaves the shipyard where it was trained (3.4 "Launch") */
-  launch(ship: Entity, yard: Entity): void {
-    ship.inside = -1;
-    ship.passengers = [];
-    const [x, y] = this.w.logistics.entrance(yard);
-    this.placeShip(ship, x, y);
-    ship.action = ACT_IDLE as Entity['action']; ship.actionTick = this.w.tick;
   }
 
   // ---------------------------------------------------------------- jobs
@@ -297,63 +317,113 @@ export class Naval {
   boardOrder(u: Entity, target: Entity): boolean {
     if (!this.w.addon || this.capacity(target) <= 0 || this.isShip(u) || u.inside >= 0) return false;
     if (!this.mayEnter(target, u)) return false;
-    this.startBoard(u, target, 1);
+    this.startBoard(u, target, 1, true);
     return true;
   }
 
   /**
-   * A go-to job at a transport ship (5.2): the job is made for the unit, and making it re-aims the
-   * ship (go-to constructor): the ship's current job is cancelled and it sails to the coast of the
-   * unit's island (0x3B toward the unit's cell, first run after 1 tick). Also for the player's
-   * order and on a foreign ship (quirk).
+   * A go-to job at a transport ship (5.2). The job is set directly (the player's order, the
+   * planner's boarding step): the old job is cancelled, nobody is ejected and +0x78 is kept (5.1).
+   * Making the job re-aims the ship (go-to constructor): see `reaim`. `player`: a player order.
    */
-  startBoard(u: Entity, ship: Entity, delay: number): void {
+  startBoard(u: Entity, ship: Entity, delay: number, player = false): void {
     const d = new Array<number>(BO.Size).fill(0);
     d[BO.Ship] = ship.id;
-    this.w.logistics.assign(u, NJ.Board, delay, d);
-    if (ship.alive && this.type(ship) === ShipType.Transport) {
-      const [ux, uy] = this.cellOf(u);
-      this.startSail(ship, ux, uy, 1);
-    }
+    this.setJob(u, NJ.Board, delay, d);
+    u.ordered = player;
+    const [ux, uy] = this.cellOf(u);
+    this.reaim(ship, ux, uy);
   }
 
+  /**
+   * The go-to constructor's re-aim (5.2): a transport ship's current job is cancelled and it sails
+   * to the coast of the unit's island (0x3B toward the unit's cell, first run after 1 tick). Also
+   * on a foreign ship (quirk) and for a dead unit's last cell (8.4).
+   */
+  private reaim(ship: Entity, x: number, y: number): void {
+    if (ship.alive && this.type(ship) === ShipType.Transport) this.startSail(ship, x, y, 1);
+  }
+
+  /** set a unit's job directly (no eject, +0x78 kept): the old job is cancelled */
+  private setJob(u: Entity, kind: number, delay: number, data: number[]): void {
+    this.w.logistics.cancelJob(u);
+    u.ordered = false;
+    u.job = this.w.sched.create(kind, u.id, delay, data).id;
+  }
+
+  /**
+   * The go-to job at a transport ship and its enter job (5.2, 5.1): walk to the shore cell near
+   * the ship (failure ignored), turn, ask at the door (may-enter only at the first request), and
+   * once admitted walk to the land cell nearest the ship and enter whether or not that walk
+   * succeeded ("entered" admits while passengers <= capacity: a sixth passenger, quirk).
+   */
   private runBoard(job: Job): number {
     const u = this.w.get(job.owner), d = job.data;
-    if (!u || !u.alive) return 0;
+    if (!u || !u.alive || u.job !== job.id) return 0;
     const ship = this.w.get(d[BO.Ship]);
-    if (!ship || !ship.alive || u.inside >= 0 || !this.mayEnter(ship, u)) { this.leaveQueue(ship, u); return this.finish(u); }
+    if (!ship || !ship.alive || u.inside >= 0) { this.leaveQueue(ship, u); return this.finish(u); }
     const [sx, sy] = this.cellOf(ship);
-    if (d[BO.Phase] === 0) {
-      const c = this.nearIsland(sx, sy, this.islandOf(u)) ?? this.landingOf(ship);
-      if (!c) return 5;   // no shore cell next to the ship: wait (5.2 step 2)
-      if (!this.w.logistics.walkToCell(u, c[0], c[1])) { this.leaveQueue(ship, u); return this.finish(u); }
-      d[BO.TX] = c[0]; d[BO.TY] = c[1]; d[BO.Phase] = 1;
-      return 1;
+    switch (d[BO.Phase]) {
+      case BP.Choose: {
+        const c = this.nearIsland(sx, sy, this.islandOf(u)) ?? this.landingOf(ship);
+        if (!c) return 5;   // no shore cell next to the ship: wait (5.2 step 2)
+        d[BO.TX] = c[0]; d[BO.TY] = c[1];
+        // the walk's result is not read: a walk that cannot even start goes straight to the door
+        d[BO.Phase] = this.w.logistics.walkToCell(u, c[0], c[1]) ? BP.Walk : BP.Turn;
+        return 1;
+      }
+      case BP.Walk:
+        if (u.path) return 1;
+        d[BO.Phase] = BP.Turn;
+        return 1;
+      case BP.Turn: {
+        const t = this.w.turnToward(u, sx, sy);
+        if (t) return t;
+        d[BO.Phase] = BP.Knock;
+        return 1;
+      }
+      case BP.Knock: {
+        // request entry (`0046b3d0`): the may-enter test only at the first request
+        // entries leave the queue with their enter job (its destructor `004844e0`): ours keeps only
+        // units still on a boarding job at this ship
+        ship.doorQueue = ship.doorQueue.filter(id => {
+          const x = this.w.get(id), j = x?.job ? this.w.sched.get(x.job) : undefined;
+          return !!x && x.alive && !!j && !j.cancelled && j.kind === NJ.Board && j.data[BO.Ship] === ship.id;
+        });
+        if (!d[BO.Asked] && !ship.doorQueue.includes(u.id)) {
+          if (!this.mayEnter(ship, u)) return this.finish(u);   // refused: the go-to fails
+          ship.doorQueue.push(u.id);
+        }
+        d[BO.Asked] = 1;
+        if (ship.doorQueue[0] !== u.id) return 10;
+        const [ux, uy] = this.cellOf(u);
+        const computer = !!this.w.economy.players[ship.owner]?.computer;
+        // a human player's ship: the head waits at the door until it is closer than 4
+        if (!computer && this.dist(ux, uy, sx, sy) >= 4) return 10;
+        // admitted: walk to the land cell nearest the ship (spiral, planning mask: units ignored)
+        const c = this.spiral(sx, sy, this.w.size >> 1, (x, y) => this.w.blocked[this.idx(x, y)] === 0);
+        if (c && (c[0] !== ux || c[1] !== uy)) this.w.follow(u, c[0], c[1], 0, 5);
+        d[BO.Phase] = BP.Enter;
+        return 5;
+      }
+      default: {
+        if (u.path) return 1;
+        this.embark(u, ship);
+        this.leaveQueue(ship, u);
+        return this.finish(u);
+      }
     }
-    if (u.path) return 1;
-    this.w.face(u, sx, sy);
-    // request entry (`0046b3d0`): door queue; the head enters when the owner is a computer or
-    // when it stands closer than 4 to the ship
-    ship.doorQueue = ship.doorQueue.filter(id => { const x = this.w.get(id); return !!x && x.alive && x.job !== 0; });
-    if (!ship.doorQueue.includes(u.id)) ship.doorQueue.push(u.id);
-    if (ship.doorQueue[0] !== u.id) return 10;
-    const [ux, uy] = this.cellOf(u);
-    const computer = !!this.w.economy.players[ship.owner]?.computer;
-    // a human player's ship farther away (it moved, or is still coming to the unit, 5.2): the head
-    // of the queue waits at the door and asks again after 10 ticks, for as long as it takes
-    if (!computer && this.dist(ux, uy, sx, sy) >= 4) return 10;
-    ship.doorQueue.shift();
-    this.embark(u, ship);
-    return this.finish(u);
   }
 
-  /** "entered" (`0046b5f0`): the unit is inside the ship */
-  embark(u: Entity, ship: Entity): void {
-    if (ship.passengers.length >= this.capacity(ship)) return;
+  /** "entered" (`0046b5f0`): the unit is inside the ship while passengers <= capacity; false: not taken in */
+  embark(u: Entity, ship: Entity): boolean {
+    if (ship.passengers.length > this.capacity(ship)) return false;
     u.inside = ship.id;
     ship.passengers.push(u.id);
     this.w.halt(u);
+    this.w.motion.vacate(u);
     u.action = ACT_IDLE as Entity['action']; u.actionTick = this.w.tick;
+    return true;
   }
 
   private leaveQueue(ship: Entity | undefined, u: Entity): void {
@@ -370,20 +440,28 @@ export class Naval {
   // ---------------------------------------------------------------- unloading (5.3)
 
   /**
-   * "Send out" (`00457b70`, AUSSTEIGEN): every passenger of type `type` (-1 = all) is taken off
-   * the list and gets a leave job after 10 ticks, its current job waiting behind it.
+   * "Send out" (`00457b70`, AUSSTEIGEN): every passenger of type `type` (-1 = all) is ejected.
    */
   unload(ship: Entity, type = -1): number {
     let n = 0;
     for (const id of [...ship.passengers]) {
       const p = this.w.get(id);
       if (!p || (type >= 0 && this.type(p) !== type)) continue;
-      ship.passengers = ship.passengers.filter(x => x !== id);
-      if (p.job) this.w.combat.suspend(p);
-      p.job = this.w.sched.create(NJ.LeaveShip, p.id, 10, [ship.id]).id;
+      this.eject(p, ship);
       n++;
     }
     return n;
+  }
+
+  /**
+   * The ship's eject (`0046b8c0`, 5.1): off the passenger list, a leave job whose first run comes
+   * 10 ticks later, the current job waiting behind it (5 ticks blocked). Every way out of a ship
+   * goes through here (5.3).
+   */
+  eject(p: Entity, ship: Entity): void {
+    ship.passengers = ship.passengers.filter(x => x !== p.id);
+    if (p.job) this.w.combat.suspend(p);
+    p.job = this.w.sched.create(NJ.LeaveShip, p.id, 10, [ship.id]).id;
   }
 
   /** unloading cell test (`00484a30`): land, no unit / building / nature; a jobless unit standing there is told to step aside */
@@ -398,6 +476,12 @@ export class Naval {
     return w.blocked[i] === 0 && w.natureAt[i] === 0 && w.buildingCells[i] === 0;
   }
 
+  /**
+   * Leave job, ship branch (5.3): every run, the nearest land cell within 5 of the ship; found: the
+   * passenger is put there (place method `0046b770`: facing 5) and a job behind the leave job
+   * resumes. Not found: a ship without a job sails toward the nearest cell the passenger could
+   * stand on; poll again after 50 ticks. A passenger is never put on water.
+   */
   private runLeaveShip(job: Job): number {
     const u = this.w.get(job.owner);
     if (!u || u.job !== job.id) return 0;
@@ -410,29 +494,20 @@ export class Naval {
     const c = this.siteSearch(sx, sy, 5, (x, y) => this.unloadOk(u, x, y, units));
     if (c) {
       u.inside = -1;
-      this.w.place(u, c[0], c[1]);
-      this.w.face(u, c[0] + (c[0] - sx), c[1] + (c[1] - sy));
+      this.w.teleport(u, c[0], c[1]);
+      this.w.halt(u);
+      u.dir = 5;
       u.action = ACT_IDLE as Entity['action']; u.actionTick = this.w.tick;
+      this.w.wearPath(u, c[0], c[1]);
       return this.finish(u);
     }
-    // no land in reach: the idle ship sails to the nearest coast the passenger could stand on
+    // no land in reach: the idle ship sails to the nearest cell the passenger could stand on
+    // (spiral with the passenger's mask 0x3E: no water, unit, building or nature; no radius limit)
     if (!ship.job) {
-      const s = this.spiral(sx, sy, 64, (x, y) => !this.isWater(x, y) && this.w.blocked[this.idx(x, y)] === 0);
+      const s = this.spiral(sx, sy, this.w.size >> 1, (x, y) => !this.isWater(x, y) && this.w.blocked[this.idx(x, y)] === 0 && !units.has(this.idx(x, y)));
       if (s) this.startSail(ship, s[0], s[1], 1);
     }
     return 50;
-  }
-
-  /** immediate exit from a ship (a unit called away by another job): the unloading cell, else the nearest land */
-  disembark(u: Entity, ship: Entity): void {
-    ship.passengers = ship.passengers.filter(id => id !== u.id);
-    const [sx, sy] = this.cellOf(ship);
-    const units = new Map<number, Entity>();
-    for (const e of this.w.entities) if (e.kind === KIND_UNIT && e.inside < 0 && e.alive) { const [x, y] = this.cellOf(e); units.set(this.idx(x, y), e); }
-    const c = this.siteSearch(sx, sy, 5, (x, y) => this.unloadOk(u, x, y, units));
-    u.inside = -1;
-    this.w.place(u, ...(c ?? [sx, sy]));
-    u.action = ACT_IDLE as Entity['action']; u.actionTick = this.w.tick;
   }
 
   // ---------------------------------------------------------------- sail to coast (0x3B, 5.4)
@@ -450,50 +525,50 @@ export class Naval {
     return !!this.nearIsland(x, y, isl);
   }
 
+  /**
+   * Sail to coast (0x3B, 5.4). Step 1: a near cell on the target island ends the job. Step 2: a
+   * sea cell with a near cell on the island (ring search 32, `0044cb40`; coastal water allowed),
+   * else the first cell of an unlimited spiral around the given cell that the ship mask 0xA01E
+   * allows (units included); a follow path to exactly that cell. When it ends: failure fails the
+   * job, success returns 1 and step 1 runs again. No round limit.
+   */
   private runSail(job: Job): number {
     const ship = this.w.get(job.owner), d = job.data;
     if (!ship || !ship.alive || ship.job !== job.id) return 0;
-    const [sx, sy] = this.cellOf(ship);
     if (d[SA.Walking]) {
       if (ship.path) return 1;
       d[SA.Walking] = 0;
-      // the follow-path child ended: it failed unless the ship reached the landing cell
-      if (sx !== d[SA.LX] || sy !== d[SA.LY]) {
-        if (++d[SA.Tries] >= 15 || !this.sailTo(ship, d[SA.LX], d[SA.LY])) return this.finish(ship);
-        d[SA.Walking] = 1;
-        return 1;
-      }
+      // the follow-path child ended: a coastal landing cell ends it next to the cell, a success
+      if (!this.w.walkOk(ship)) return this.finish(ship);
+      return 1;
     }
+    const [sx, sy] = this.cellOf(ship);
     // step 1: a near cell on the target island is the landing cell: done
     const near = this.nearIsland(sx, sy, d[SA.Island]);
     if (near) { d[SA.LX] = near[0]; d[SA.LY] = near[1]; d[SA.LandSet] = 1; return this.finish(ship); }
-    if (++d[SA.Tries] > 15) return this.finish(ship);
-    // step 2: a sea cell next to the island (ring search 32), else the first usable cell of a
-    // spiral around the given one, with no radius limit (5.4)
+    // step 2
     const units = this.unitCells(ship);
     const c = this.siteSearch(sx, sy, 32, (x, y) => this.coastOk(x, y, d[SA.Island], units)) ??
-      this.spiral(d[SA.GX], d[SA.GY], this.w.size >> 1, (x, y) => this.shipFree(x, y));
+      this.spiral(d[SA.GX], d[SA.GY], this.w.size >> 1, (x, y) => this.shipFree(x, y) && !units.has(this.idx(x, y)));
     if (!c) return this.finish(ship);
     d[SA.LX] = c[0]; d[SA.LY] = c[1]; d[SA.LandSet] = 1;
-    if (!this.sailTo(ship, c[0], c[1])) return this.finish(ship);
+    if (!this.followShip(ship, c[0], c[1])) return this.finish(ship);
     d[SA.Walking] = 1;
     return 2;
   }
 
-  /** follow-path (0x06) to an exact cell with the ship mask: no target chooser, so coastal water fails */
-  private sailTo(ship: Entity, x: number, y: number): boolean {
-    if (!this.shipFree(x, y)) return false;
-    const [sx, sy] = this.cellOf(ship);
-    if (this.seaComp[this.idx(sx, sy)] > 0 && this.seaComp[this.idx(sx, sy)] !== this.seaComp[this.idx(x, y)]) return false;
-    return this.walkShip(ship, x, y);
-  }
-
   // ---------------------------------------------------------------- fishing (0x3A, 6)
 
-  /** the fishing job with grounds (x, y) (move order 6.1, AI 8.3); replaces the current job */
+  /**
+   * The fishing job with grounds (x, y) (move order 6.1, AI 8.3), or on a fish (`fish`); replaces
+   * the current job. As in the original's constructors the search (6.2), with its rand() draws and
+   * the creation of the path child, runs now; the child starts walking at the job's first run.
+   */
   startFishing(boat: Entity, x: number, y: number, delay: number, fish = 0): void {
     const d = new Array<number>(FI.Size).fill(0);
     d[FI.Fish] = fish; d[FI.GX] = this.m(x); d[FI.GY] = this.m(y);
+    this.fishSearch(d);
+    d[FI.Started] = 1;
     this.w.logistics.assign(boat, NJ.Fishing, delay, d);
   }
 
@@ -504,10 +579,15 @@ export class Naval {
     return (e.oid >>> 16) === 6 && t >= 41 && t <= 45 && e.amount !== e.reserved;
   }
 
-  /** the fish search (`004834e0`): a fish near the grounds, else new grounds; then a path child */
-  private fishSearch(boat: Entity, d: number[]): boolean {
+  /**
+   * The fish search (`004834e0`): with no fish, or one that is gone, a fish within 10 rings of the
+   * grounds; else up to 10 random cells around the grounds (two rand() each, x first), the first
+   * water cell becoming the new grounds. A fish found moves the grounds to its cell. Then the
+   * follow-path child to the grounds is made (it starts at the job's next run); phase 0.
+   */
+  private fishSearch(d: number[]): void {
     let fish = d[FI.Fish] ? this.w.get(d[FI.Fish]) : undefined;
-    if (!this.catchable(fish)) {
+    if (!fish) {
       fish = undefined; d[FI.Fish] = 0;
       const byCell = new Map<number, Entity>();
       for (const e of this.w.entities) if (e.kind === KIND_NATURE && this.catchable(e)) {
@@ -525,44 +605,47 @@ export class Naval {
       }
     } else {
       d[FI.Fish] = fish.id;
+      d[FI.FishOid] = fish.oid;
       [d[FI.GX], d[FI.GY]] = this.cellOf(fish);
     }
     d[FI.Phase] = 0;
-    if (!this.walkShip(boat, d[FI.GX], d[FI.GY])) return false;
-    [d[FI.WX], d[FI.WY]] = this.goal;
-    d[FI.Walking] = 1;
-    return true;
+    d[FI.Walking] = 2;
   }
 
   private runFishing(job: Job): number {
     const boat = this.w.get(job.owner), d = job.data;
     if (!boat || !boat.alive || boat.job !== job.id) return 0;
-    if (!d[FI.Started]) {
-      d[FI.Started] = 1;
-      if (!this.fishSearch(boat, d)) return this.finish(boat);
+    // saves before version 20: the search had not run at creation
+    if (!d[FI.Started]) { d[FI.Started] = 1; this.fishSearch(d); }
+    if (d[FI.Walking] === 2) {
+      // the path child made by the search starts: a follow path to exactly the grounds (a fish's
+      // cell or coastal water ends the walk next to it, 6.2)
+      d[FI.Walking] = 0;
+      if (!this.followShip(boat, d[FI.GX], d[FI.GY])) return this.endFishing(boat);
+      d[FI.Walking] = 1;
       return 1;
     }
-    const [bx, by] = this.cellOf(boat);
     if (d[FI.Walking]) {
       if (boat.path) return 1;
       d[FI.Walking] = 0;
-      // the child failed unless the boat reached its cell (arriving next to the blocked fish counts)
-      const ok = (bx === d[FI.WX] && by === d[FI.WY]) || this.dist(bx, by, d[FI.GX], d[FI.GY]) <= 1;
+      // the child ended with failure: the job fails
       if (d[FI.Phase] === 2) {
         const h = this.w.get(d[FI.Harbour]);
         if (!h || !h.alive || !this.dockRange(boat, h)) return this.endFishing(boat);
-      } else if (!ok) return this.endFishing(boat);
+      } else if (!this.w.walkOk(boat)) return this.endFishing(boat);
     }
     switch (d[FI.Phase]) {
       case 0: {
-        const fish = this.w.get(d[FI.Fish]);
-        if (d[FI.Fish] && this.catchable(fish)) {
+        // the fish is set and still in the world (its alive byte)
+        const fish = d[FI.Fish] ? this.w.get(d[FI.Fish]) : undefined;
+        if (fish) {
           this.w.face(boat, ...this.cellOf(fish));
           boat.action = ACT_WORK as Entity['action']; boat.actionTick = this.w.tick;
           d[FI.Phase] = 1;
           return 50 + (this.w.rand.next() % 50);
         }
-        if (!this.fishSearch(boat, d)) return this.endFishing(boat);
+        // a new search; its child starts at the next run, 50 ticks later
+        this.fishSearch(d);
         return 50;
       }
       case 1: return this.fishCatch(boat, d);
@@ -575,8 +658,12 @@ export class Naval {
         if (!h.doorQueue.includes(boat.id)) this.w.logistics.storesFullAtDoor(boat, h, true);
         if (!this.dock(boat, h)) return 10;
         this.dropCargo(boat, h);
-        if (!this.fishSearch(boat, d)) return this.endFishing(boat);
-        return 10;
+        // the harbour has ejected the boat (`dock`): held 35 ticks by the leave job (5.8); the
+        // transport child has ended, so the phase-2 step runs now: stop fishing, a new search (its
+        // walk waits for the leave job)
+        if (boat.action === ACT_WORK) { boat.action = ACT_IDLE as Entity['action']; boat.actionTick = this.w.tick; }
+        this.fishSearch(d);
+        return 1;
       }
       default: return this.endFishing(boat);
     }
@@ -593,21 +680,28 @@ export class Naval {
     return this.finish(boat);
   }
 
-  /** catch (6.2): the record's amount is added to the load; the fish dies (twice, see GoldOptions) */
+  /**
+   * Catch (6.2), with no test of the fish: the fish record's amount is added to the load and the
+   * fish's die is called (a living fish only loses its living flag, see GoldOptions.fishTwice; one
+   * already removed is not touched). Every boat holding the fish catches it.
+   */
   private fishCatch(boat: Entity, d: number[]): number {
-    const fish = this.w.get(d[FI.Fish]);
     boat.action = ACT_IDLE as Entity['action']; boat.actionTick = this.w.tick;
-    if (!this.catchable(fish)) {
-      if (!this.fishSearch(boat, d)) return this.endFishing(boat);
+    const fish = d[FI.Fish] ? this.w.get(d[FI.Fish]) : undefined;
+    const oid = fish ? fish.oid : (d[FI.FishOid] ?? 0);
+    const r = oid ? this.w.rules.get(oid) : undefined;
+    if (!r) {
+      // a save before version 20 whose fish is gone: nothing known to catch, search again
+      this.fishSearch(d);
       return 50;
     }
-    const r = this.w.rules.get(fish.oid);
-    if (boat.carryAmount > 0 && boat.carryGood !== (r?.product ?? FOOD)) boat.carryAmount = 0;
-    boat.carryGood = r?.product ?? FOOD;
-    boat.carryAmount += Math.max(0, r?.amount ?? fish.amount);
-    // die: a living fish only loses its living flag and keeps its amount; the second call removes it
-    if (fish.alive && this.w.gold.fishTwice) fish.alive = false;
-    else { d[FI.Fish] = 0; this.w.removeEntity(fish); }
+    boat.carryGood = r.product ?? FOOD;
+    boat.carryAmount += Math.max(0, r.amount ?? fish?.amount ?? 0);
+    d[FI.Fish] = 0;
+    if (fish) {
+      if (fish.alive && this.w.gold.fishTwice) fish.alive = false;
+      else this.w.removeEntity(fish);
+    }
     d[FI.Phase] = 2;
     const h = this.harbourOf(boat);
     if (!h) return this.finish(boat);   // no harbour: the job fails, the boat keeps its load
@@ -644,7 +738,11 @@ export class Naval {
     return Math.max(ox, oy) <= 6;
   }
 
-  /** the building's door queue for a ship: true when it is its turn; the ship never leaves its cell */
+  /**
+   * The building's door queue for a ship: true when it is its turn (docked: the caller moves the
+   * goods now). The ship never leaves its cell; the harbour ejects it at once, so its current job
+   * waits behind a 35-tick leave job (5.8, `dockHold`).
+   */
   dock(ship: Entity, b: Entity): boolean {
     b.doorQueue = b.doorQueue.filter(id => { const x = this.w.get(id); return !!x && x.job !== 0; });
     if (!b.doorQueue.includes(ship.id)) b.doorQueue.push(ship.id);
@@ -652,7 +750,18 @@ export class Naval {
     b.doorQueue.shift();
     b.doorTick = this.w.tick;
     this.w.halt(ship);
+    this.dockHold(ship, b);
     return true;
+  }
+
+  /**
+   * The harbour ejects a docked ship (5.8): the building's leave job (first run 10 ticks later,
+   * data flag 3 = docked) holds it 35 ticks with its current job waiting behind (blocked 5); the
+   * ship keeps its cell (Logistics.runLeave).
+   */
+  dockHold(ship: Entity, b: Entity): void {
+    if (ship.job) this.w.combat.suspend(ship);
+    ship.job = this.w.sched.create(NJ.LeaveShip, ship.id, 10, [b.id, 0, 0, 1]).id;
   }
 
   /** transport drop at a harbour: everything goes into the town stock, clamped (3.3) */
@@ -667,6 +776,10 @@ export class Naval {
   /** a unit leaves the world: a ship takes everyone on board with it (5.1), the planner forgets it */
   unitGone(e: Entity): void {
     if (!this.w.addon) return;
+    // a unit waiting for a planner's ship: its last cell is kept for the boarding step (8.4)
+    for (const pl of this.planners) if (pl) for (const r of pl.requests) {
+      if (r.state < 3 && r.waiting.includes(e.id)) { const [x, y] = this.cellOf(e); (r.gone ??= []).push(e.id, x, y); }
+    }
     if (e.inside >= 0) {
       const c = this.w.get(e.inside);
       if (c && c.kind === KIND_UNIT) c.passengers = c.passengers.filter(id => id !== e.id);
@@ -728,7 +841,8 @@ export class Naval {
     const r = this.planners[race]?.requests.find(x => x.id === req);
     if (!r) return;
     if (!r.waiting.includes(u.id)) r.waiting.push(u.id);
-    this.w.logistics.assign(u, NJ.Wait, 5, []);
+    // set directly, like the original (no eject, +0x78 kept)
+    this.setJob(u, NJ.Wait, 5, []);
   }
 
   /** the request still runs (not served or cancelled) */
@@ -811,11 +925,12 @@ export class Naval {
     let unserved = 0;
     for (const r of pl.requests) {
       if (r.state >= 3) continue;
+      // unsigned 32-bit sum and comparison: a ship with 6 aboard adds 0xFFFFFFFF (8.4, quirk)
       let free = 0;
       for (const s of pl.ships) {
         if (s.state !== 2 || s.req !== r.id) continue;
         const ship = this.w.get(s.id);
-        if (ship) free += this.capacity(ship) - ship.passengers.length;
+        if (ship) free = (free + this.capacity(ship) - ship.passengers.length) >>> 0;
       }
       if (free >= r.waiting.length) continue;
       const s = idle.shift();
@@ -833,9 +948,9 @@ export class Naval {
    * Boarding step (`00472940`): n = counter - passengers. Below 1 the ship leaves for the
    * destination at once. Otherwise (a counter of 100 restarts at 0) the first n entries of the
    * waiting list are sent to the ship in list order, each raising the counter, with no test of
-   * the unit: a dead one, one aboard or inside is counted as well (8.4); an empty list serves the
-   * request. A dead entry gets no job (ours keeps no object for it, so it does not re-aim the ship);
-   * nor does a unit inside a building (how the original's job takes it out is not traced).
+   * the unit (8.4): every entry's go-to re-aims the ship at the unit's cell, a dead unit's last
+   * cell included. Ours gives no job to a dead unit, nor to one inside a building or another ship
+   * (how the original's job runs from inside is not traced); they are re-aimed at and counted.
    */
   private boardingStep(ship: Entity, s: PlannerShip, r: PlannerRequest | undefined): void {
     let n = s.counter - ship.passengers.length;
@@ -848,13 +963,17 @@ export class Naval {
     if (s.counter === 100) s.counter = 0;
     if (!r) return;
     while (n > 0 && r.waiting.length) {
-      const u = this.w.get(r.waiting.shift()!);
-      const box = u && u.inside >= 0 ? this.w.get(u.inside) : undefined;
-      const inBuilding = !!box && !this.isShip(box);
-      if (u && u.alive && !inBuilding) this.startBoard(u, ship, 5);
+      const id = r.waiting.shift()!;
+      const u = this.w.get(id);
+      if (u && u.alive && u.inside < 0) this.startBoard(u, ship, 5);
+      else if (u) this.reaim(ship, ...this.cellOf(u));
+      else {
+        const g = r.gone ?? [];
+        for (let k = 0; k + 2 < g.length; k += 3) if (g[k] === id) { this.reaim(ship, g[k + 1], g[k + 2]); g.splice(k, 3); break; }
+      }
       n--; s.counter++;
     }
-    if (!r.waiting.length) r.state = 3;
+    if (!r.waiting.length) { r.state = 3; delete r.gone; }
   }
 
   // ---------------------------------------------------------------- state
@@ -870,12 +989,25 @@ export class Naval {
     for (const pl of this.planners) if (pl) for (const sh of pl.ships) sh.counter = 100;
   }
 
+  /** saves before version 21: fishing jobs get the fish's record id (FI.FishOid) */
+  migrateFishingJobs(): void {
+    for (const j of this.w.sched.jobs()) {
+      if (j.kind !== NJ.Fishing || j.cancelled) continue;
+      while (j.data.length < FI.Size) j.data.push(0);
+      const f = j.data[FI.Fish] ? this.w.get(j.data[FI.Fish]) : undefined;
+      if (f) j.data[FI.FishOid] = f.oid;
+    }
+  }
+
   digest(mix: (v: number) => void): void {
     for (const pl of this.planners) {
       if (!pl) continue;
       mix(pl.race); mix(pl.job); mix(pl.nextReq);
       for (const s of pl.ships) { mix(s.id); mix(s.state); mix(s.req); mix(s.timer); mix(s.counter); }
-      for (const r of pl.requests) { mix(r.id); mix(r.state); mix(r.px); mix(r.py); mix(r.dx); mix(r.dy); for (const u of r.waiting) mix(u); }
+      for (const r of pl.requests) {
+        mix(r.id); mix(r.state); mix(r.px); mix(r.py); mix(r.dx); mix(r.dy); for (const u of r.waiting) mix(u);
+        if (r.gone?.length) { mix(-3); for (const v of r.gone) mix(v); }
+      }
       for (let t = 64; t < ADDON_TYPES; t++) { mix(pl.claim[t]); mix(pl.build[t]); }
     }
   }

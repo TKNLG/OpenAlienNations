@@ -10,7 +10,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { RaceSetupLite } from './economy.ts';
-import { cellOf, enterDoor, exitBuilding, leaveQueues, nearEntity, setIdle, stopWalking, walkToEntity } from './visit.ts';
+import { cellOf, enterDoor, exitBuilding, leaveQueues, nearEntity, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
 
 /** relation states (3.1); hostile in AI and patrol code: 0 and 1 */
 export const Rel = { None: 0, War: 1, Ceasefire: 2, Peace: 3 } as const;
@@ -31,8 +31,9 @@ const M = {
 /** errand job data slots */
 const ER = { Phase: 0, Target: 1, State: 2, Home: 3, Dest: 4, Size: 5 } as const;
 /**
- * errand phases: to the foreign embassy, inside it (`Entered`: not decided yet, `Inside`: decided),
- * back home; `Remote`: add-on, the target race's
+ * errand phases: to the foreign embassy, inside it (`Entered`: in, not decided yet: the errand is
+ * blocked until the host embassy has ejected him and he is outside, then it decides; `Inside`:
+ * decided, from older saves), back home; `Remote`: add-on, the target race's
  * embassies are all on other islands, so the offer is decided on the first run outside and he goes
  * straight back in (docs/game/addon.md 9.3, ai-diplomacy-trade.md 3.4 step 2)
  */
@@ -310,8 +311,10 @@ export class Diplomacy {
           }
           if (d[ER.Dest] === DEST_NONE) return this.finish(u);   // none: the errand ends, he stays outside (3.4 step 2)
           const dest = this.w.get(d[ER.Dest]);
-          // gone since sending, or no way there: the go-to fails, nothing changes, back home (3.4 step 5)
-          if (!dest || !walkToEntity(this.w, u, dest)) { d[ER.Phase] = PH.Home; continue; }
+          // gone since sending: the go-to fails, nothing changes, back home (3.4 step 5); the walk's
+          // own outcome is not looked at (he asks at the door where he stands)
+          if (!dest || !dest.alive) { d[ER.Phase] = PH.Home; continue; }
+          walkToEntity(this.w, u, dest);
           d[ER.Phase] = PH.ToDest;
           return 1;
         }
@@ -323,13 +326,19 @@ export class Diplomacy {
           d[ER.Phase] = PH.Home;
           continue;
         case PH.ToDest: {
-          if (u.path) return 1;
+          if (u.path) return walkDelay(this.w, u);
           const dest = this.w.get(d[ER.Dest]);
-          // he cannot get in (embassy gone, path blocked): nothing changes, back home (3.4 step 5)
-          if (!dest || !dest.active || !nearEntity(this.w, u, dest)) { leaveQueues(this.w, u); d[ER.Phase] = PH.Home; continue; }
+          // he cannot get in (embassy gone or inactive, refused at the door): nothing changes, back
+          // home (3.4 step 5)
+          if (!dest || !dest.alive || !dest.active || !nearEntity(this.w, u, dest)) { leaveQueues(this.w, u); d[ER.Phase] = PH.Home; continue; }
           const e = enterDoor(this.w, u, dest);
-          if (e) return e;
-          // in: the go-to succeeded; the offer is decided on the errand's next run (3.4 step 3)
+          if (e > 0) return e;
+          if (e < 0) { d[ER.Phase] = PH.Home; continue; }
+          // in: the go-to succeeded. Entering blocks the errand (+4 = 10) until a leave job lets
+          // him out; the host embassy's operator job ejects him (3.3); the offer is decided at the
+          // errand's first run after that (3.4 step 3)
+          this.w.logistics.foreignOperatorEntered(dest);
+          job.hold = 10;
           d[ER.Phase] = PH.Entered;
           return 1;
         }
@@ -344,16 +353,18 @@ export class Diplomacy {
         case PH.Home: {
           if (exitBuilding(this.w, u)) return 1;
           const home = this.w.get(d[ER.Home]);
-          if (!home || !walkToEntity(this.w, u, home)) return this.finish(u);
+          if (!home || !home.alive) return this.finish(u);
+          walkToEntity(this.w, u, home);
           d[ER.Phase] = PH.ToHome;
           return 1;
         }
         case PH.ToHome: {
-          if (u.path) return 1;
+          if (u.path) return walkDelay(this.w, u);
           const home = this.w.get(d[ER.Home]);
-          if (!home || !nearEntity(this.w, u, home)) return this.finish(u);
+          if (!home || !home.alive || !nearEntity(this.w, u, home)) { leaveQueues(this.w, u); return this.finish(u); }
           const e = enterDoor(this.w, u, home);
-          if (e) return e;
+          if (e > 0) return e;
+          if (e < 0) return this.finish(u);
           // back inside his embassy: the entry rules apply (`00460ed0`): as its stored operator the
           // operator job starts again; an embassy that lost him (a dropped errand, 8.5) is activated anew
           this.w.logistics.unitEntered(u, home);

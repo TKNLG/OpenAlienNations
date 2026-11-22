@@ -150,10 +150,13 @@ cell (x1, y1); orders whose source cell is empty are ignored. By the source's ty
 
 | source type | effect |
 |---|---|
-| 29..36 (soldiers) | adds (x2, y2, z2) as a patrol/guard waypoint; up to 8 per soldier, in file order. A waypoint equal to the soldier's own cell means "guard here". z2 is 0 in the data |
+| 29..36 (soldiers) | a **new** guard/patrol job per order: waypoint 0 the soldier's own cell, waypoint 1 = (x2, y2, z2) (no same-cell test; a target equal to the own cell means "guard here"). A second order for the same soldier makes another guard job; the earlier one is not cancelled (`combat.md` 8.2). z2 is 0 in the data |
 | 17 (hunter) | hunting job aimed at the position (x2, y2, z2) (the target animal moves, so a position is stored, not an object) |
 | any other | work job on the object standing on (x2, y2): carriers on bushes, cocoa and mushrooms, woodcutters on trees, stonemasons on stones (D). Ignored if that cell has no object |
 
-Each job is started with a random delay of 1..5 scheduler ticks (C).
+Orders are processed one by one in file order; each job made is started with a random delay of
+rand() % 5 + 1 scheduler ticks, drawn right after making it (one draw per job made, none for a
+skipped order), so the draws come in file order (C, `00411200`; `combat.md` 8.2 "Map order
+records").
 
 Seen in the data: 142 orders in 20 maps (83 soldier waypoints, 48 gatherer jobs, 11 hunter jobs).

@@ -132,14 +132,14 @@ offers go through `world.diplomacy`.
 
 ## 4. Hooks that are optional (the AI polls instead)
 
-None of these is required. They would make the behaviour closer to the original's event-driven
-code.
+None of these is required. They make the behaviour closer to the original's event-driven
+code; since November 2026 (fidelity batch 6) the first three are hooked.
 
 | original event | what the AI does now | hook if wanted |
 |---|---|---|
-| a unit steps into a computer town's area: recorded as an intruder (2.2) | military phase 1 scans for hostile units standing in the town's territory (`economy.md` 11), or units attacking an object of the town | none needed |
-| a unit steps into a human town's area: town discovered (profile 2, 2.4) | the think job checks every 150 ticks (unit in the town's territory) | none needed |
-| the laboratory becomes active: cursor reset and pick; a project completes: next topic (1.11) | the economy job checks every 50 ticks (`labSeen` flag, `t.research < 0`) | none needed |
+| a unit steps into a computer town's area: recorded as an intruder (2.2) | hooked: `World.stepTo` calls `Ai.stepped` on every cell step of a unit; the strike alert calls `Ai.alert` | in place (since 2026-11) |
+| a unit of a computer nation steps into any town's area: town known (profile 2, 2.4) | hooked in the same `Ai.stepped` | in place (since 2026-11) |
+| the laboratory becomes active: cursor reset and pick; a project completes: next topic (1.11) | hooked: `EconomyHost.aiLabActive` (from `Economy.activate`) and `EconomyHost.aiResearchDone` (from the research step) call `Ai.labActive` / `Ai.researchDone` | in place (since 2026-11) |
 | the town hall becomes active / inactive: town jobs start / stop (0045fa40, 0045ff30) | jobs stop by themselves when the town dies or its hall is inactive; the think job restarts them for any computer town with an active hall | none needed |
 | `World.hash()` | the AI digest mixes `entity.group` | optionally add `mix(e.group)` to the entity loop in `hash()` |
 
@@ -174,10 +174,10 @@ No hook in logistics is needed. If an immediate start is wanted, the engine's co
 | 1.10 porter gang (group 50; the only haulers of a computer town) | `porterGang`, `Logistics.haulGroup` |
 | 1.8 gang sizes (released members go into the first school), gathering orders with the 20-cell search and region-point fallback, free goods incl. wood to iron | `gangs`, `resize`, `gather` |
 | 1.9 sliders | `sliders` |
-| 1.11 research cursor per race, overrides after a completion | `research` |
+| 1.11 research cursor per race, choice at the laboratory's activation and at a completion (overrides) | `Ai.labActive`, `Ai.researchDone` (called by the economy) |
 | 1.12 founding threshold / limit, founder want, mission, site rule, founding | `considerFounding`, `runFounding`, `siteValid` (via `logistics.canFound` / `found`) |
 | 2.1 strength, army power | `strength`, `power` |
-| 2.2 defence targets, budget, defence group with reserve (profile 0: 25 %, members and refill: units outside with any job), no outpost refill (dead branch), intruder records, response with every defender (3 per intruder, wrapping, most urgent bucket only), idle defenders walking back | `defenceTargets`, `record`, `respond`, `assignAttackers` |
+| 2.2 defence targets, budget, defence group with reserve (profile 0: 25 %, members and refill: units outside with any job), no outpost refill (dead branch), intruder records, response with every defender (3 per intruder, wrapping, most urgent bucket only), idle defenders walking back | `defenceTargets`, `Ai.stepped` / `Ai.alert` (records), `respond`, `assignAttackers` |
 | 0.1 / 2.3 think order (diplomacy, per town scouts / troops / candidates, attack or join, founding), scouts and explore job, offensive troop wants, army candidates (free group-0 hunters, then soldiers by type) | `runThink`, `scouts`, `runExplore`, `troopWants` |
 | 2.4 attack decision per profile, joining (2.5 "Joining and moving": walk in beyond 20 cells; add-on: warships sail in, land units grouped by island, one ship request per group on another island, wait job 0x3E) | `considerAttack`, `joinArmy`, `sailToTown` |
 | 2.5 army: relation check, tactic 0 (assault: bucket 0 only = the first building of the important list, the target town's outposts and the target race's class-0 units in the circle; candidate town halls set aside under 10 members, the important one never; retreat at 2x power; 6 per target, wrapping; re-assign when the running target's class exceeds the bucket's, or equals it and rand() mod 10 = 0), tactic 1 (skirmish: fighters, else other units; 3 per target, wrapping; re-assign only in bucket 0 from class > 0, no draw), refused attacks counted, random tactic per run, end and walk home | `runArmy`, `assignArmy`, `endArmy` |
@@ -221,14 +221,16 @@ sensibly:
    outpost of a computer town files one worker request for an archer (29) per garrison place
    (`logistics.complete`), as in the original. The military job's refill is dead code in the
    original and is not implemented (fixed in the audit, 7a E).
-6. **Scouts:** only the wanted number (C[24]) explores. Further scouts stay free, so the
-   dispatcher can send them to watchtowers, whose operator is the scout. The explore job picks a
+6. **Scouts:** as in the original (spec 2.3, since the November 2026 fidelity batch 6): every
+   think sends up to C[24] **more** free scouts exploring (one rand() per scout), so in the long
+   run every idle scout explores, also those trained for watchtowers (quirk kept). Until then
+   only the wanted number explored and further scouts stayed free for watchtowers. The explore job picks a
    random map cell and walks there with one follow-path walk (`World.follow`, the original
-   planner of `units-and-jobs.md` 4.1.1); when the scout stands again it picks the next cell.
-   (Until November 2026 it walked in legs of at most 24 cells and re-picked after 40 legs, a
-   stand-in for the old one-way A*.) The job's own details (usable-cell spiral, 1..5 tick pause)
-   are a separate audit item. The original sends up to C[24] more idle scouts every think, so in
-   the long run every idle scout explores (spec 2.3).
+   planner of `units-and-jobs.md` 4.1.1); the job itself is exact since November 2026
+   (`combat.md` 15: x and y draws, the square spiral to a cell free for the planning mask, the
+   walk's first run rand() % 5 + 1 ticks later, runs at the walk's step delays). (Until November
+   2026 it walked in legs of at most 24 cells and re-picked after 40 legs, a stand-in for the old
+   one-way A*.)
 7. **Long walks** are single follow-path walks (`World.follow`: the original planner of
    `units-and-jobs.md` 4.1.1, up to 15 plans, the arrival tolerance) to their real targets, as
    in the original (since November 2026; before that they went in legs of at most 32 cells with
@@ -242,15 +244,14 @@ sensibly:
      ticks (the third draw);
    - the members of an ending army (spec 2.5 last bullet): to the first free cell of a spiral
      around their home town, first run after rand() mod 10 + 2 ticks (the member's draw);
-   - released units (a merchant without partner, `release`): to the first free cell of a spiral
-     around their town's position (our choice of cell; the original's walk target for this case
-     is not specified).
    A target the planner cannot reach within its 2000 iterations fails after the walk's plans, as
    in the original, instead of being approached leg by leg.
 8. **Founding** (1.12): the site test is the engine's `canFound(..., territory = true)` (the four
    points outside every territory) and the disc of the town hall's radius (25: 373 blocks)
-   around the site free of every territory. Sites are searched in rings of step 2 up to 20 cells around each start candidate in
-   file order. A `noSite` flag stops further missions once no site is left.
+   around the site free of every territory. Sites are searched around each start candidate in
+   file order with the original's radius-20 site-search walk (`naval.siteSearch`: the candidate,
+   rings 1..9, the corner of ring 10; exact since November 2026, before that rings 0, 2, .. 20).
+   A `noSite` flag stops further missions once no site is left.
 9. **Army target classes** (object +0x20, 7 item 1) use `combat.tier()` (0 fighters / outposts,
    1 military buildings and civilians, 2 the rest). The assault attacks bucket 0 only, six per
    target, the keep rule compares with the bucket (7b O..R). Members without an attack job
@@ -264,12 +265,20 @@ sensibly:
     and are re-created often (each think). Kept as in the spec.
 11. **Profiles 0 and 1 attack other computer players** (the spec's confirmed quirk in 2.4).
     In free play an aggressive AI therefore often wipes out the other AI early. Kept.
-12. **Released units**: gang members released by a resize get a go-into job (delay 1, no rand())
+12. **Released units**: gang members released by a resize (the first entry of the gang list,
+    i.e. the member that joined first) get a go-into job (first run after 5 ticks, no rand())
     to the first school of the town's list, as specified (1.8, I). Our engine's "unit entered"
     handler (`units-and-jobs.md` 4.4) lets a non-porter come out again at once, so a released
     woodcutter ends up standing at the school door. Army members, founders and merchants
     released elsewhere walk home as before.
-13. **Research "started"** means progress > 0 or currently selected by a town of the race.
+13. **Research** (1.11) is chosen by the events, as in the original (since November 2026): the
+    laboratory's activation (`Economy.activate` -> `Ai.labActive`) and the project's completion
+    (the research step -> `Ai.researchDone`), with the override's "not the pick" test.
+    "Started" is the race's set of inventions ever selected (`AiPlayer.started`). One stand-in:
+    a laboratory made active by the map loader, before the computer player exists, gets its
+    activation pick when `Ai.start` creates the player (the original's order at load is not
+    known). Saves before version 20 took "started" as some progress or selected now, and a town
+    left waiting for the old 50-tick poll gets its choice on load.
 14. **The human for 2.4** is the first human player in race order (deterministic in
     multiplayer). No human: no attacks.
 15. **Housing H (1.4)** counts the type lists, sites included, as in the original (fixed in the
@@ -284,25 +293,40 @@ sensibly:
     which is spec behaviour, so it is left unchanged here.
 18. Not implemented: the job +0x34 flag (7 item 10, never read). Mentor lines are not used,
     because computer players have no advisor.
-19. **Intruder records (2.2)**: the original records a unit on the town's military job when it
-    steps into the area. Ours polls in every military run (every 50 ticks, also in idle runs):
-    units of other races standing in the territory are added to `AiTown.intruders` (saved). The
-    response then applies the spec's keep test to the records. Strikes also record the striker (`Ai.alert`, the alert of `combat.md` 7 step 1), also when it
-    stands outside the territory (7c).
+19. **Intruder records (2.2)**: exact since November 2026. `World.stepTo` (every cell step of a
+    unit, the original's position setter) calls `Ai.stepped`: a unit of another nation stepping
+    inside a computer town's territory is appended to `AiTown.intruders` (saved) on every step,
+    duplicates kept; strikes append the striker once per strike (`Ai.alert`, `combat.md` 7 step 1,
+    also when it stands outside the territory, 7c). The response files every copy that passes,
+    so 3 defenders go per copy in turn. Animals are entities of the nature kind here and are not
+    hooked, as in the original (record kind 2). The same hook adds the territory's town to a
+    computer nation's known towns (profile 2); before, both were polled (every 50 / 150 ticks,
+    one record per unit).
 20. **Defenders walking back (2.2)**: the three rand() draws per defender are made (x, y, delay),
-    but the walk starts at once (our engine has no walk job 0x06 with a delay).
+    and the follow-path walk starts after the drawn delay (item 7).
 21. **List order** (`Ai.list`): the original's per-type town lists change order when the AI moves
     a building to the back (training round robin, outpost anchors). `AiTown.moved` keeps an order
     key per moved building; every "first building of a type" read by the AI (trainable, training
     step, school, first mine, embassy, the army's important buildings) uses that order. The
     engine's own code keeps creation order.
-22. **Founding search details (1.12)**: the candidate search around each start candidate walks
-    rings 0, 2, 4 .. 20 (the original's site search with radius 20 walks rings 1..9 and the corner
-    of ring 10, `world-populate.md` 2.3); a mission that finds no site at all releases its
-    founder (group 0) and marks the player as having no site, where the original ends with the
-    founder left in group 54. The approach cell (step f) uses the exact ring walk.
+22. **Founding search details (1.12)**: the candidate search is exact (item 8); a mission that
+    finds no site at all releases its founder (group 0) and marks the player as having no site,
+    where the original ends with the founder left in group 54 (audit A8, open). The approach
+    cell (step f) uses the exact ring walk.
 23. **Add-on navy (section 9)**: see `integration-addon-gameplay.md` 7 "Computer players" for
     what was fixed in the 2026-10 audit and what still differs.
+24. **Fidelity batch 6 (November 2026)**, now as in the original: the profile 3 / 5 cut keeps
+    the last candidates (2.4); the army keeps join order (2.5) and goes on after its target town
+    fell, holding that town in its nation's list (`Ai.holdsTown`, `Economy.releaseTowns`); the
+    gang and porter-gang lists keep join order, count dead members until a successful search
+    (gangs) and release the oldest member (`AiTown.gangs`, `AiTown.porters`); the defence group
+    releases the oldest units of a type; gathering searches the square, ignores amounts and
+    reservations and hands out the harvest job with delay 5; markets need the first market
+    active (else A is kept), a merchant without partner only loses its group, a kept route is
+    any route whose destination is a partner, a re-routed merchant loses its load and starts
+    after 5 ticks; diplomacy evaluates townless living players and uses the first town's first
+    embassy. Still different: a gang member inside a building other than on a leisure visit gets
+    no harvest job (the original ejects it; rare).
 
 ## 7a. Audit against the original (2026-10): our build versus spec, ordered by impact
 

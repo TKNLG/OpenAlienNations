@@ -27,17 +27,25 @@ export interface AiTown {
    * [building id, order key]; buildings not listed have the key id x 65536.
    */
   moved: number[];
-  /** units recorded as intruders (2.2): other races' units seen standing in the town's area */
+  /**
+   * Intruder records (2.2): one entry per cell step of another nation's unit inside the town's
+   * area and per strike on the town's units, in recording order, duplicates kept
+   */
   intruders: number[];
   /** military: under attack flag and defence reserve percent (2.2) */
   underAttack: number; reserve: number;
-  /** a laboratory was active at the last check (1.11) */
-  labSeen: number;
+  /**
+   * Economy gangs (1.8) by unit type, members in join order; dead members stay listed (and
+   * counted) until a successful gathering search drops them
+   */
+  gangs: Record<string, number[]>;
+  /** porter gang (1.10), members in join order */
+  porters: number[];
 }
 
 export function newTownState(town: number, width = TYPES): AiTown {
   const z = () => new Array<number>(width).fill(0);
-  return { town, planner: 0, economy: 0, military: 0, A: z(), B: z(), C: z(), build: [], train: [], moved: [], intruders: [], underAttack: 0, reserve: 0, labSeen: 0 };
+  return { town, planner: 0, economy: 0, military: 0, A: z(), B: z(), C: z(), build: [], train: [], moved: [], intruders: [], underAttack: 0, reserve: 0, gangs: {}, porters: [] };
 }
 
 /** build priorities (table `004afee8`, 1.5) */
@@ -391,13 +399,17 @@ function trainingNeeds(ai: Ai, t: Town, s: AiTown, c: Census): void {
  * in a computer town (logistics `haulGroup`); the other porters are the trainees (1.7).
  */
 export function porterGang(ai: Ai, t: Town): void {
-  const gang: Entity[] = [], free: Entity[] = [];
+  const s = ai.town(t.id);
+  const gang = s ? (s.porters ??= []) : [];
+  syncList(ai, t, gang, U.Porter, Grp.Porters);
+  // dead members are removed first
+  for (let k = gang.length - 1; k >= 0; k--) if (!ai.w.get(gang[k])?.alive) gang.splice(k, 1);
+  const free: Entity[] = [];
   let p = 0;
   for (const e of ai.w.entities) {
     if (e.kind !== KIND_UNIT || e.town !== t.id || (e.oid & 0xffff) !== U.Porter || (e.oid >>> 16) !== t.race || !e.alive) continue;
     p++;
-    if (e.group === Grp.Porters) gang.push(e);
-    else if (ai.free(e)) free.push(e);
+    if (ai.free(e)) free.push(e);
   }
   const n = p < 6 ? 2 : Math.min(10, p >> 1);
   if (gang.length < n) {
@@ -406,11 +418,29 @@ export function porterGang(ai: Ai, t: Town): void {
     for (const e of free) {
       if (gang.length >= n || left <= reserve) break;
       e.group = Grp.Porters;
-      gang.push(e);
+      gang.push(e.id);
       left--;
     }
   }
-  while (gang.length > n) gang.pop()!.group = Grp.None;
+  // the surplus leaves from the front: the porter that joined first (`0046aed0`)
+  while (gang.length > n) { const e = ai.w.get(gang.shift()!); if (e) e.group = Grp.None; }
+}
+
+/**
+ * Keep a gang list (join order) in step with the units: dead or vanished members stay (the
+ * original's lists hold them until a run drops them); living members that are no longer in the
+ * group (or changed town or type) leave; living group members missing from the list (saves
+ * from before version 20, units grouped elsewhere) are appended in town-list order.
+ */
+function syncList(ai: Ai, t: Town, ids: number[], type: number, group: number): void {
+  const w = ai.w;
+  const member = (e: Entity) => e.kind === KIND_UNIT && e.town === t.id && (e.oid & 0xffff) === type && (e.oid >>> 16) === t.race &&
+    e.alive && e.group === group;
+  const keep = ids.filter(id => { const e = w.get(id); return !e || !e.alive || member(e); });
+  const have = new Set(keep);
+  for (const e of w.entities) if (!have.has(e.id) && member(e)) keep.push(e.id);
+  ids.length = 0;
+  ids.push(...keep);
 }
 
 /** training execution (1.7, `0046c670`): at most one order per run */
@@ -480,7 +510,8 @@ export function runEconomy(ai: Ai, job: Job): number {
   const { t, s } = live;
   // Gold: skipped while the town has no storage capacity (addon.md 10.4)
   if (ai.w.gold.aiCapacitySkip && t.capacity === 0) return 50;
-  research(ai, t, s);
+  // research is chosen by the laboratory's activation and the project's completion themselves
+  // (1.11, `Ai.labActive` / `Ai.researchDone`), not here
   const phase = job.data[0] % 3;
   if (phase === 0) { gather(ai, t, s); sliders(ai, t); }
   else if (phase === 1) gangs(ai, t, s);
@@ -489,30 +520,45 @@ export function runEconomy(ai: Ai, job: Job): number {
   return 50;
 }
 
-function gangOf(ai: Ai, t: Town, type: number): Entity[] {
-  return ai.w.entities.filter(e => e.kind === KIND_UNIT && e.town === t.id && (e.oid & 0xffff) === type && (e.oid >>> 16) === t.race &&
-    e.alive && e.group === Grp.Economy);
+/** the gang list of a unit type (1.8): member ids in join order, dead members included */
+function gangIds(ai: Ai, t: Town, s: AiTown, type: number): number[] {
+  s.gangs ??= {};
+  const ids = (s.gangs[type] ??= []);
+  syncList(ai, t, ids, type, Grp.Economy);
+  return ids;
 }
 
-/** resize a gang: fill from free units, release the surplus (`0046e960`) */
-function resize(ai: Ai, t: Town, type: number, n: number): Entity[] {
-  const g = gangOf(ai, t, type);
+/** the living members of a gang, in join order */
+function gangOf(ai: Ai, t: Town, s: AiTown, type: number): Entity[] {
+  const out: Entity[] = [];
+  for (const id of gangIds(ai, t, s, type)) { const e = ai.w.get(id); if (e && e.alive) out.push(e); }
+  return out;
+}
+
+/**
+ * Resize a gang (`0046ea30`): while its count (dead members included) is below n, the next free
+ * unit of the type (town-list order) joins at the end; while above, the first entry (the member
+ * that joined first) leaves: group 0 and, if the town has a school, a go-into job to the first
+ * school of the town's list, first run after 5 ticks (1.8). Returns the list.
+ */
+function resize(ai: Ai, t: Town, s: AiTown, type: number, n: number): number[] {
+  const g = gangIds(ai, t, s, type);
   if (g.length < n) {
     for (const e of ai.w.entities) {
       if (g.length >= n) break;
       if (e.kind === KIND_UNIT && e.town === t.id && (e.oid & 0xffff) === type && (e.oid >>> 16) === t.race && e.alive && ai.free(e)) {
         e.group = Grp.Economy;
-        g.push(e);
+        g.push(e.id);
       }
     }
   }
-  // released members get group 0 and, if the town has a school, a go-into job to its first school
-  // (1.8, I: to be retrained there)
   while (g.length > n) {
-    const e = g.pop()!;
+    const e = ai.w.get(g.shift()!);
+    if (!e) continue;
     e.group = Grp.None;
+    if (!e.alive) continue;
     const school = ai.list(t, B.School)[0];
-    if (school && !ai.w.isShip(e)) ai.w.logistics.goInto(e, school, 1);
+    if (school && !ai.w.isShip(e)) ai.w.logistics.goInto(e, school, 5);
   }
   return g;
 }
@@ -525,17 +571,19 @@ function gangs(ai: Ai, t: Town, s: AiTown): void {
   const wood = Math.max(1, Math.trunc((fw * g) / 2)), stone = Math.max(1, Math.trunc((fs * g) / 2));
   const hunters = Math.min(3, Math.trunc(P / 10));
   s.A[U.Woodcutter] = wood; s.A[U.Stonemason] = stone; s.A[U.Hunter] = hunters;
-  resize(ai, t, U.Woodcutter, wood);
-  resize(ai, t, U.Stonemason, stone);
-  const h = resize(ai, t, U.Hunter, hunters);
-  // bush porters only while the hunter gang is empty (from free group-0 porters, not the porter gang)
-  resize(ai, t, U.Porter, h.length ? 0 : Math.min(2, Math.trunc(P / 5)));
+  resize(ai, t, s, U.Woodcutter, wood);
+  resize(ai, t, s, U.Stonemason, stone);
+  // bush porters only while the hunter gang is empty after its resize (its count: dead members
+  // too); from free group-0 porters, not the porter gang
+  const h = resize(ai, t, s, U.Hunter, hunters);
+  resize(ai, t, s, U.Porter, h.length ? 0 : Math.min(2, Math.trunc(P / 5)));
   if (ai.w.addon) {
     // add-on gangs (addon.md 8.2): one fishing boat, one wandering warship above 20 people
     s.A[ShipType.Fishing] = 1;
     s.A[ShipType.Light] = P > 20 ? 1 : 0;
-    resize(ai, t, ShipType.Fishing, s.A[ShipType.Fishing]);
-    for (const e of resize(ai, t, ShipType.Light, s.A[ShipType.Light])) {
+    resize(ai, t, s, ShipType.Fishing, s.A[ShipType.Fishing]);
+    resize(ai, t, s, ShipType.Light, s.A[ShipType.Light]);
+    for (const e of gangOf(ai, t, s, ShipType.Light)) {
       if (e.job === 0 && e.inside < 0) ai.w.logistics.assign(e, 0x28, 1 + (ai.rand() % 5), [0, 0, 0, 0]);
     }
   }
@@ -543,30 +591,42 @@ function gangs(ai: Ai, t: Town, s: AiTown): void {
 
 /**
  * Gathering orders and free goods (phase 0, `0046e6b0`, `0046e260`): for wood, stone and food
- * with room in the stock, the nearest object within 20 cells of the town centre, else around the
- * nearest region points (at most 59 cells away, 10 cells around each); every idle gang member
- * gets a harvest job with auto-continue on it.
+ * with room in the stock, the nearest object in the square of half-size 20 around the town
+ * centre, else around the nearest region points (at most 59 cells away, half-size 10 around
+ * each); every living gang member without a job gets a harvest job with auto-continue on it,
+ * first run after 5 ticks; dead members leave the gang list then (1.8).
  */
-function gather(ai: Ai, t: Town, _s: AiTown): void {
+function gather(ai: Ai, t: Town, s: AiTown): void {
   const w = ai.w, eco = w.economy;
   const cap = t.capacity;
   const wanted = (good: number) => t.stock[good] < cap - 5;
   const want = [NC.Tree, NC.Stone, NC.Animal, NC.Bush].filter(cl => wanted(cl === NC.Tree ? WOOD : cl === NC.Stone ? STONE : FOOD));
-  // nature objects up to 69 cells from the centre, per class, in id order
+  // living nature objects up to 69 cells from the centre (a superset of every square searched),
+  // per class; no test of the amount left or of reservations (`00449a30`)
   const near: Record<number, Entity[]> = {};
   if (want.length) {
     for (const cl of want) near[cl] = [];
     for (const e of w.entities) {
-      if (e.kind !== KIND_NATURE || e.amount - e.reserved <= 0) continue;
+      if (e.kind !== KIND_NATURE || !e.alive) continue;
       const cl = w.rules.get(e.oid)?.cls ?? -1;
       const l = near[cl];
       if (!l) continue;
-      if (ai.distTo(e, t.x, t.y) <= 69) l.push(e);
+      const [ex, ey] = ai.cell(e);
+      if (Math.abs(ai.wrap(ex - t.x)) <= 69 && Math.abs(ai.wrap(ey - t.y)) <= 69) l.push(e);
     }
   }
+  // the square |dx|, |dy| <= r, scanned row by row (dy, then dx, from -r up); nearest by
+  // max + min / 2, the first cell in scan order on a tie
   const nearest = (l: Entity[], x: number, y: number, r: number): Entity | null => {
-    let best: Entity | null = null, bd = r + 1;
-    for (const e of l) { const d = ai.distTo(e, x, y); if (d < bd) { bd = d; best = e; } }
+    let best: Entity | null = null, bd = 0, by = 0, bx = 0;
+    for (const e of l) {
+      const [ex, ey] = ai.cell(e);
+      const dx = ai.wrap(ex - x), dy = ai.wrap(ey - y);
+      if (Math.abs(dx) > r || Math.abs(dy) > r) continue;
+      const a = Math.abs(dx), b = Math.abs(dy);
+      const d = Math.max(a, b) + (Math.min(a, b) >> 1);
+      if (!best || d < bd || (d === bd && (dy < by || (dy === by && dx < bx)))) { best = e; bd = d; by = dy; bx = dx; }
+    }
     return best;
   };
   const find = (cl: number): Entity | null => {
@@ -582,16 +642,27 @@ function gather(ai: Ai, t: Town, _s: AiTown): void {
     return null;
   };
   const send = (type: number, cl: number): boolean => {
-    const g = gangOf(ai, t, type);
-    if (!g.length || !wanted(cl === NC.Tree ? WOOD : cl === NC.Stone ? STONE : FOOD)) return false;
+    if (!wanted(cl === NC.Tree ? WOOD : cl === NC.Stone ? STONE : FOOD)) return false;
+    // "nothing found" at once when the gang list is empty (its count includes dead members)
+    const g = gangIds(ai, t, s, type);
+    if (!g.length) return false;
     const obj = find(cl);
     if (!obj) return false;
-    for (const u of g) if (u.job === 0 && u.inside < 0 && w.logistics.canHarvest(u, obj)) w.logistics.startHarvest(u, obj, true);
+    // the list walk: dead members leave it; a living member without a job gets the harvest job
+    // through the job hand-out (`00465650`, delay 5; a leisure visitor inside is ejected first).
+    // Ours skips a member inside a building other than on a leisure visit (rare).
+    for (let k = 0; k < g.length;) {
+      const u = w.get(g[k]);
+      if (!u || !u.alive) { g.splice(k, 1); continue; }
+      const visiting = u.inside >= 0 && u.idle === -1 && w.get(u.inside)?.kind === KIND_BUILDING;
+      if (u.job === 0 && (u.inside < 0 || visiting) && w.logistics.canHarvest(u, obj)) w.logistics.startHarvest(u, obj, true, 5);
+      k++;
+    }
     return true;
   };
   // AI fishing (addon.md 8.3): each boat of the gang gets new grounds on a random water cell
   if (w.addon && eco.space(t, FOOD) > 5) {
-    for (const boat of gangOf(ai, t, ShipType.Fishing)) {
+    for (const boat of gangOf(ai, t, s, ShipType.Fishing)) {
       if (boat.inside >= 0) continue;
       let x = 0, y = 0, water = false;
       for (let k = 0; k < 41 && !water; k++) {
@@ -610,7 +681,7 @@ function gather(ai: Ai, t: Town, _s: AiTown): void {
   if (eco.space(t, WOOD) > 5 && !woodOk && t.stock[WOOD] === 0) { t.stock[WOOD] = Math.min(2, cap); woodGift = true; }
   if (eco.space(t, STONE) > 5 && !stoneOk && t.stock[STONE] === 0) t.stock[STONE] = Math.min(2, cap);
   if (eco.space(t, FOOD) > 5 && !huntOk && !bushOk) eco.addGood(t, FOOD, 2);
-  if (eco.space(t, IRON) > 5 && t.stock[WOOD] >= 2 && gangOf(ai, t, U.Woodcutter).length && !woodGift && ai.rand() % 10 !== 0) {
+  if (eco.space(t, IRON) > 5 && t.stock[WOOD] >= 2 && gangIds(ai, t, s, U.Woodcutter).length && !woodGift && ai.rand() % 10 !== 0) {
     t.stock[IRON] += 1; t.stock[WOOD] -= 2;
   }
 }
@@ -626,34 +697,6 @@ function sliders(ai: Ai, t: Town): void {
   t.researchPct = Math.max(0, Math.min(100, Math.trunc(((I - t.overheads - reserve) * 100) / I)));
 }
 
-/** research choice (1.11): cursor over the race's invention table, overrides after a completion */
-function research(ai: Ai, t: Town, s: AiTown): void {
-  const w = ai.w, eco = w.economy, p = eco.players[t.race]!, ps = ai.players[t.race];
-  if (!ps) return;
-  const labActive = eco.count(t, B.Lab) > 0;
-  if (!labActive) { s.labSeen = 0; return; }
-  if (t.research >= 0) { s.labSeen = 1; return; }
-  const pick = (): number => {
-    const pre = ai.prerequisites[t.race] ?? [];
-    while (ps.cursor < p.costs.length) {
-      const i = ps.cursor++;
-      if (eco.researched(p, i) || p.progress[i] > 0 || eco.towns.some(o => o.alive && o.race === t.race && o.research === i)) continue;
-      if ((pre[i] ?? []).every(q => eco.researched(p, q))) return i;
-    }
-    return -1;
-  };
-  let topic: number;
-  if (!s.labSeen) { s.labSeen = 1; ps.cursor = 0; topic = pick(); }
-  else {
-    // a project was completed: the stonemason's, then the woodcutter's invention first
-    const inv = (ty: number) => w.rules.get(((t.race << 16) | ty) >>> 0)?.invention ?? -1;
-    const cand = pick();
-    const sm = inv(U.Stonemason), wc = inv(U.Woodcutter);
-    topic = sm >= 0 && !eco.researched(p, sm) ? sm : wc >= 0 && !eco.researched(p, wc) ? wc : cand;
-  }
-  if (topic >= 0) eco.selectResearch(t, topic);
-}
-
 /** market settings and merchants (phase 2, 4.6, `0046dd50`) */
 function markets(ai: Ai, t: Town, s: AiTown): void {
   marketPass(ai, t, s, 48, U.Merchant);
@@ -661,24 +704,35 @@ function markets(ai: Ai, t: Town, s: AiTown): void {
   if (ai.w.addon) marketPass(ai, t, s, HARBOUR, ShipType.Transport);
 }
 
+/**
+ * One pass of `0046dd50` (4.6): only while the first market (harbour) of the town's list is
+ * active, otherwise nothing at all (the want in A keeps its value). The traders handled: group
+ * 51 outside buildings, then free group-0 ones, each in town-list order. No partner: group 0 only
+ * (a running route goes on). Else group 51; a route whose destination is a partner is kept (any
+ * origin, paused too); any other trader gets a new route to the first partner, its load cleared,
+ * first run after 5 ticks.
+ */
 function marketPass(ai: Ai, t: Town, s: AiTown, terminal: number, unit: number): void {
   const trade = ai.w.trade;
-  if (!trade.hasActiveMarket(t, terminal)) { s.A[unit] = 0; return; }
+  const first = ai.list(t, terminal)[0];
+  if (!first || !first.active) return;
   trade.computerSettings(t, terminal);
   // merchants: partners on the town's island in add-on games; ships: any island (5.7)
   const island = ai.w.addon && terminal === 48 ? ai.w.islandAt(t.x, t.y) : -1;
   const partners = trade.partners(t, true, terminal, island);
   s.A[unit] = partners.length;
-  for (const u of ai.w.entities) {
-    if (u.kind !== KIND_UNIT || u.town !== t.id || (u.oid & 0xffff) !== unit || (u.oid >>> 16) !== t.race || !u.alive) continue;
-    if (u.inside >= 0 && ai.w.get(u.inside)?.kind === KIND_UNIT) continue;   // on board a ship
-    if (u.group !== Grp.None && u.group !== Grp.Economy) continue;
-    if (u.group === Grp.None && u.job !== 0 && !trade.routeOf(u)) continue;
-    if (!partners.length) { if (u.group === Grp.Economy) ai.release(u, true); continue; }
+  const mine = (u: Entity) => u.kind === KIND_UNIT && u.town === t.id && (u.oid & 0xffff) === unit && (u.oid >>> 16) === t.race;
+  const traders: Entity[] = [];
+  for (const u of ai.w.entities) if (mine(u) && u.group === Grp.Economy && u.inside < 0) traders.push(u);
+  for (const u of ai.w.entities) if (mine(u) && ai.free(u)) traders.push(u);
+  for (const u of traders) {
+    if (!u.alive) continue;
+    if (!partners.length) { u.group = Grp.None; continue; }
     u.group = Grp.Economy;
     const route = trade.routeOf(u);
-    if (route && !route.paused && route.from === t.id && partners.some(o => o.id === route.to)) continue;
-    trade.startRoute(u, t.id, partners[0].id, false);
+    if (route && partners.some(o => o.id === route.to)) continue;
+    trade.startRoute(u, t.id, partners[0].id, false, 5);
+    u.carryAmount = 0; u.carryGood = -1;
   }
 }
 
@@ -688,7 +742,6 @@ export function runMilitary(ai: Ai, job: Job): number {
   const live = aliveTown(ai, job, 'military');
   if (!live) return 0;
   const { t, s } = live;
-  record(ai, t, s);
   const c = census(ai, t);
   let soldiers = 0;
   for (let ty = U.Archer; ty <= U.LastSoldier; ty++) soldiers += c.units[ty];
@@ -700,21 +753,6 @@ export function runMilitary(ai: Ai, job: Job): number {
   if (phase === 0) defenceTargets(ai, t, s, c);
   else respond(ai, t, s);
   return 50;
-}
-
-/**
- * Intruder records (2.2, `004621c0` -> `0046cab0`): the original records every unit that steps
- * into the town's area. Ours polls every military run: units of other races standing in the
- * town's territory are added (once, in id order).
- */
-function record(ai: Ai, t: Town, s: AiTown): void {
-  // dead or removed units leave the records (they would be dropped by the next response anyway)
-  s.intruders = (s.intruders ?? []).filter(id => ai.w.get(id)?.alive);
-  const have = new Set(s.intruders);
-  for (const e of ai.w.entities) {
-    if (e.kind !== KIND_UNIT || !e.alive || e.inside >= 0 || (e.oid >>> 16) === t.race || have.has(e.id)) continue;
-    if (ai.inTerritory(e, t)) s.intruders.push(e.id);
-  }
 }
 
 /** first-run delay of every attack job made by the AI routines (`00465650`, called with 5) */
@@ -751,7 +789,8 @@ function defenceTargets(ai: Ai, t: Town, s: AiTown, c: Census): void {
         if (ofType(ai, t, e, ty) && e.group === Grp.None && e.inside < 0) { e.group = Grp.Defence; g.push(e); }
       }
     }
-    while (g.length > keep) g.pop()!.group = Grp.None;
+    // extras leave from the front: the oldest units of the type first (`0046cb20`)
+    while (g.length > keep) g.shift()!.group = Grp.None;
   }
   // The outpost refill compares occupants with the record's resident places (+0xB4), which are 0
   // for outposts: no archer is ever sent and no rand() drawn (2.2). Garrisons come only from the

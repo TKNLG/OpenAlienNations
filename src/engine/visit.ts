@@ -4,7 +4,6 @@
 // (docs/game/units-and-jobs.md 4.2, 4.4).
 
 import type { World, Entity } from './world.ts';
-import { MAX_PLANS } from './motion.ts';
 
 const SUBCELL = 256;
 const KIND_BUILDING = 1;
@@ -20,14 +19,20 @@ export function setAction(w: World, u: Entity, a: number): void {
 }
 export const setIdle = (w: World, u: Entity) => setAction(w, u, ACT_IDLE);
 
-/** start walking to a cell; true if a path exists (or the unit is already there) */
+/**
+ * Start walking to a cell with the original's follow-path walk (`World.follow`, units-and-jobs.md
+ * 4.1): a search that finds nothing does not end it. False only where that walk fails at once
+ * (add-on land walks toward another island); ships keep their one search.
+ */
 export function walkTo(w: World, u: Entity, x: number, y: number): boolean {
-  const ok = w.walk(u, x, y);
-  if (ok && u.path) setAction(w, u, ACT_WALK);
-  return ok;
+  return w.isShip(u) ? w.walk(u, x, y) : w.follow(u, x, y);
 }
 
-/** go to an object: a building's entrance, otherwise the object's cell, moved by the go-to target chooser (4.2, 4.8) */
+/**
+ * Go to an object (the go-to job 0x07, units-and-jobs.md 4.2, 4.8): a building's entrance,
+ * otherwise the object's cell, moved by the go-to target chooser. The walk's outcome is not
+ * looked at by the caller: the go-to then asks at the door from wherever the unit stands.
+ */
 export function walkToEntity(w: World, u: Entity, e: Entity): boolean {
   const [px, py] = e.kind === KIND_BUILDING ? w.logistics.entrance(e) : cellOf(e);
   if (w.logistics.doorInside(e) || w.isShip(u)) return walkTo(w, u, px, py);
@@ -36,15 +41,20 @@ export function walkToEntity(w: World, u: Entity, e: Entity): boolean {
 }
 
 /**
- * Close enough to enter (at a building's entrance) or to act on an object (adjacent). A walk the
- * arrival tolerance ended a little short of a door counts as arrived (4.1; entering has no distance test).
+ * May the unit ask at the door now? Entering measures no distance (units-and-jobs.md 4.2, 4.10):
+ * a unit whose walk failed asks from where it stands. Only the add-on harbour / shipyard (door
+ * inside) and ships keep the docking range test.
  */
 export function nearEntity(w: World, u: Entity, e: Entity): boolean {
-  if (w.logistics.doorInside(e)) return w.naval.dockRange(u, e);   // add-on harbour / shipyard
-  const [ux, uy] = cellOf(u);
-  const [x, y] = e.kind === KIND_BUILDING ? w.logistics.entrance(e) : cellOf(e);
-  const d = w.logistics.dist(ux, uy, x, y);
-  return d <= 1 || (e.kind === KIND_BUILDING && d <= MAX_PLANS && w.walkOk(u));
+  if (w.logistics.doorInside(e) || w.isShip(u)) return w.naval.dockRange(u, e);
+  return true;
+}
+
+/** the remaining ticks of the unit's walk step, turn or wait (a job running at its walk's delays); 1 when due */
+export function walkDelay(w: World, u: Entity): number {
+  const tick = w.tick, stepEnd = u.stepStart + u.stepTicks;
+  if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
+  return u.moveAt > tick ? Math.min(599, u.moveAt - tick) : 1;
 }
 
 /**

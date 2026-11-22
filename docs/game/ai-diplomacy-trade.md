@@ -411,6 +411,44 @@ bush list for 9; see 1.13) nearest to the town while the nearest one is at most 
 search 10 cells around it, discarding points that yield nothing. Every gang member without a job
 gets a harvest job with auto-continue on the found object (`units-and-jobs.md` 7.1).
 
+Search and hand-out in detail (C, fidelity audit 2026-11, `0046e260`, `00449a30`):
+
+- The object search (`00449a30`) scans a **square**, not a disc: every cell with
+  |dx| <= R and |dy| <= R (wrapped) around the centre (R = 20 around the town's position, 10
+  around a region point), row by row (dy from -R to +R, inside each row dx from -R to +R). A
+  cell counts when its object flag (0x10) is set and the object standing there has the wanted
+  behaviour class (record +0xC0). The nearest by max + min / 2 of |dx|, |dy| wins; the comparison
+  is strict, so on a tie the first cell in that row order is kept. There is **no test of the
+  object's remaining amount and no test of reservations** by other harvesters: a tree that four
+  woodcutters are already felling is found as readily as a fresh one.
+- The routine returns "nothing found" at once when the gang list is empty (its count, which
+  still includes dead members, see below).
+- When an object was found, the gang list is walked in its order: a **dead** member is removed
+  from the list here (this is the only place dead gatherers leave a gang list); a living member
+  **without a job** gets the harvest job (kind 0x16, auto-continue byte 1) through the job hand-out
+  `00465650` with a first-run delay of **5 ticks** (`units-and-jobs.md` 1.2: a member standing
+  inside a building is blocked for 5 ticks and ejected first). A member with any job, a leisure
+  visit included, is left alone. No limit on the number of members (the count argument is -1).
+- When nothing was found, the list is not walked, so dead members stay counted.
+- *Our build: as described since November 2026, except that a member standing inside a building
+  without being on a leisure visit (rare) gets no harvest job; before, the search was a disc
+  that skipped objects with nothing left to reserve, ties went by object id, members inside
+  were skipped, the delay was 1, and gangs released their newest member.*
+
+**Gang lists (C, `0046ea30`, `0046ebc0`).** Each gang is a list on the economy job (woodcutters
++0x48, stonemasons +0x3C, hunters +0x60, bush porters +0x54) in **join order**. A resize:
+
+- while the list's count (dead members included) is below the wanted size and the town has free
+  group-0 units of that type (section 0, collected in town-list order), the first free unit joins
+  at the end of the list (group 51, a reference);
+- while the count is above the wanted size, the **first** entry of the list (the member that
+  joined first) is removed: group 0, its reference dropped, and, if the town has a school (any
+  state), a go-into job (`0047ac60`) to the first school of the town's list, handed out through
+  `00465650` with a first-run delay of **5 ticks**. A dead first entry is removed the same way.
+- The bush-porter size depends on the hunter list after its resize: "empty" means a count of 0,
+  so a gang of dead hunters still blocks the bush porters until a successful hunt search drops
+  them.
+
 **Free goods (AI only).** In the same phase:
 
 | condition | gift |
@@ -465,6 +503,11 @@ free porters (group 0) join it, but n/4 + 1 of them (when n > 2) are always left
 too large, the surplus is released. The dispatcher of a computer town only uses gang porters
 (group 50) for transport and requests, so the AI's hauling capacity is the gang. (C)
 
+The gang is a list on the planner (+0x32C) in **join order** (C, `0046aed0`, fidelity audit
+2026-11): dead members are removed first; new members are appended at the end; a surplus is
+released from the **front** (the porter that joined first): group 0, reference dropped, nothing
+else (no job).
+
 ### 1.11 Research choice (C, `00410490`, `0046f490`, `0045fa40`)
 
 - Each race has one invention table and one **cursor** (idb object +0x14), shared by all computer
@@ -478,6 +521,29 @@ too large, the surplus is released. The dispatcher of a computer town only uses 
   invention if not researched, else the woodcutter's, else the cursor pick (which has already
   advanced the cursor even if an override was used, so that pick is lost until the next reset).
   No topic left: research stops.
+
+Details (C, fidelity audit 2026-11):
+
+- **When it happens.** Both choices are made by the game events themselves, at once: the
+  laboratory branch of the building activation (`0045fa40`: a building of type 46 becoming
+  active whose nation is a computer player; **every** activation, also a second laboratory or a
+  laboratory whose operator comes back) resets the race's cursor to 0, picks, and selects the
+  pick in the town (`0045a570`); and the research job's completion run (`0046f490`) picks the
+  follow-up in the same run. Selecting through `0045a570` replaces a running project (a new
+  research job, first step after 30 ticks, `economy.md` 4.4.1 "Starting"); an empty pick (-1)
+  at activation changes nothing. There is no polling.
+- **"Started"** is the invention's byte +0x3C in the race's invention set. `0045a570` sets it on
+  every selection (by any town of that race), and only the stop command (`0045a730`, human
+  panel) clears it. So for a computer race an invention counts as started as soon as one of its
+  towns has ever selected it, even when that town was destroyed or switched to another project
+  before finishing it: the cursor pick never offers it again (the overrides below can).
+- **Overrides after a completion** (`0046f490`): the pick is made first (cursor advanced). Then
+  the stonemason's (type 27) required invention (record +0xE4) is chosen if it is not invented
+  **and differs from the pick**; else the woodcutter's (type 19) under the same two tests; else
+  the pick. So when the pick is the stonemason's invention and the woodcutter's is still
+  missing, the woodcutter's comes first (the stonemason's follows at the next completion through
+  the override). The override does not test "started". No override and an empty pick: the
+  town's project becomes -1 and its research job ends.
 
 ### 1.12 Founding new towns (C, `00468cc0`, `00467f80`, `00467e10`)
 
@@ -500,7 +566,11 @@ The founding mission (every 50 ticks):
 3. The mission's target starts at the old town (never valid). While the target is not valid, the
    start-candidate list of the map (`.dvm` point list 3, see 1.13) is scanned **in order**; around
    each candidate a site within 20 cells is searched; the first hit becomes the target. If no
-   candidate gives a site, the mission ends.
+   candidate gives a site, the mission ends. The search around a candidate is the site-search
+   ring walk `00449c00` with radius 20 (`world-populate.md` 2.3; C, fidelity audit 2026-11): the
+   candidate cell itself, then the square rings of half-size h = 1, 2, ... (each ring from
+   (+h, -h) along +y, -x, -y, +x), scale 2 because 20 > 15, so after ring 9 only the corner
+   (+10, -10) of ring 10 is tested: about 360 cells, all within 10 cells of the candidate.
 4. When the founder (outside any building) is 8..15 cells from the target, the town is founded
    there: a new town object with a town-hall site is created and the founder gets the normal
    "found town" job (`00464aa0`, `units-and-jobs.md` 3.1 kind 0x0E). The founder want is cleared.
@@ -682,7 +752,9 @@ has no defence at all.
   units **outside** buildings (any job); missing ones are taken from group-0 units **outside**
   (any job, section 0), extras get group 0 (nothing else happens to them). Units of group 52
   inside a building (e.g. an outpost garrison) are not counted, so the group refills behind
-  them.
+  them. Both lists are collected fresh in town-list order (creation order), new members are
+  taken from the front of the group-0 list, and extras are released from the **front** of the
+  member list, i.e. the oldest units of the type first (C, `0046cb20`, fidelity audit 2026-11).
 - Outpost refill (`0046cfd0`): the code walks the active large outposts, then the small ones,
   and would send a free group-52 archer into each one whose occupant count is below the record's
   **resident places** (+0xB4), with a go-into job first run after 3 + rand() mod 10 ticks. All
@@ -692,6 +764,32 @@ has no defence at all.
 
 **Intruders.** Whenever any unit steps into the area of a computer town, it is recorded on that
 town's military job (`004621c0` -> `0046cab0`). (C)
+
+In detail (C, fidelity audit 2026-11; Gold the same in its `SetPosition`):
+
+- The record is made by the position setter `004621c0`, which runs on **every cell step** of a
+  walking unit (its only callers are the follow-path step `00480410` and the evade step
+  `0047df70`); placing a unit (birth, leaving a building, unloading) does not run it. It only
+  acts for objects whose record kind (+0xA4) is 0, i.e. units: animals (kind 2) are never
+  recorded by their steps.
+- When the new cell lies in a town area whose owner nation is a computer player **other than
+  the unit's nation**, the unit is appended to the military job's intruder list of the town
+  that owns that area (found by the area's town id in the owner's town list; nothing when that
+  town has no military job), provided the unit is alive. **No de-duplication**: a raider that
+  walks 30 cells inside the area is on the list 30 times. Units of nations at peace, diplomats
+  and merchants are recorded too (the response sorts them out).
+- The strike alert (`00462e30`, `combat.md` 7 step 1) appends the striker once **per strike**
+  (also no de-duplication; animals that strike count here).
+- The list keeps its order (recording order). The response (below) removes **every copy** of a
+  unit that is dead or fails the test (they fail together); the copies of a unit that passes
+  stay, and each copy is filed into its bucket, so the bucket holds the unit as often as it was
+  recorded and still passes. Since the assignment gives 3 defenders per bucket entry in turn,
+  the response is weighted towards the unit that walked or struck most inside the area.
+- In the same setter, right after, a unit of a **computer** nation stepping onto a cell of any
+  town area adds that town's id to its nation's known-town set (AI general +0x3C, ordered by
+  id; own and other computer towns included). Profile 2 takes its target from this set (2.4);
+  a destroyed town's id is removed from every living computer nation's set (`00459400`,
+  `combat.md` 10.4).
 
 **Phase 1: response** (`0046d3a0`)
 
@@ -762,9 +860,9 @@ or 1.
 | 0 | candidates > min(10, tick / 30000); more than the cooldown ticks since the last army activity; hostile to the human | the first other living player in race order whose strength x 0.5 < own strength, or any such player while tick < 54000 (about 1.5 h); its first town |
 | 1 | candidates > min(20, tick / 20000); cooldown; hostile to the human | the first other living player whose strength < own; its first town |
 | 2 | candidates > min(20, tick / 30000); cooldown; hostile to the human; own strength > 1.5 x the human's | the first human town (in town-id order) that the AI has **discovered**: a town is discovered when any unit of this AI steps into its area (`004621c0`); forgotten when the town is destroyed (`00459400`) |
-| 3 | more than 2 candidates; hostile to the human | the army is cut to 1..3 units (rand() mod 3 + 1); a random town of the human |
+| 3 | more than 2 candidates; hostile to the human | the army is cut to 1..3 units (rand() mod 3 + 1), keeping the **last** candidates; a random town of the human |
 | 4 | never attacks | - |
-| 5 | candidates > n + 1, where n = 1 until tick 60000, then min(15, tick / 20000 + 4); hostile to the human | the army is cut to n + rand() mod 3 units; a random town of the human |
+| 5 | candidates > n + 1, where n = 1 until tick 60000, then min(15, tick / 20000 + 4); hostile to the human | the army is cut to n + rand() mod 3 units, keeping the **last** candidates; a random town of the human |
 
 Notes:
 
@@ -820,6 +918,13 @@ Notes:
   defence hunter stays free. First raids by population (C by consequence, hunting researched):
   profile 0 from P 10 (one hunter; two from P 11), profile 1 from P 14 (K = (P - 8) / 6 >= 1),
   profile 2 from P 16 and only against the human.
+- **The cut** (profiles 3 and 5; C, `00469cd0`, `0046a320`, fidelity audit 2026-11): while the
+  candidate list holds more than the cut c, its **first** entry is erased (the erased units just
+  stay free in group 0). So the army keeps the last c candidates of the collection order (2.3:
+  per town in town-list order, free hunters first, then soldiers by type 29..36, add-on warships
+  last): soldiers before hunters, the later towns' units before the earlier ones'. A profile-3
+  raid of 2 from a town with two free hunters and one free archer sends the second hunter and
+  the archer.
 - rand() order when an army is created: profile 3 first draws rand() mod 1 (DAT `004afec8` = 1,
   always passes), then the cut (rand() mod 3); profile 5 the cut; both draw the cut **before**
   the hostility test, so a non-hostile think still consumes it; profiles 3 and 5 then the town
@@ -840,7 +945,10 @@ Notes:
 
 **Joining and moving** (`00465ad0`, called at creation and by every later think; C):
 
-- Each joining unit gets group 53 and a reference. Nothing else is done to a member within 20
+- Each joining unit gets group 53 and a reference and is appended to the army's member list,
+  which therefore keeps **join order** (the order of the candidate list within a join, then
+  later joins behind; C, `00465ad0`). Every walk over the members (power, assignment, the end)
+  goes in this order. Nothing else is done to a member within 20
   cells of the target point (max + min / 2 not above 20).
 - A member farther away has its current job cancelled and gets its own follow-path walk (job
   0x06, not a player order) to the first free cell of a spiral around the target point (the
@@ -980,6 +1088,19 @@ Notes:
   per target (counter > 2); a member already attacking is re-assigned only when bucket 0 is
   taken and its target's class is above 0, otherwise it keeps its target; **no rand() draw**.
   Then the next tactic is rand() & 1. Gold (`0046d9e0`): the same aboard rule as tactic 0 step 6.
+- **When the target town falls** (C, `004673d0`, `00465710`, fidelity audit 2026-11): nothing
+  ends the army. It holds a reference on its target town object (town +0x38, taken in the
+  constructor), so the destroyed town is not freed and stays in its nation's town list while the
+  army lives (`combat.md` 10.4 "Lifetime"). Every run still tests only the relation of the pair
+  (army race, the target town's nation's race) and then runs a tactic on the **stored target
+  point**: the town's outposts, barracks and other lists and the important list are empty (its
+  buildings died), so the assault files the target race's objects in the 40-cell circle around
+  the old town hall (units of that race still standing there, buildings of another town of that
+  race within the circle; a town hall among them is set aside below 10 members), the skirmish
+  that race's units outside buildings in the circle. The army ends as described below: a
+  success when the chosen bucket(s) are empty, a retreat, no members, or a relation change. So
+  survivors and nearby buildings of that race are still attacked after the fall, and later
+  thinks keep adding candidates that walk to the old site.
 - So an army never ends by itself while its target town stands, except through a skirmish run
   that finds no unit of the target race outside buildings in the circle (success), a retreat,
   the loss of all members, or a relation change. After a success the members walk home, become
@@ -1146,8 +1267,14 @@ Combat code treats 0 and 1 the same way (`mdb.md`; details in `combat.md`). (C f
   other active embassy**, every relation of that player that is not 0 is set back to 0. A diplomat
   walking out on an errand does **not** deactivate the embassy (the operator leaving normally keeps
   the building active, `004613f0`).
-- An active embassy runs an operator job every 100 ticks that ejects all occupants of other races
-  (e.g. a foreign diplomat after his visit) (`00478cb0`, operator 13).
+- **Eject of foreign diplomats** (C, `00460ed0`, operator job `00478cb0` case 13). The embassy's
+  operator job (0x22) runs **once**: 100 ticks after it is made it ends at once if nobody is
+  inside, otherwise it ejects every occupant whose race differs from the embassy's (occupant
+  order) and ends (returns 0; it is not periodic). It is made (first run after 100 ticks) when
+  the own diplomat enters the active embassy (replacing a job in the slot), and when a diplomat
+  of **another race** enters while the building's job slot is empty. So a visiting diplomat is
+  ejected 100 ticks after he entered, or earlier when the own diplomat came in less than 100
+  ticks before him (whose job then ejects him at its run).
 
 ### 3.4 Offers and the diplomat (C, `004618b0`, `00478650`, `00478910`)
 
@@ -1184,8 +1311,20 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    run first decides when the state is 1 (then sets 2), then runs the child; when the child ends
    in state 0, the state becomes 1 if the go-to succeeded (child +0x19) or 2 if it failed, and a
    go-to home becomes the new child; when it ends in state 2 the errand ends.
-3. When he has entered it (go-to succeeded), the offer is decided on the errand's next run,
-   **automatically**, by the target player's acceptance flags (3.5), not by a dialog. The receiver
+3. When he has entered it (go-to succeeded), the offer is decided only **after the host embassy
+   has ejected him** (C, `00460ed0` `460f05..460f0e`, `00478910` state 1). Entering blocks his
+   current job (job +4 = 10: not run, re-polled every 10 ticks; all unit types except criminals)
+   until a leave job releases it. In the entering run the go-to child ends with success, so the
+   errand sets state 1 and makes the go-to home as its child at once, then sits blocked. The
+   host's operator job ejects him (100 ticks after his entry, see 3.3); the leave job (10 ticks,
+   the door, `units-and-jobs.md` 4.10) puts him outside and unblocks the errand; at its next
+   poll (within 10 ticks) the errand runs: state 1 decides the offer (messages, relation
+   broadcast), sets state 2 and runs the go-to home in that same run. So an offer is decided
+   about 120..130 ticks after he walked in (more when his door cell is taken). *Our build
+   (November 2026, `diplomacy.ts`, `logistics.ts foreignOperatorEntered`): the errand sets its
+   own hold of 10 on entry, the embassy's one-run operator job ejects him, the leave job's end
+   unblocks the errand, which decides at its next poll and walks home.* The decision is **automatic**, by the target
+   player's acceptance flags (3.5), not by a dialog. The receiver
    sees no offer to answer: a human target only hears the receiver line below when the offer was
    accepted (or war declared), and the diplomacy page shows the new state; a computer target's
    flags are its answer. A refusal leaves the receiver silent (no text exists for 82..87), but
@@ -1204,7 +1343,11 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    errand ends. Applying the state changes nothing but the table: no unit, job or army is touched
    (3.8).
 5. If he dies or cannot enter, nothing changes (handbook: a third nation may capture him; there is
-   no separate capture rule, I).
+   no separate capture rule, I). The go-to into the embassy ignores how its walk ends and enters
+   from wherever he stands (`units-and-jobs.md` 4.2, 4.10): only a refusal at the door (or the
+   embassy gone) fails it.
+   An offer value outside 1..3 would be written into the relation table directly; the panel never
+   sends one (C, `00478910`, D6).
 6. "Diplomat zurückbeordern" (T254, command 0x60 `00452d40`, C at instruction level) acts on the
    selected embassy's stored diplomat (+0xA8) and only when his **current** job, or the job
    queued behind it (+0x20, e.g. behind a leave job), is an errand 0x38. Without an errand
@@ -1229,6 +1372,8 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    embassy a recall turns peace or ceasefire into war, even for a diplomat already walking home
    after a won peace. An errand aborted while it has no child (the no-target case) keeps the
    embassy active. *(The old reading, "the errand goes on and only walks him home", was wrong.)*
+   The errand's destructor (`00478880`) deactivates only when the unit is dead or the errand has
+   a child: an errand cancelled while it has none (no target embassy) keeps the embassy active.
 7. **Link to the embassy** (C, `units-and-jobs.md` 8.5): during the errand he stays the embassy's
    stored operator and the embassy stays active. Back inside, the entry restarts the embassy's
    operator job (first run after 100 ticks). If the errand is destroyed under way (it has a walk
@@ -1275,6 +1420,18 @@ Each player holds, per other race, "accept peace" (player +0x261 + race) and "ac
   timestamps start at 0, so not before tick 6001), then a 1/15 chance (rand() is only drawn when the
   time condition holds), the desired state differs from the current one, the current state is not
   0, the AI owns a town, and the **first** town's embassy is active with its diplomat at home.
+
+- **Details** (C, `004687a0`, fidelity audit 2026-11): the loop runs over the race slots 0..2
+  and evaluates every other player that is **present and alive** (player +0x0C, cleared only by
+  the defeat, `combat.md` 10.4 step 5), **with or without a town**: the free-play human who has
+  not founded his town yet gets his flags written and, after tick 6001, his rand() mod 15 draw.
+  Per player the order is: the time test and (only when it holds) the rand() draw, then the two
+  strengths and the flags, then the relation lookup (no entry counts as -1, which passes the
+  "not 0" test), then the offer test. "Owns a town" is the town list's count (+0x238, destroyed
+  towns not yet freed included); the town used is the **first entry of the town list** (even a
+  destroyed one, whose embassy list is then empty: no offer), and of it the **first** embassy of
+  its list, which must be active (state 2) with its operator set and inside it. A later active
+  embassy is not looked at.
 
 ### 3.6 Diplomacy panel and commands (C for commands; layout in `ui/side-panel.md`)
 
@@ -1425,17 +1582,71 @@ per race, up to 10 such towns (`00456fc0`).
 - **Merchant**: unit type 28, trained at the school; carries up to **5 units of one good**.
 - **Route job** (kind 0x20): origin town A, destination town B. Merchants may enter buildings of
   other races (`units-and-jobs.md` 4.4).
-- **Start**: the route command with both towns (own town A, any listed partner town B) replaces
-  the merchant's job and starts at once (`004522d0`); with only one end set, a paused route job is
-  created and the given end stored. **Stop** ("Handelsroute stoppen") pauses the job (hold 599)
-  (`00452620`).
-- **Trips**: first to A's market, then to B's, then back and forth. "A's market" means the market
-  of that town nearest to the merchant (any state, `0045ad40`).
-- **Each run** (whenever a trip leg finishes, re-run after 1 tick):
-  - if A or B no longer exists: the route ends (failure);
-  - if B's race differs from the merchant's and their relation is not peace: the current trip is
-    cancelled and the merchant goes home (to A's market; the job ends there);
-  - if the town he heads to has no market: the route ends and he walks to his home town.
+- **Fields** (`0047cd10`): A (+0x24), B (+0x28), first-leg source town (+0x2C, = A at creation),
+  target town (+0x30, = B at creation), state (+0x34: 0 trading, 1 homeward after a peace loss),
+  the leg child (+0x14).
+- **Route command** (msg 0x46, `004522d0`, C), sent by the trade-route page on every town click
+  and by its start: it acts on the selection's first unit if it is a merchant (28).
+  - **Both ends** given: the current job gets the cancel flag, and a new route job (A, B) is made,
+    first run after **1** tick.
+  - **One end** given (the other byte 0xFF): if the merchant's current job is a route job it is
+    **kept as it is** (running or paused); otherwise his current job (if any) is cancelled and a
+    new route job with no ends is made, **blocked 599** (paused). Then the given end is written:
+    A (an own town) sets A and the first-leg source (+0x2C = A); B (a town of any player) sets B
+    **and the current target** (+0x30 = B). So clicking a town on a running route **redirects**
+    the live route; a paused route stays paused with the new end.
+  - No end is checked for peace, life or sameness here; the job's runs do that.
+- **Stop** ("Handelsroute stoppen", `00452620`): blocks the job for 599 ticks (job +4 = 599),
+  only when his **current** job is the route job. While he is on his way out of a market (the
+  leave job is current) the command does nothing.
+- **Each run** (`0047ce00`, C), in this order:
+  1. A or B missing or destroyed: the job ends at once (failure), with its leg.
+  2. Not homeward, and B's race differs from his and their relation is not **peace**: the leg
+     child is deleted on the spot (mid-walk too) and the state becomes 1 (homeward). These two
+     checks run on **every** run of the job, i.e. at every delay its child returns (once per
+     step while walking), not only between legs: **a war turns the merchant round where he is.**
+  3. A leg child running: run it; its delay is the job's delay.
+  4. No child, state 0: m = the target town's market nearest to the merchant (`0045ad40`, any
+     state). None: the route ends; a merchant (type 28) gets a **walk home** as his new current
+     job (below) and the route job ends. Otherwise the leg child is a transport-like job
+     (`DVResourceJob`) from **source** = the first-leg town's market nearest to him (only while
+     +0x2C is set; none afterwards) to **destination** m: with a source he first goes into the
+     source market, then into m; without one straight into m. Each visit is a go-to into the
+     building (`units-and-jobs.md` 4.2): walk failure is ignored and he asks at the door from
+     where he stands.
+  5. No child, state 1: m = A's market nearest to him. None: walk home as in 4, the job ends.
+     Otherwise the child is a plain go-to into m.
+  6. When the child ends (returns 0), **whatever its result**: in state 1 the route job ends
+     there; in state 0 the job returns 1 and the target is updated: after the first leg (+0x2C
+     set) +0x2C is cleared and the target becomes the **source market's town** (A); after any
+     later leg the target **flips** (B ↔ A). A failed or aborted leg (market gone, door
+     refused) counts as done: the target flips and the route goes on. It ends only by a
+     destroyed town, a town without a market (walk home) or the peace loss.
+     *Deviation: an A click on a running route sets +0x2C again; when the leg under way had no
+     source, the original then reads the town of an empty source when that leg ends (a fault).
+     Our build takes A as the new target in that case.*
+- **Trips** therefore run: A's market then B's market (the first leg), then A, B, A, ... "A's
+  market" means the market of that town nearest to the merchant (any state).
+- **Walk home** (T5): a follow-path move (job 0x06, first run after 1 tick) to the first cell of
+  the square spiral of `units-and-jobs.md` 4.8 around **his own town's position** (the town he
+  belongs to, its town-hall anchor) whose flags miss his movement mask 0x3E (no unit, building,
+  nature, water). It replaces the route job as his current job. Only merchants walk home; for
+  any other trader (Gold ships) the route just ends.
+- **Entering a market** on a leg: the "unit entered" step (`00460ed0`) finds the transport-like
+  job in his chain, makes the trade (below) and **ejects him at once** (4.10). His route job is
+  blocked from the entry (job +4 = 10) until the leave job is over, so the next part of the leg
+  (or the next leg) starts at the route job's first poll after he is outside. On the homeward
+  go-to (state 1) there is no transport job in the chain, and an own-race merchant is no unit
+  the market admits (`units-and-jobs.md` 4.4): the go-to ends at the door and the route with it.
+- *Our build (November 2026, `trade.ts runJob`, `visit.ts`; tests `trade.test.ts`,
+  `combat-social5.test.ts`): as above. The job data hold A, B, the target (leg 0 = A, 1 = B), the
+  first-leg marker and the first leg's destination market (snapshot version 22; older route
+  jobs go on as later legs). The leg is modelled inside the route job instead of a separate
+  transport-like child; the trade happens on entry and the market ejects him at once, the route
+  job blocked (hold 10) until the leave job ends. Walks use `World.follow` and their outcome is
+  ignored (he asks at the door where he stands); only Gold ships keep their one search and the
+  docking range test (a ship that cannot dock counts the leg as failed). On the homeward go-to
+  the route ends when the walk ends, without the door request that the original refuses.*
 - **At a market of town M** (on entering it; the other end of the route is D):
   1. **Unload**: if M has purchase enabled for the carried good, he puts down
      min(carried, M.max stock - M.stock). No money changes hands here. The rest stays on him.
@@ -1452,6 +1663,9 @@ per race, up to 10 such towns (`00456fc0`).
      cut to D's owner's money / price. The payment is price x n with price = **M's minimum sale
      price**: M's owner receives it; D's owner pays it only if human (clamped at 0). M's stock
      drops by n; the merchant now carries the good.
+     When n ends up 0 (no room, no money) the carried good is still set to the chosen good
+     (with the amount unchanged); nothing is paid or moved (audit reading of `0047d4d0`, not
+     re-checked at instruction level; cosmetic).
 - Own-race routes move goods without money (handbook p. 35).
 - The handbook's "he trades at the terms of his departure market" is only partly true: each load
   is paid at the sale price of the market where it is loaded; the destination's maximum price is
@@ -1470,9 +1684,11 @@ Money flow summary (`0047d4d0`, `0045dab0` add, `0045db60` subtract):
 | ending | code |
 |---|---|
 | new order to the merchant | replaces the job (C) |
-| "stop route" | pauses (hold 599), job kept (C) |
-| a market destroyed | the route ends when the merchant next needs that market (C) |
-| peace with the partner ends | the merchant returns to A and the route ends (C) |
+| "stop route" | pauses (hold 599), job kept (C); ignored while he is leaving a market |
+| a town click on the route page | a running route is redirected, a paused one keeps its pause (C) |
+| a market destroyed | the leg toward it fails and the route flips to the other town; the route ends only when the town it heads for has no market at all (walk home) (C) |
+| peace with the partner ends | at his next run (mid-walk too) he turns round to A's nearest market and the route ends at its door (C) |
+| A or B destroyed | the route ends at his next run (C) |
 | the merchant is attacked | I: the flee job of an unarmed unit replaces the route (`units-and-jobs.md` kind 0x26); not traced |
 
 The trade route panel has **no good buttons** (an earlier reading mistook its race tabs for
@@ -1499,6 +1715,24 @@ partners is written to the planner's array A for merchants (so the AI trains one
 partner). Every merchant of the town (free or group 51): with no partner it is released; otherwise
 it joins group 51, keeps its route if its current destination is still a partner, else gets a new
 route from this town to the **first** partner in the list.
+
+In detail (C, `0046dd50`, fidelity audit 2026-11; the add-on runs the same routine for harbours
+and transport ships, `addon.md` 8.6):
+
+- "Has an active market" means: the town's market list is not empty and its **first** market is
+  active (state 2). Otherwise the routine does nothing at all: no settings, and the merchant want
+  in A keeps its last value.
+- The merchants handled are the town's merchants of group 51 standing **outside** buildings (any
+  job), then its **free** group-0 merchants (section 0), each list in town-list order. A group-0
+  merchant that is not free (for example one still on a route) is not handled.
+- For each living one: with **no partner** it only gets group 0; its job (a running route
+  included) is kept and nothing else happens. With partners it gets group 51; if its job is a
+  trade route (kind 0x20) whose destination town B (job +0x28, fixed when the route was made) is
+  in the partner list, it keeps that job, whatever the route's origin and also when it is a
+  paused route. Otherwise its job (if any) is cancelled, its load is cleared (unit +0x3C = 0:
+  the goods it carried are lost), and it gets a new route job (this town to the first partner)
+  through the job hand-out `00465650` with a first-run delay of **5 ticks** (a merchant inside a
+  building is ejected first).
 
 ---
 

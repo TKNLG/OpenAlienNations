@@ -405,7 +405,8 @@ function jobText(pc: PageCtx, u: Entity): string {
     case CJ.Attack: return hud.str(262, name(d[0]));
     case CJ.Flee: return hud.str(274, name(d[0]));
     case CJ.Guard: return hud.str(276);
-    case CJ.Heal: return hud.str(277, d[1] ? name(d[2]) : '');
+    // a priest without a patient: an empty line (`00481380`)
+    case CJ.Heal: return d[1] ? hud.str(277, name(d[2])) : '';
     case MJ.TurnIdle: return hud.str(278);
     // step aside, criminal, escort, garrison fire: an empty line
     case MJ.StepAside: case CJ.Criminal: case CJ.Escort: case CJ.GarrisonFire: return '';

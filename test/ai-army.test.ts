@@ -47,7 +47,7 @@ function cells(w: World, x: number, y: number, lo: number, hi: number, n: number
 }
 
 function player(race: number, profile: number): AiPlayer {
-  return { race, profile, think: 0, army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0, founding: 0, noSite: 0 };
+  return { race, profile, think: 0, army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0, started: [], founding: 0, noSite: 0 };
 }
 
 test('profile 0 late in the game: a new army needs more than min(10, tick / 30000) free candidates and takes all of them; joining needs none (2.4)', { skip }, () => {

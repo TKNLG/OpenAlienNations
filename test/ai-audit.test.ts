@@ -166,7 +166,7 @@ function army(w: World, race: number, tt: Town, tactic: number, n: number) {
   for (const u of members) u.group = Grp.Army;
   const job = w.sched.create(AiJob.Army, race, 1, [tt.id, tt.x, tt.y, tactic]);
   const ps: AiPlayer = { race, profile: 0, think: 0, army: job.id, armyTown: tt.id, armyMembers: members.map(u => u.id), lastArmy: 0,
-    lastMission: [0, 0, 0], discovered: [], cursor: 0, founding: 0, noSite: 0 };
+    lastMission: [0, 0, 0], discovered: [], cursor: 0, started: [], founding: 0, noSite: 0 };
   w.ai.players[race] = ps;
   return { ps, job, members };
 }
@@ -301,7 +301,7 @@ test('strike alert (combat.md 7 step 1): an attacker of a computer town is recor
   const { world: w } = loadMission('Pimmons.mdb', 4, DATA, false);
   const t = w.economy.towns.find(x => x.race === 2)!;   // the Sajiki town
   w.ai.players[t.race] = w.ai.players[t.race] ?? { race: t.race, profile: 4, think: 0, army: 0, armyTown: -1, armyMembers: [], lastArmy: 0,
-    lastMission: [0, 0, 0], discovered: [], cursor: 0, founding: 0, noSite: 0 } as AiPlayer;
+    lastMission: [0, 0, 0], discovered: [], cursor: 0, started: [], founding: 0, noSite: 0 } as AiPlayer;
   const s = w.ai.startTown(t);
   s.intruders = [];
   const hall = w.ai.list(t, TOWN_HALL)[0];
@@ -315,7 +315,7 @@ test('strike alert (combat.md 7 step 1): an attacker of a computer town is recor
   w.combat.attacked(hall, enemy);
   assert.deepEqual(s.intruders, [enemy.id], 'recorded by the strike');
   w.combat.attacked(hall, enemy);
-  assert.deepEqual(s.intruders, [enemy.id], 'once');
+  assert.deepEqual(s.intruders, [enemy.id, enemy.id], 'one record per strike, no de-duplication (2.2)');
   // a victim standing outside its own territory raises no alert
   const out = w.spawnUnit(t.race, PORTER, ...spot(w, ex, ey, 3), t.id);
   const other = w.spawnUnit(enemyRace, HUNTER, ...spot(w, ex, ey, 6), -1);

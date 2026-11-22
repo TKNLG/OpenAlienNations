@@ -37,7 +37,7 @@ client (`src/client/*`) has to add to make it playable. Gameplay spec:
 
 | command | add-on use |
 |---|---|
-| `{ type: 'unload', player, ship, unit? }` | **new.** `AUSSTEIGEN` (unit omitted / -1: everyone) and the passengers page's per-type send-out (`unit` = a unit type). Passengers leave the list at once and land after 10 ticks on the nearest free land cell within 5 rings; out at sea the idle ship first sails to the coast (job 0x3B). |
+| `{ type: 'unload', player, ship, unit? }` | **new.** `AUSSTEIGEN` (unit omitted / -1: everyone) and the passengers page's per-type send-out (`unit` = a unit type). Passengers leave the list at once (the ship's eject) and land through the leave job's ship branch from 10 ticks on, on the nearest free land cell within 5 rings, facing 5; out at sea the idle ship first sails to the coast (job 0x3B) and the leave job retries every 50 ticks (addon.md 5.3). |
 | `{ type: 'order', ids, target }` | own land units on a **transport ship** (type 67, room left): they walk to a shore cell next to the ship and board (5.2). Armed units on a foreign ship still attack it. A fishing boat on a **fish**: fishing job on that fish. Any other ship order: the ship sails next to the target; warships attack hostile targets as usual. |
 | `{ type: 'move', ids, x, y }` | ships get distinct free open-sea cells near the point (spiral, ship mask); a **fishing boat** gets a fishing job with that cell as its grounds (6.1). Land and ships may be mixed in one order. |
 | `{ type: 'patrol', id, points }` | now also warships 65 and 66 (4.1). |
@@ -136,12 +136,19 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
 
 ## 7. Deviations, interpretations and gaps
 
-- **Target chooser.** Ships: a water target they may not use (coastal water, fish, a harbour) is
-  replaced by the nearest usable cell within 6 rings of the same sea body; a land target fails at
-  once (the ship's island is 0, 2.5). Land units in add-on mode: a goal on water or on a building
-  is replaced by the nearest free land cell of their island within 6 rings, and the walk fails at
-  once when there is none (otherwise melee units retaliating against ships ran 2000-node searches
-  every tick). Trees and other goals keep the base search.
+- **Target chooser.** Ships (go-to targets: harbours, a fish for the harvest, move goals): a
+  water target they may not use is replaced as by `Map::GetFreeNeighbour`: the cell, its four
+  orthogonal neighbours (N, W, S, E), then the nearest usable cell of an unlimited spiral, of any
+  sea body; a cell in another body fails the walk at once (the planner would fail). A land target
+  fails at once (the ship's island is 0, 2.5). The sail-to-coast and fishing children walk to
+  their exact cell (`Naval.followShip`): a coastal or fish cell is approached and the walk ends
+  next to it with success (arrival tolerance), as in the original (fidelity audit A3, A10,
+  November 2026). Land units in add-on mode: a goal on water or on a building is replaced by the
+  nearest free land cell of their island within 6 rings, and the walk fails at once when there is
+  none (otherwise melee units retaliating against ships ran 2000-node searches every tick; the
+  original replaces goals only in the go-to and the move command, with an unlimited spiral and no
+  island filter, then fails the follow path by the island test: audit A11, not changed). Trees
+  and other goals keep the base search.
 - **Sea bodies.** Open-sea cells are labelled once (static terrain), **8-connected**: ships cut
   diagonal corners like units (the planner and the step test only the destination cell,
   `units-and-jobs.md` 4.1; Gold `0047af50` / `0047b210`), so two open-sea cells that meet only at
@@ -160,18 +167,38 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
 - **Entering without a distance test.** The original lets buildings be entered from wherever a
   unit stopped. Here a ship docks, and a land unit enters a harbour or shipyard (door 0,0 inside
   the footprint), from up to 6 cells around the footprint; other buildings keep the base rule.
-- **Boarding**: when the ship moved away from the shore cell a waiting unit chose, it chooses again
-  (the original waits). Step aside (0x0F) is an immediate one-cell walk, not a job.
-- **Leaving a ship by another job** (e.g. a diplomat recalled while aboard) uses the unloading
-  cell search, else the nearest land; the original's container place method is not modelled.
-- **Sail to coast**: a landing cell the ship may not use (coastal water) fails at once instead of
-  after 15 re-plans; at most 15 rounds of step 2 (guard against the original's possible loop).
-- **Fishing**: references (refcounts) are not modelled; "fish set and alive" reads "the fish
-  object still exists" (otherwise the double catch could not happen); a fish gone before the
-  catch starts a new search; the new path starts at once rather than after the 50-tick return.
-- **Harvest-bug mode** (`fishHarvestBug`): the boat kills the fish, works it (1 food per 100
-  ticks) and retries the delivery to the land store forever; animal-specific details beyond that
-  are not modelled.
+- **Boarding** (5.1, 5.2, re-done November 2026): go-to walk (its result ignored), turn, door
+  queue with the may-enter test only at the first request, admission (computer ship: at once;
+  human ship: closer than 4), the admitted unit's walk to the land cell nearest the ship and
+  "entered" whether or not that walk succeeded, while passengers ≤ capacity (a sixth passenger;
+  a seventh admitted unit ends without a job on the shore). The player's order and the planner
+  set the job directly (no eject, +0x78 kept). Step aside (0x0F) is an immediate one-cell walk,
+  not a job. Ours: the queue drops units whose job ended (the original's enter-job destructor).
+- **Leaving a ship** (5.3): every way out is the ship's eject and the leave job's ship branch
+  (`Naval.eject`), including a job given to a passenger through the general job assignment
+  (`Logistics.assign` = `AssignJobInHouse`: a dispatcher order, the AI's gang release, a recalled
+  diplomat, ...). The passenger lands near the ship when land is within 5 cells (facing 5), never
+  on water; it waits aboard while the ship sails on (until November 2026 it was put ashore at
+  once, on the ship's own water cell if no land was near, and a job given aboard walked from
+  inside the ship).
+- **Docking and launch hold** (3.4, 5.8): the harbour's leave job holds a docked ship 35 ticks
+  (`Naval.dockHold`, leave-job data flag 3; the door counter stays up, as in the original); a
+  ship trained in a shipyard comes out through the normal leave job at run 5 (35 ticks). Ours:
+  the docked ship is not marked "inside" the harbour during the hold, so it stays targetable,
+  visible and selectable for those 35 ticks (the original sets +0x6C).
+- **Sail to coast** (5.4): no round limit, as in the original (a ship parked next to a coastal
+  cell from which no near cell reaches the island repeats step 2 for ever there too).
+- **Fishing** (6.2): the search runs in the job's creation (rand() draws in the original's
+  order); the child walks from the next run (50 ticks after a fruitless search, 1 after docking);
+  the catch adds the fish record's amount without testing the fish (the job keeps the record id),
+  so every boat holding a fish catches it. References (refcounts) are not modelled; "fish set and
+  alive" reads "the fish object still exists".
+- **Harvest-bug mode** (`fishHarvestBug`, off by default, maintainer's decision pending): the
+  boat attacks the living fish (weapon 27; the fish's die only clears its living flag), works the
+  carcass (1 food per 100 ticks), and the delivery's go-to to the land store fails at once, so it
+  retries after min(5 × trips, 25) + 2 ticks for ever; a boat carrying a kept catch starts in
+  phase 2 (deliver first); the repeated-order rule applies. Ours: a boat that ends its walk not
+  next to the carcass ends the harvest (the original's 0x3E spiral would look for land).
 - **Units in the placement footprint** block a harbour/shipyard (mask 0x405E has the unit bit);
   the steep flag 0x40 is not tested, as for every building in this engine. The AI site test
   requires both its padded-rectangle rule (limit padded height + 1, no mountain) and the player's
@@ -186,7 +213,10 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   `integration-ai.md` 7d); the
   warship's explore job uses the nearest-cell spiral (`004853c0` order) for the random cell's
   usable neighbour, the original walks its own square spiral; dead or already embarked units in a
-  request's waiting list are skipped by the boarding step without using a place.
+  request's waiting list use a place (counter + 1) as in the original and get no job; a dead or
+  embarked entry still re-aims the ship at its (last) cell like the original's go-to constructor
+  (a dead unit's cell is kept in the request, `PlannerRequest.gone`); a unit inside a building
+  gets no job either (the original gives it the go-to without an eject; not traced further).
   **Fixed in the 2026-10 audit** (they kept every computer navy small or idle): the planner's
   claim counts were missing from the training wants (no transport was ever trained for the
   planner, so founders waited for ever); the naval part ran in the training step and ordered

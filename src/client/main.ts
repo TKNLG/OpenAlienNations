@@ -110,8 +110,8 @@ class Game implements HudHost {
   /** territory border stones (border-stones.ts) and what they read from the view */
   private stones = new BorderStones();
   private stoneHost = { height: (x: number, y: number) => this.heightAt(x, y), visible: (x: number, y: number) => !this.vision || this.vision.cellVisible(x, y) };
-  /** patrol waypoint mode: the soldier and the points so far */
-  private patrol: { id: number; points: [number, number][] } | null = null;
+  /** patrol waypoint mode: the soldier and the click counter (combat.md 8.2 "Patrol mode") */
+  private patrol: { id: number; clicks: number } | null = null;
   /** founder choosing a town-hall site (units-and-jobs.md 11.1) */
   private founding: number | null = null;
   /** world-view cursor (docs/ui/cursors.md 3, 4): the slot the rule chose last ("wanted") */
@@ -328,15 +328,18 @@ class Game implements HudHost {
       const x = e.clientX * dpr(), y = e.clientY * dpr();
       if (e.button === 1) pan = { x: e.clientX, y: e.clientY };
       else if (e.button === 0 && this.patrol) {
-        this.patrol.points.push(this.cellAt(x, y));
-        if (!e.ctrlKey || this.patrol.points.length >= 7) {
-          this.command({ type: 'patrol', player: this.player, id: this.patrol.id, points: this.patrol.points });
+        // every click sends its own point (command 0x4F); the mode ends after a click without
+        // Ctrl or once the counter has passed 7 (combat.md 8.2 "Patrol mode")
+        const [cx, cy] = this.cellAt(x, y);
+        this.patrol.clicks++;
+        this.command({ type: 'patrolPoint', player: this.player, id: this.patrol.id, x: cx, y: cy });
+        if (!e.ctrlKey || this.patrol.clicks > 7) {
           this.patrol = null;
           this.recomputeCursor();
         }
       }
       else if (e.button === 2 && this.patrol) {
-        if (this.patrol.points.length) this.command({ type: 'patrol', player: this.player, id: this.patrol.id, points: this.patrol.points });
+        // the guard was made by the button: without points it stays a stationary guard
         this.patrol = null;
         this.recomputeCursor();
       }
@@ -732,9 +735,13 @@ class Game implements HudHost {
     return Math.abs(px) <= hw && Math.abs(py) <= hh;
   }
 
-  /** start choosing patrol waypoints for a soldier (side-panel.md 5.2: click = one point, Ctrl adds more) */
+  /**
+   * The PATROL button (side-panel.md 5.2, combat.md 8.2): the guard is made now (command 0x4E),
+   * then each click adds a point (Ctrl for more).
+   */
   startPatrol(id: number): void {
-    this.patrol = { id, points: [] }; this.placing = -1; this.founding = null;
+    this.command({ type: 'patrol', player: this.player, id });
+    this.patrol = { id, clicks: 0 }; this.placing = -1; this.founding = null;
     // the PATROL button sets the patrol cursor directly (cursors.md 4.1); it shows over the world view
     this.cursorWanted = Slot.Patrol;
     this.applyCursor();

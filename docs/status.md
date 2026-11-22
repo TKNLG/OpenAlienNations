@@ -147,8 +147,10 @@ from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket)
    computer towns when the human has no town hall.
 5. Add-on data quirks: SajikisAO 2 island ids, SajikisAO 8 goal ids, SajikisAO 4 reversed;
    an original Gold savegame of a free-play island game would verify the island generator.
-6. AI: hunters still use the old auto-continue harvest (not the original hunting job); town-mode
-   inhabitants command 0x43; mentor #16 condition; remaining deviations in
+6. AI: the hunter question is settled: the original AI gives its hunter gang (like woodcutters,
+   stonemasons and bush porters) the harvest job 0x16 with auto-continue, delay 5, never the
+   hunting-ground job, as ours does (`ai-diplomacy-trade.md` 1.8). Still open, not AI: town-mode
+   inhabitants command 0x43; mentor #16 condition. Remaining AI deviations in
    `integration-ai.md` §7.
 7. Enhanced-mode ideas in `roadmap.md` (smarter advisor queue, 8 players, HD game sprites,
    stronger AI, sticky police target if wanted).

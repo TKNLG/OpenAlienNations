@@ -22,7 +22,7 @@ export const LJ = {
 } as const;
 /** leave job data (units-and-jobs.md 4.10): the building left, runs so far, the eject's "sent out"
  *  flag (send-out command and DEAKTIVIEREN, 4.11; absent in older saves = cleared) */
-const LV = { Building: 0, Runs: 1, SentOut: 2 } as const;
+const LV = { Building: 0, Runs: 1, SentOut: 2, Docked: 3 } as const;
 /** found-town job data (units-and-jobs.md 11.3) */
 const FD = { Phase: 0, Hall: 1, Done: 2 } as const;
 /** the original's go-to job kind (0x07), for the repeated-order test of the order command */
@@ -44,6 +44,8 @@ const PL = { Phase: 0, Farm: 1, X: 2, Y: 3, Type: 4, Planted: 5 } as const;
 const NATURE_GROUP = 6;
 /** extra unit types used here */
 const U = { Hunter: 17, Woodcutter: 19, NewsSeller: 20, Stonemason: 27, Merchant: 28 } as const;
+/** the embassy's operator type (diplomat) */
+const DIPLOMAT_TYPE = 13;
 const NEWS_STAND = 51;
 /** `enter` result: the request answered "done" without entering (a news seller at any building but
  *  a news stand, request result 3, units-and-jobs.md 4.4 item 2): a success */
@@ -190,15 +192,51 @@ export class Logistics {
    */
   haulGroup(t: Town): number { return this.w.ai?.isComputer(t.race) ? 50 : 0; }
 
-  /** nearest free unit of a type to a cell; stops early at a unit closer than 3 */
+  /**
+   * Nearest free unit of a type to a cell for a worker request (5.2, `0045b2f0`): strict <, the
+   * first in list order on ties, no early stop (only the porter hand-out stops early, 5.3)
+   */
   private nearestFree(t: Town, type: number, x: number, y: number, taken?: Set<number>, group = 0): Entity | null {
     let best: Entity | null = null, bd = Infinity;
     for (const u of this.w.entities) {
       if (!this.isFree(u, t, type, group) || taken?.has(u.id)) continue;
       const d = this.distE(u, x, y);
-      if (d < bd) { best = u; bd = d; if (d < 3) break; }
+      if (d < bd) { best = u; bd = d; }
     }
     return best;
+  }
+
+  /**
+   * Rebuild the town's free-porter list at the start of a transport pass (5.3 step 1, `0045aed0`):
+   * the town's free porters of the haul group, in list order.
+   */
+  private rebuildFreePorters(t: Town): void {
+    const group = this.haulGroup(t);
+    t.freePorters = [];
+    for (const u of this.w.entities) if (this.isFree(u, t, T.Porter, group)) t.freePorters.push(u.id);
+  }
+
+  /**
+   * Hand out the free porter nearest to a cell from the town's list (5.3, `0045afc0`): entries met
+   * that are gone or no longer porters are removed; strict <, the scan stops at the first porter
+   * closer than 3; the chosen one leaves the list. Not re-tested for the free rule.
+   */
+  private takeFreePorter(t: Town, x: number, y: number): Entity | null {
+    const list = t.freePorters;
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const u = this.w.get(list[i]);
+      if (!u || !u.alive || u.kind !== Kind.Unit || this.type(u) !== T.Porter) { list.splice(i--, 1); continue; }
+      const d = this.distE(u, x, y);
+      if (d < bd) { best = i; bd = d; if (d < 3) break; }
+    }
+    if (best < 0) return null;
+    return this.w.get(list.splice(best, 1)[0]) ?? null;
+  }
+
+  /** saves before version 19 (5.7): the list starts as the porters free now */
+  migrateFreePorters(): void {
+    for (const t of this.w.economy.towns) { t.freePorters ??= []; if (t.alive) this.rebuildFreePorters(t); }
   }
 
   // ---------------------------------------------------------------- jobs
@@ -247,11 +285,14 @@ export class Logistics {
     }
     this.cancelJob(u);
     const inside = u.inside >= 0 && this.w.get(u.inside)?.kind === Kind.Building && u.idle === -1;
+    // add-on: a passenger of a ship is always ejected (the container test of `AssignJobInHouse`,
+    // addon.md 5.1): the new job waits behind the ship's leave job
+    const aboard = u.inside >= 0 && this.w.get(u.inside)?.kind === Kind.Unit;
     u.idle = 0;
     const j = this.w.sched.create(kind, u.id, delay, data);
     u.job = j.id;
     // called away from a leisure visit: the building ejects the unit, the new job waits behind the leave job
-    if (inside) this.leave(u);
+    if (inside || aboard) this.leave(u);
     return j;
   }
 
@@ -296,7 +337,9 @@ export class Logistics {
     if (j.kind === 0x18 && d[0]) { bid = d[0]; request = true; underWay = d[1] !== 0; }
     else if (j.kind === LJ.Answer && d[AN.Duty]) { bid = d[AN.Building]; request = true; }
     else if (j.kind === LJ.Plant) { bid = d[1]; request = true; }
-    else if (j.kind === 0x38) bid = d[3];
+    // an errand without a child (still at its start with no target embassy: phase 0, dest -2)
+    // keeps the embassy active (`00478880`, ai-diplomacy-trade.md 3.4 step 6)
+    else if (j.kind === 0x38) { bid = d[3]; underWay = d[0] !== 0 || d[4] !== -2; }
     if (bid < 0 || (!underWay && u.alive)) return;
     const b = this.w.get(bid);
     if (!b || b.kind !== Kind.Building || !b.alive) return;
@@ -681,7 +724,11 @@ export class Logistics {
    */
   leave(u: Entity, sentOut = false): void {
     const b = this.w.get(u.inside);
-    if (b && b.kind === Kind.Unit) { this.w.naval.disembark(u, b); return; }   // add-on: out of a ship
+    if (u.inside >= 0 && b && b.kind === Kind.Unit) {
+      // add-on: out of a ship through the ship's eject and the leave job's ship branch (addon.md 5.3)
+      if (!this.leaving(u)) this.w.naval.eject(u, b);
+      return;
+    }
     if (u.inside < 0 || this.leaving(u)) return;
     if (!b) { const [x, y] = this.cellOf(u); u.inside = -1; this.w.place(u, x, y); return; }
     if (u.job) {
@@ -698,7 +745,7 @@ export class Logistics {
    */
   private exitCurrent(u: Entity, hold: number): boolean {
     const b = this.w.get(u.inside);
-    if (!b || b.kind !== Kind.Building) { if (b) this.leave(u); return false; }
+    if (!b || (b.kind !== Kind.Building && !this.w.isShip(b))) { if (b) this.leave(u); return false; }
     const j = u.job ? this.w.sched.get(u.job) : undefined;
     if (j && !j.cancelled && !j.hold) j.hold = hold;
     this.leave(u);
@@ -709,7 +756,7 @@ export class Logistics {
   private leaveEnd(u: Entity): number {
     if (this.leaving(u)) { u.ordered = false; return 0; }
     const b = this.w.get(u.inside);
-    if (b && b.kind === Kind.Building) { u.job = 0; u.ordered = false; this.leave(u); return 0; }
+    if (b && (b.kind === Kind.Building || this.w.isShip(b))) { u.job = 0; u.ordered = false; this.leave(u); return 0; }
     this.leave(u);
     return this.finish(u);
   }
@@ -727,6 +774,15 @@ export class Logistics {
     // the same job type takes passengers off a ship (add-on, naval.ts)
     if ((b && b.kind === Kind.Unit) || d.length < 2) return this.w.naval.runJob(job);
     if (!u || !u.alive || u.job !== job.id) return 0;
+    // add-on: a ship ejected by the harbour it docked at (addon.md 5.8): door counter up at run 1,
+    // polls at runs 2..4, and at run 5 (+35) the place method only lets the ship go on: it keeps
+    // its cell and the door counter stays up (quirk)
+    if (d[LV.Docked] === 1) {
+      if (!b || b.kind !== Kind.Building) return this.endLeave(u);
+      d[LV.Runs]++;
+      if (d[LV.Runs] === 1) { this.doorUp(b); return 10; }
+      return d[LV.Runs] < 5 ? 5 : this.endLeave(u);
+    }
     if (u.inside < 0) return this.endLeave(u);
     if (!b || b.kind !== Kind.Building) {
       // the building is gone: out on the nearest free cell around the stored position
@@ -741,8 +797,8 @@ export class Logistics {
     // add-on harbour / shipyard (door 0,0, addon.md 3.7): the entrance is the building's own max
     // corner, so the test below always finds it taken (by the building: nothing is pushed) and the
     // unit comes out at run 5 on the first free spiral cell, one unit per cell, no island test.
-    // Ships leave a shipyard through `naval.launch` and dock without leaving; one that got here
-    // anyway is put on open sea.
+    // A ship trained in a shipyard comes out the same way, at run 5, on the first cell of the
+    // unlimited spiral its mask 0xA01E allows (open sea, no unit; addon.md 3.4).
     if (this.doorInside(b) && this.w.isShip(u)) {
       if (d[LV.Runs] < 5) return 5;
       u.inside = -1;
@@ -802,12 +858,13 @@ export class Logistics {
     const t = this.w.economy.town(job.owner);
     if (!t || !t.alive) return 0;
     const taken = new Set<number>();
-    // A: worker requests
+    // A: worker requests (5.2): a dead building drops the request; the nearest free unit to the
+    // building's position (anchor cell) is searched first, whatever the request
     const keep: [number, number][] = [];
     for (const [type, bid] of t.workerReqs) {
       const b = this.w.get(bid);
-      if (!b) continue;
-      const [ex, ey] = this.entrance(b);
+      if (!b || !b.alive) continue;
+      const [ex, ey] = this.cellOf(b);
       if (type === T.Builder) {
         const u = this.nearestFree(t, T.Builder, ex, ey, taken);
         if (!u) { keep.push([type, bid]); if (this.w.economy.count(t, T.Builder, false) === 0) this.w.notify(t.race, M.NoBuilder, true, ADVISOR_REPEAT_MS); continue; }
@@ -819,17 +876,26 @@ export class Logistics {
         this.startBuilder(u, b);
         continue;
       }
-      if (type === T.Porter) {
-        // trainees: only while more orders are queued than people inside (5.2)
-        if (b.queue.length <= this.trainees(b).length) continue;
-      } else if (b.complete && b.operatorId >= 0 && this.w.get(b.operatorId)?.inside === b.id) continue;
       const u = this.nearestFree(t, type, ex, ey, taken);
       if (!u) {
+        // the request stays, even a trainee request the training no longer needs (5.2)
         keep.push([type, bid]);
         // mentor#14 for an unserved porter request (side-panel.md 1.1.3 line 14, `0045b2f0`)
         if (type === T.Porter && this.noFreePorterLine(t, false, 0)) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
         continue;
       }
+      if (type === T.Porter) {
+        // a trainee: only while the training job has more orders than units inside, given with
+        // first delay 5 (`00465650`); otherwise he gets nothing. The request goes either way (5.2)
+        const tj = b.trainJob ? this.w.sched.get(b.trainJob) : undefined;
+        if (!tj || tj.cancelled || tj.kind !== LJ.Training || b.queue.length <= this.trainees(b).length) continue;
+        taken.add(u.id);
+        this.assign(u, LJ.Answer, 5, [0, bid, type, 0]);
+        continue;
+      }
+      // operators (and the computer players' archers): after 1 tick, with no test whether the
+      // building already has its operator inside; an active building refuses a second one at its
+      // door and the failed job re-files the request (5.2 quirk)
       taken.add(u.id);
       this.assign(u, LJ.Answer, 1, [0, bid, type, 0]);
     }
@@ -842,65 +908,80 @@ export class Logistics {
       else if (t.rr[1] < 4) { start = 1; t.rr[1]++; }
       else if (t.rr[2] < 2) { start = 2; t.rr[2]++; }
       else { start = 3; t.rr = [0, 0, 0]; }
-      // the "no porter busy" flag is taken once, before any porter is handed out (`0045aed0`)
+      // the town's free-porter list is rebuilt once per pass and porters are handed out from it;
+      // what is left stays for the leisure job (5.3, 5.7). The "no porter busy" flag is taken at
+      // the same moment, before any porter is handed out (`0045aed0`)
+      this.rebuildFreePorters(t);
       const sayNoPorter = this.noFreePorterLine(t, true, this.haulGroup(t));
-      let noPorter = false;
-      for (let k = 0; k < 4 && !noPorter; k++) {
+      for (let k = 0; k < 4; k++) {
         const li = (start + k) % 4, list = t.lists[li];
         const rest: number[] = [];
-        for (let i = 0; i < list.length; i++) {
-          if (noPorter) { rest.push(list[i]); continue; }
-          const r = li === List.Pickup ? this.dispatchNature(t, list[i], taken) : this.dispatchBuilding(t, list[i], taken);
-          if (r === 'keep') rest.push(list[i]);
-          else if (r === 'noporter') { rest.push(list[i]); noPorter = true; }
+        let i = 0;
+        for (; i < list.length; i++) {
+          // checked before each entry: with no free porter left the rest of this list is not even
+          // looked at, and mentor#14 may be said (once per non-empty list reached)
+          if (!t.freePorters.length) {
+            if (sayNoPorter) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
+            break;
+          }
+          const r = li === List.Pickup ? this.dispatchNature(t, list[i]) : this.dispatchBuilding(t, list[i]);
+          if (r !== 'done') rest.push(list[i]);
         }
+        for (; i < list.length; i++) rest.push(list[i]);
         t.lists[li] = rest;
       }
-      if (noPorter && sayNoPorter) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
     }
     const pending = t.workerReqs.length > 0 || t.lists.some(l => l.length);
     if (!pending) t.dispatcher = 0;
     return pending ? 20 : 0;
   }
 
-  private dispatchBuilding(t: Town, id: number, taken: Set<number>): 'done' | 'keep' | 'noporter' {
+  private dispatchBuilding(t: Town, id: number): 'done' | 'keep' | 'noporter' {
     const b = this.w.get(id);
-    if (!b || b.kind !== Kind.Building) return 'done';
+    if (!b || b.kind !== Kind.Building || !b.alive) return 'done';
     if (!(!b.complete || b.active)) return 'keep';
     if (!b.needed.length && !b.outputs.length) return 'done';
-    let src: Entity | null, dst: Entity | null;
-    const [bx, by] = this.entrance(b);
+    // stores and porters are measured from the buildings' positions (anchor cells, 4.3, 5.3)
+    let src: Entity | null = null, dst: Entity | null = null;
+    const [bx, by] = this.cellOf(b);
     const gi = b.needed.findIndex(g => t.stock[g] > 0);
     if (gi >= 0) {
       const g = b.needed.splice(gi, 1)[0];
       b.needed.unshift(g);
       src = this.nearestStore(t, bx, by); dst = b;
-    } else if (b.outputs.length) {
-      src = b; dst = this.nearestStore(t, bx, by);
-    } else {
-      const lack = this.w.rules.get(((NATURE_GROUP << 16) | b.needed[0]) >>> 0)?.message ?? 0;
-      if (lack > 0) this.w.notify(t.race, lack + (b.needed[0] === Good.Crop ? t.race : 0), true, ADVISOR_REPEAT_MS);
-      return 'keep';
     }
-    if (!src || !dst) return 'keep';
-    const [sx, sy] = src.kind === Kind.Building ? this.entrance(src) : this.cellOf(src);
-    const p = this.nearestFree(t, T.Porter, sx, sy, taken, this.haulGroup(t));
-    if (!p) return 'noporter';
-    taken.add(p.id);
-    this.startTransport(p, dst, src, b);
+    if (!src) {
+      // nothing needed in stock, or no store: take an output to the store, else "you lack X" for
+      // the first needed good (the one just moved to the front, if any)
+      const store = b.outputs.length ? this.nearestStore(t, bx, by) : null;
+      if (!b.outputs.length) {
+        const lack = this.w.rules.get(((NATURE_GROUP << 16) | b.needed[0]) >>> 0)?.message ?? 0;
+        if (lack > 0) this.w.notify(t.race, lack + (b.needed[0] === Good.Crop ? t.race : 0), true, ADVISOR_REPEAT_MS);
+        return 'keep';
+      }
+      if (!store) return 'keep';
+      src = b; dst = store;
+    }
+    const [sx, sy] = this.cellOf(src);
+    const p = this.takeFreePorter(t, sx, sy);
+    if (!p || !dst) return 'noporter';
+    // a porter already carrying the destination's first needed good goes straight there, without a
+    // source; an empty needed list (a store) is no match (5.3, movement audit M6, M17)
+    const direct = p.carryAmount > 0 && dst.needed.length > 0 && p.carryGood === dst.needed[0];
+    this.startTransport(p, dst, direct ? null : src, b);
     return 'done';
   }
 
-  private dispatchNature(t: Town, id: number, taken: Set<number>): 'done' | 'keep' | 'noporter' {
+  private dispatchNature(t: Town, id: number): 'done' | 'keep' | 'noporter' {
     const n = this.w.get(id);
     if (!n || n.kind !== Kind.Nature) return 'done';
     if (n.amount - n.reserved <= 0) return 'keep';
     if (this.w.economy.space(t, n.yieldGood) < 1) return 'keep';
     const [x, y] = this.cellOf(n);
-    const p = this.nearestFree(t, T.Porter, x, y, taken, this.haulGroup(t));
+    const p = this.takeFreePorter(t, x, y);
     if (!p) return 'noporter';
-    taken.add(p.id);
-    this.startHarvest(p, n, false);
+    // given through `00465650` with first delay 5, like the transport (5.3)
+    this.startHarvest(p, n, false, 5);
     return 'done';
   }
 
@@ -910,7 +991,9 @@ export class Logistics {
   startTransport(u: Entity, dest: Entity, source: Entity | null, requester: Entity | null): void {
     let fetch = NONE, output = NONE;
     if (requester) {
-      if (source && this.isStore(source) && requester.needed.length) fetch = requester.needed.shift()!;
+      // the first needed good is popped unless the source is a building that is not a store; with
+      // no source (a porter already carrying it, 5.3) it is popped too (5.5 "At creation")
+      if ((!source || this.isStore(source)) && requester.needed.length) fetch = requester.needed.shift()!;
       if (requester.outputs.length) output = requester.outputs.shift()!;
     }
     const d = new Array(TR.Size).fill(0);
@@ -1037,10 +1120,11 @@ export class Logistics {
       u.carryAmount--;
       if (!u.carryAmount) u.carryGood = NONE;
     }
-    // pick up 1 unit: the requested good, otherwise the output to collect
-    // (the good to fetch stays set until it is dropped at the destination; an output is cleared when taken)
+    // pick up 1 unit: the good to fetch when one is set (nothing if the source has none of it, no
+    // fallback); only with no good to fetch the output to collect (5.5 "At the source" step 2). The
+    // good to fetch stays set until it is dropped at the destination; an output is cleared when taken
     let g = NONE, out = false;
-    if (d[TR.Fetch] >= 0 && this.stockOf(src, d[TR.Fetch]) > 0) g = d[TR.Fetch];
+    if (d[TR.Fetch] >= 0) { if (this.stockOf(src, d[TR.Fetch]) > 0) g = d[TR.Fetch]; }
     else if (d[TR.Output] >= 0 && this.stockOf(src, d[TR.Output]) > 0) { g = d[TR.Output]; out = true; }
     // the pickup happens whatever is still carried (a load left over): the good becomes the
     // picked one and the amount goes up by 1 (5.5 "At the source" step 2, quirk)
@@ -1062,24 +1146,39 @@ export class Logistics {
     // the goods are dropped: nothing is owed to the requester any more (5.5)
     d[TR.Fetch] = NONE;
     const t = this.town(b);
-    if (d[TR.Output] >= 0 && this.stockOf(b, d[TR.Output]) > 0) {
-      this.take(b, d[TR.Output], 1);
-      u.carryGood = d[TR.Output]; u.carryAmount = 1; d[TR.Output] = NONE;
-      const back = this.w.get(d[TR.Source]) ?? (t ? this.nearestStore(t, ...this.entrance(b)) : null);
-      if (!back) return false;
-      d[TR.Source] = b.id; d[TR.Dest] = back.id;
+    // an output to collect: 1 unit taken without a stock test; the job turns round to the source or
+    // the nearest store to this building's position, the collected good becomes the good to fetch
+    // and the new destination the requester (5.5 "At any other building" step 2)
+    if (d[TR.Output] >= 0) {
+      const g = d[TR.Output];
+      this.takeOutput(b, g);
+      u.carryGood = g; u.carryAmount = 1; d[TR.Output] = NONE;
+      const back = d[TR.Source] >= 0 ? this.w.get(d[TR.Source]) : (t ? this.nearestStore(t, ...this.cellOf(b)) : null);
+      if (!back) return false;   // no store at all (the original reads through a null pointer)
+      d[TR.Source] = b.id; d[TR.Dest] = back.id; d[TR.Requester] = back.id; d[TR.Fetch] = g;
       return true;
     }
+    // outputs waiting and a porter: the first one is taken (again without a stock test) to the
+    // nearest store, which becomes destination and requester (step 3)
     if (b.outputs.length && (u.oid & 0xffff) === T.Porter && t) {
+      const store = this.nearestStore(t, ...this.cellOf(b));
+      if (!store) return false;   // ours: no store at all, the output stays (the original reads through a null pointer)
       const g = b.outputs.shift()!;
-      if (this.stockOf(b, g) > 0) {
-        this.take(b, g, 1);
-        u.carryGood = g; u.carryAmount = 1;
-        const store = this.nearestStore(t, ...this.entrance(b));
-        if (store) { d[TR.Source] = b.id; d[TR.Dest] = store.id; d[TR.Output] = NONE; return true; }
-      }
+      this.takeOutput(b, g);
+      u.carryGood = g; u.carryAmount = 1;
+      d[TR.Source] = b.id; d[TR.Dest] = store.id; d[TR.Requester] = store.id; d[TR.Fetch] = g; d[TR.Output] = NONE;
+      return true;
     }
     return false;
+  }
+
+  /**
+   * 1 unit of an output taken at the destination without a stock test (5.5, movement audit M12):
+   * a local stock may go below 0; a completed store's town stock is clamped at 0
+   */
+  private takeOutput(b: Entity, g: number): void {
+    if (this.isStore(b)) this.take(b, g, 1);
+    else b.local[g]--;
   }
 
   // ---------------------------------------------------------------- construction (6)
@@ -1611,7 +1710,8 @@ export class Logistics {
     switch (d[HV.Phase]) {
       case 0: // approach (7.1 phase 0): a living animal is hunted first (attack, combat.md 14)
         d[HV.Spot] = 0; d[HV.Trips] = 0;
-        if (n!.alive && this.rule(n!)?.cls === NC.Animal && !this.w.isShip(u)) {
+        // add-on: a living fish is the fishing boat's prey the same way (addon.md 6.3, harvest-bug mode)
+        if (n!.alive && (this.w.isShip(u) ? this.rule(n!)?.cls === 15 : this.rule(n!)?.cls === NC.Animal)) {
           if (!this.w.combat.weapon(u)) return 0;   // nothing to hunt with (every hunter record has a weapon)
           this.w.combat.initAttack(d, HV.Attack, n!, true, false);
           d[HV.Phase] = 7;
@@ -1656,8 +1756,8 @@ export class Logistics {
           d[HV.Target] = next.id; d[HV.Phase] = 0;
           return 1;
         }
-        // a living animal is only ever killed by the attack (phase 0); there is no shortcut on arrival
-        if (n!.alive && this.rule(n!)?.cls === NC.Animal) { d[HV.Phase] = 0; return 1; }
+        // a living animal (or fish) is only ever killed by the attack (phase 0); there is no shortcut on arrival
+        if (n!.alive && (this.rule(n!)?.cls === NC.Animal || this.rule(n!)?.cls === 15)) { d[HV.Phase] = 0; return 1; }
         if (this.w.isShip(u) ? !this.near(u, n!) : !this.adjacent(u, n!)) {
           if (this.w.isShip(u)) return 0;
           // not within one cell: walk to the first free cell of the spiral around the target (4.8;
@@ -1667,7 +1767,6 @@ export class Logistics {
           if (!c || !this.goCell(u, c[0], c[1])) return WALK_FAILED;
           return 1;
         }
-        if (n!.alive && this.rule(n!)?.cls === 15) n!.alive = false;   // the boat's one hit kills the fish (addon.md 6.3)
         // phase 6 of the original: turn to face the target (4.6), one turn call per run
         const [nx, ny] = this.cellOf(n!);
         const t = this.w.isShip(u) ? (this.w.face(u, nx, ny), 0) : this.w.turnToward(u, nx, ny);
@@ -1734,7 +1833,10 @@ export class Logistics {
     const s = t ? this.nearestStore(t, x, y) : null;
     if (!s) { d[HV.Phase] = 4; return 100; }
     d[HV.Store] = s.id;
-    if (!this.goEntity(u, s)) { d[HV.Phase] = 4; return 100; }
+    // add-on: the delivery's go-to fails at once by the island test (a fishing boat, a store on
+    // another island): the delivery is over with the load kept, so phase 3's retry follows
+    // (trips + 1, min(5 x trips, 25) + 2 ticks; units-and-jobs.md 7.1, addon.md 6.3)
+    if (!this.goEntity(u, s)) { d[HV.Trips]++; d[HV.Store] = NONE; return Math.min(5 * d[HV.Trips], 25) + 2; }
     this.setAction(u, Action.Walk);
     return 1;
   }
@@ -1914,6 +2016,15 @@ export class Logistics {
     if (!b.opJob) b.opJob = this.w.sched.create(LJ.Operator, b.id, 100).id;
   }
 
+  /**
+   * A unit of the building's operator type but of another race has entered it (a foreign diplomat
+   * in an embassy, `00460ed0`): with the building's job slot empty an operator job is made, first
+   * run after 100 ticks, which ejects him (ai-diplomacy-trade.md 3.3).
+   */
+  foreignOperatorEntered(b: Entity): void {
+    if (!this.slotJob(b)) b.opJob = this.w.sched.create(LJ.Operator, b.id, 100).id;
+  }
+
   private runOperator(job: Job): number {
     const b = this.w.get(job.owner);
     const r = b && this.rule(b);
@@ -1930,6 +2041,13 @@ export class Logistics {
       if (v.job) this.cancelJob(v);
       this.leave(v);
       return this.occupants(b).length ? 299 : end();
+    }
+    // an embassy (operator type 13, `00478cb0` case 13): one run, which ejects every occupant of
+    // another race (a visiting diplomat), then the job ends (ai-diplomacy-trade.md 3.3)
+    if (r.operator === DIPLOMAT_TYPE) {
+      if (b.opJob === job.id) b.opJob = 0;
+      for (const v of this.occupants(b)) if ((v.oid >>> 16) !== (b.oid >>> 16)) this.leave(v);
+      return 0;
     }
     if (!b.active) { b.opJob = 0; return 0; }
     if ((b.oid & 0xffff) === 54) {   // police station: send the officer after criminals (combat.md 12.2)
@@ -2289,8 +2407,8 @@ export class Logistics {
     student.hp = r.hp;
     student.carryAmount = 0; student.carryGood = NONE;
     // a ship comes out on the nearest open-sea cell without a unit (addon.md 3.4)
-    if (this.w.isShip(student)) { b.doorTick = this.w.tick; this.w.naval.launch(student, b); }
-    else this.leave(student);
+    // a ship is launched by the same leave job (35 ticks, addon.md 3.4)
+    this.leave(student);
     this.w.notify(t.race, M.Trained);
     return b.queue.length ? 30 : (b.trainJob = 0, 0);
   }
@@ -2783,6 +2901,10 @@ export class Logistics {
   private runLeisure(job: Job): number {
     const t = this.w.economy.town(job.owner);
     if (!t || !t.alive) return 0;
+    // it reads the free-porter list the dispatcher's last transport pass left (5.3, 5.7) and does
+    // nothing while that list is empty; our dead units are gone from the world, their entries go
+    t.freePorters = t.freePorters.filter(id => this.w.get(id)?.alive);
+    if (!t.freePorters.length) return 199;
     // candidates, listed once per run in the town's per-type order: active buildings whose job slot
     // is free or holds an operator / visit job (0x22). A house still running its house job (not
     // full) is never a target, nor an unstaffed tavern or circus (`0045b1d0`)
@@ -2792,10 +2914,13 @@ export class Logistics {
       return !j || j.kind === LJ.Operator;
     });
     const cats = [[...list(T.SmallHouse), ...list(T.LargeHouse)], list(58), list(57)];
-    // the town's free-porter list: the porter gang in a computer town (5.4)
-    const group = this.haulGroup(t);
-    for (const u of this.w.entities) {
-      if (!this.isFree(u, t, T.Porter, group) || u.inside >= 0 || u.idle === -1 || u.job) continue;
+    // no free test again: entries that are no longer porters leave the list, porters with a job or
+    // on a visit (+0x78 = -1) are skipped. Ours also skips one inside a building (a pupil listed
+    // before he entered a school; the original would hand him the go-to without an eject)
+    for (const id of t.freePorters.slice()) {
+      const u = this.w.get(id)!;
+      if (u.kind !== Kind.Unit || this.type(u) !== T.Porter) { t.freePorters.splice(t.freePorters.indexOf(id), 1); continue; }
+      if (u.job || u.idle === -1 || u.inside >= 0) continue;
       if (++u.idle <= 1) continue;
       const places = cats[this.w.rand.next() % 3];
       if (!places.length) continue;
@@ -2817,7 +2942,9 @@ export class Logistics {
    */
   private shipOrder(u: Entity, target: Entity): void {
     if (target.kind === Kind.Nature && this.w.naval.isFish(target) && (u.oid & 0xffff) === 64) {
-      if (this.w.gold.fishHarvestBug) { this.startHarvest(u, target, true); return; }
+      // the original (6.3): the fishing job it builds first is thrown away (no simulation effect:
+      // its search on a living fish draws nothing), then a harvest job with auto-continue
+      if (this.w.gold.fishHarvestBug) { if (!this.ordering(u, LJ.Harvest, target)) this.startHarvest(u, target, true); return; }
       const [x, y] = this.cellOf(target);
       this.w.naval.startFishing(u, x, y, 1, target.id);
       return;

@@ -17,7 +17,7 @@ import type { Town, Player } from './economy.ts';
 import { runPlanner, runEconomy, runMilitary, newTownState, assignArmy, type AiTown } from './ai-town.ts';
 import { Logistics } from './logistics.ts';
 
-import { AiJob, Grp, U, B, KIND_UNIT, KIND_BUILDING, KIND_NATURE, ring } from './ai-defs.ts';
+import { AiJob, Grp, U, B, KIND_UNIT, KIND_BUILDING, KIND_NATURE } from './ai-defs.ts';
 import { NJ } from './naval.ts';
 
 /** the engine's found-town job (units-and-jobs.md 3.1 kind 0x0E) */
@@ -73,10 +73,15 @@ export interface AiPlayer {
   lastArmy: number;
   /** tick of the last diplomatic mission per race (3.5) */
   lastMission: number[];
-  /** towns of the human discovered by this player's units (profile 2) */
+  /**
+   * Known towns (AI general +0x3C, 2.2 "Intruders", 2.4 profile 2): every town whose area a unit
+   * of this player stepped into, any race, in id order; destroyed towns leave it
+   */
   discovered: number[];
   /** research cursor of the race's invention table (1.11) */
   cursor: number;
+  /** inventions ever selected by a town of the race ("started", invention byte +0x3C, 1.11), sorted */
+  started: number[];
   /** running founding mission job id, 0 none */
   founding: number;
   /** no founding site left on the map */
@@ -116,12 +121,18 @@ export class Ai {
       if (!(profile >= 0 && profile < PROFILES.length)) profile = this.rand() % 3;
       this.players[p.race] = {
         race: p.race, profile, think: this.w.sched.create(AiJob.Think, p.race, 1).id,
-        army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0,
+        army: 0, armyTown: -1, armyMembers: [], lastArmy: 0, lastMission: [0, 0, 0], discovered: [], cursor: 0, started: [],
         founding: 0, noSite: 0,
       };
       // add-on: the naval planner next to the think job (docs/game/addon.md 8.4)
       if (this.w.addon) this.w.naval.startPlanner(p.race);
       this.ensureTownJobs(p);
+      // laboratories made active by the map loader, before the computer player existed: their
+      // activation pick (1.11, `0045fa40`) is made now
+      for (const id of p.towns) {
+        const t = this.w.economy.towns[id];
+        if (t && t.alive && this.w.entities.some(e => e.kind === KIND_BUILDING && e.town === t.id && e.alive && e.active && (e.oid & 0xffff) === B.Lab)) this.labActive(t);
+      }
     }
   }
 
@@ -158,8 +169,8 @@ export class Ai {
   /**
    * AI alert of the strike notification (`combat.md` 7 step 1, `00462e30` -> `0046cab0`): victim v
    * of a computer nation was struck at by a unit of another race while v stands in territory of its
-   * own race; the attacker is recorded on the military job of the town owning that territory. The
-   * original appends one record per strike (duplicates); ours records an attacker once.
+   * own race; the attacker is recorded on the military job of the town owning that territory, one
+   * record per strike (duplicates kept, 2.2 "Intruders").
    */
   alert(v: Entity, a: Entity): void {
     const race = v.oid >>> 16;
@@ -169,8 +180,83 @@ export class Ai {
     if (!t || !t.alive || t.race !== race) return;
     const s = this.towns[t.id];
     if (!s || !this.live(s.military)) return;
-    s.intruders ??= [];
-    if (!s.intruders.includes(a.id)) s.intruders.push(a.id);
+    (s.intruders ??= []).push(a.id);
+  }
+
+  /**
+   * A unit stepped onto cell (x, y) (`World.stepTo`, the position setter `004621c0`; spec 2.2
+   * "Intruders"): inside the area of a town of a computer nation other than its own it is recorded
+   * on that town's military job (every step, duplicates kept); a unit of a computer nation adds
+   * the area's town to its nation's known towns.
+   */
+  stepped(e: Entity, x: number, y: number): void {
+    const t = this.w.economy.town(this.w.territory.ownerAt(x, y));
+    if (!t) return;
+    if (t.race !== e.owner && this.players[t.race] && e.alive) {
+      const s = this.towns[t.id];
+      if (s && this.live(s.military)) (s.intruders ??= []).push(e.id);
+    }
+    const ps = this.players[e.owner];
+    if (ps && !ps.discovered.includes(t.id)) { ps.discovered.push(t.id); ps.discovered.sort((a, b) => a - b); }
+  }
+
+  /** a computer army holds its target town (town +0x38, spec 2.5): it stays in its nation's list */
+  holdsTown(id: number): boolean {
+    return this.players.some(p => !!p && p.armyTown === id && this.live(p.army));
+  }
+
+  // ---------------------------------------------------------------- research (1.11)
+
+  /**
+   * The race's pick (`00410490`): the cursor advances past every entry examined; the first
+   * invention neither started nor complete whose prerequisites are all complete, -1 none.
+   */
+  private pickResearch(ps: AiPlayer): number {
+    const eco = this.w.economy, p = eco.players[ps.race];
+    if (!p) return -1;
+    const pre = this.prerequisites[ps.race] ?? [];
+    ps.started ??= [];
+    while (ps.cursor < p.costs.length) {
+      const i = ps.cursor++;
+      if (ps.started.includes(i) || eco.researched(p, i)) continue;
+      if ((pre[i] ?? []).every(q => eco.researched(p, q))) return i;
+    }
+    return -1;
+  }
+
+  /** select a project in a town (`0045a570`): marks the invention started for the race */
+  private invent(ps: AiPlayer, t: Town, i: number): void {
+    if (!ps.started.includes(i)) { ps.started.push(i); ps.started.sort((a, b) => a - b); }
+    this.w.economy.selectResearch(t, i);
+  }
+
+  /**
+   * A laboratory of computer town t became active (`0045fa40`, every activation): the race's
+   * cursor goes back to 0 and the pick is selected, replacing a running project; no pick: nothing.
+   */
+  labActive(t: Town): void {
+    const ps = this.players[t.race];
+    if (!ps) return;
+    ps.cursor = 0;
+    const i = this.pickResearch(ps);
+    if (i >= 0) this.invent(ps, t, i);
+  }
+
+  /**
+   * Computer town t completed its project (`0046f490`, the research step): the pick is made first;
+   * then the stonemason's, else the woodcutter's required invention if not invented and not the
+   * pick, else the pick; nothing left: the town's project stays -1.
+   */
+  researchDone(t: Town): void {
+    const ps = this.players[t.race];
+    const p = this.w.economy.players[t.race];
+    if (!ps || !p) return;
+    const pick = this.pickResearch(ps);
+    for (const ty of [U.Stonemason, U.Woodcutter]) {
+      const i = this.w.rules.get(((t.race << 16) | ty) >>> 0)?.invention ?? -1;
+      if (i >= 0 && !this.w.economy.researched(p, i) && i !== pick) { this.invent(ps, t, i); return; }
+    }
+    if (pick >= 0) this.invent(ps, t, pick);
   }
 
   // ---------------------------------------------------------------- jobs
@@ -335,7 +421,8 @@ export class Ai {
     if (p.defeated) { if (ps.army) this.endArmy(ps); return 0; }
     this.ensureTownJobs(p);
     const towns = p.towns.map(id => this.w.economy.towns[id]).filter((t): t is Town => !!t && t.alive && !!this.towns[t.id]);
-    this.discover(ps);
+    // destroyed towns leave the known towns (`00459400`; the steps add towns, `stepped`)
+    ps.discovered = ps.discovered.filter(id => this.w.economy.towns[id]?.alive);
     const prof = PROFILES[ps.profile];
     // order of work (0.1): diplomacy, then the strategy routine per town, then attack or join,
     // then founding
@@ -372,20 +459,16 @@ export class Ai {
     if (ps.profile === 0 || ps.profile === 1) want = P < 13 ? Math.trunc(P / 6) : 2;
     else if (ps.profile === 2 || ps.profile === 4) want = P > 15 ? 1 : 0;
     s.C[U.Scout] = want;
-    // only the wanted number explores; further scouts stay free for watchtowers (deviation, see doc)
-    let exploring = 0;
-    const idle: Entity[] = [];
+    // `00468e10`: the list starts empty (its group test asks for 48, which no unit has), so up to
+    // `want` MORE free group-0 scouts (town-list order, cut from the end) get an explore job every
+    // think, first run 1 + rand() mod 5 each; a leisure visit is cancelled first. Exploring scouts
+    // are not free, so in the long run every idle scout explores, those trained for watchtowers too.
+    if (want <= 0) return;
+    const free: Entity[] = [];
     for (const e of this.w.entities) {
-      if (e.kind !== KIND_UNIT || e.town !== t.id || (e.oid & 0xffff) !== U.Scout || (e.oid >>> 16) !== t.race) continue;
-      const j = e.job ? this.w.sched.get(e.job) : undefined;
-      if (j && j.kind === AiJob.Explore) exploring++;
-      else if (this.free(e)) idle.push(e);
+      if (e.kind === KIND_UNIT && e.town === t.id && (e.oid & 0xffff) === U.Scout && (e.oid >>> 16) === t.race && this.free(e)) free.push(e);
     }
-    for (const e of idle) {
-      if (exploring >= want) break;
-      this.w.logistics.assign(e, AiJob.Explore, 1 + (this.rand() % 5), [0, 0, 0, 0]);
-      exploring++;
-    }
+    for (const e of free.slice(0, want)) this.w.logistics.assign(e, AiJob.Explore, 1 + (this.rand() % 5), [0, 0, 0, 0]);
   }
 
   /** offensive troop wants (2.3 step 2, `00468a60`) */
@@ -412,21 +495,6 @@ export class Ai {
     if (!r) return false;
     const first = this.list(t, r.madeAt)[0];
     return !!first && first.active && this.w.logistics.trainState(t, first, type) === 1;
-  }
-
-  /** profile 2 attacks only towns its units have seen (2.4): a unit inside a town's area */
-  private discover(ps: AiPlayer): void {
-    const eco = this.w.economy;
-    ps.discovered = ps.discovered.filter(id => eco.towns[id]?.alive);
-    if (ps.profile !== 2) return;
-    for (const t of eco.towns) {
-      if (!t.alive || t.race === ps.race || ps.discovered.includes(t.id)) continue;
-      for (const e of this.w.entities) {
-        if (e.kind !== KIND_UNIT || e.owner !== ps.race || e.inside >= 0) continue;
-        if (this.inTerritory(e, t)) { ps.discovered.push(t.id); break; }
-      }
-    }
-    ps.discovered.sort((a, b) => a - b);
   }
 
   // ---------------------------------------------------------------- founding (1.12)
@@ -462,11 +530,15 @@ export class Ai {
     return this.w.territory.discFree(this.mask(x), this.mask(y), R);
   }
 
+  /**
+   * The founding site (1.12 step 3): around each start candidate in file order the site-search
+   * ring walk with radius 20 (`00449c00`, world-populate.md 2.3: the candidate, rings 1..9, the
+   * corner of ring 10); the first valid cell wins.
+   */
   private findSite(race: number): [number, number] | null {
     for (const [px, py] of this.points(3)) {
-      for (let k = 0; k <= 20; k += 2) {
-        for (const [x, y] of ring(px, py, k)) if (this.siteValid(race, x, y)) return [this.mask(x), this.mask(y)];
-      }
+      const c = this.w.naval.siteSearch(px, py, 20, (x, y) => this.siteValid(race, x, y));
+      if (c) return c;
     }
     return null;
   }
@@ -556,16 +628,29 @@ export class Ai {
 
   // ---------------------------------------------------------------- scouts (0x28)
 
-  /** explore job: walk to a random map cell, again and again; data [x, y, has target, legs] */
+  /**
+   * The scout job (0x28, combat.md 15): while its walk runs, the walk's delays are the job's (a
+   * step, a turn, a wait). When the walk has ended (any result): x = rand, y = rand, the first cell
+   * of the square spiral around (x, y) free for the path mask (0x3C, units do not count), one
+   * follow-path walk there whose first run (first plan) comes rand() % 5 + 1 ticks later, which is
+   * also the job's delay. Data [x, y, has target, legs]: the goal cell and 1 while a walk was made.
+   */
   private runExplore(job: Job): number {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || u.job !== job.id) return 0;
-    if (u.path) return 10;
+    if (u.path) {
+      if (this.w.isShip(u)) return 10;
+      const tick = this.w.tick, stepEnd = u.stepStart + u.stepTicks;
+      if (u.stepTicks > 0 && stepEnd > tick) return stepEnd - tick;
+      return u.moveAt > tick ? Math.min(599, u.moveAt - tick) : 1;
+    }
     if (this.w.isShip(u)) return this.exploreShip(u);
-    // standing: the next random map cell, one follow-path walk there (integration-ai.md 7 item 6)
-    d[0] = this.rand() % this.w.size; d[1] = this.rand() % this.w.size; d[2] = 1; d[3] = 0;
-    if (!this.walkToward(u, d[0], d[1]) || !u.path) d[2] = 0;
-    return 10;
+    const x = this.rand() % this.w.size, y = this.rand() % this.w.size;
+    const c = this.w.naval.spiral(x, y, this.w.size, (px, py) => this.w.blocked[(this.mask(py) << this.w.bits) | this.mask(px)] === 0);
+    const delay = 1 + (this.rand() % 5);
+    d[0] = c ? c[0] : x; d[1] = c ? c[1] : y; d[2] = 0; d[3] = 0;
+    if (c && this.w.follow(u, c[0], c[1], 0, delay)) d[2] = 1;
+    return delay;
   }
 
   /**
@@ -638,7 +723,8 @@ export class Ai {
       default: return;
     }
     if (!target) return;
-    const members = cands.slice(0, size);
+    // the cut erases candidates from the front: the army keeps the LAST `size` (2.4)
+    const members = cands.slice(Math.max(0, n - size));
     if (!members.length) return;
     ps.armyTown = target.id;
     ps.armyMembers = [];
@@ -666,10 +752,9 @@ export class Ai {
     for (const u of cands) {
       if (u.group !== Grp.None) continue;
       u.group = Grp.Army;
-      ps.armyMembers.push(u.id);
+      ps.armyMembers.push(u.id);   // join order (`00465ad0`)
       joined.push(u);
     }
-    ps.armyMembers.sort((a, b) => a - b);
     // `00465ad0` (units-and-jobs.md 4.7): a member farther than 20 from the target point walks to
     // the first cell of the 4.8 spiral around it whose flags miss 0x3E (one cell for the whole
     // join: nobody moves before the walks start), first run after 2 ticks
@@ -739,8 +824,10 @@ export class Ai {
   private runArmy(job: Job): number {
     const ps = this.players[job.owner], d = job.data;
     if (!ps || ps.army !== job.id) return 0;
+    // only the relation ends a running army: after its target town fell it goes on around the
+    // stored target point against that race (2.5 "When the target town falls")
     const tt = this.w.economy.town(d[0]);
-    if (!tt || !tt.alive || !this.hostile(ps.race, tt.race)) return this.endArmy(ps);
+    if (!tt || !this.hostile(ps.race, tt.race)) return this.endArmy(ps);
     ps.lastArmy = this.w.tick;
     const members: Entity[] = [];
     for (const id of ps.armyMembers) {
@@ -826,7 +913,11 @@ export class Ai {
     const [fn, fd] = WEIGHT_FACTOR[me];
     const p = eco.players[me]!;
     for (let i = 0; i < 3; i++) {
-      if (i === me || !this.living(i)) continue;
+      // every other present, alive player, with or without a town (`004687a0`)
+      const other = eco.players[i];
+      if (i === me || !other || other.defeated) continue;
+      // the time test and its rand() draw come first
+      const due = this.w.tick - ps.lastMission[i] > 6000 && this.rand() % 15 === 0;
       const Si = this.strength(i);
       // S_i > w x S with w = profile weight / 1000 x race factor, compared exactly in integers
       const above = (wt: number) => Si * 1000 * fd > wt * fn * S;
@@ -834,14 +925,15 @@ export class Ai {
       const desired = above(prof.w1) ? 3 : atLeast(prof.w2) ? 2 : 1;
       dip.setAccept(me, i, 'peace', desired === 3);
       dip.setAccept(me, i, 'ceasefire', desired >= 2);
-      if (this.w.tick - ps.lastMission[i] <= 6000) continue;
-      if (this.rand() % 15 !== 0) continue;
+      if (!due) continue;
       const cur = this.relation(me, i);
       if (desired === cur || cur === 0) continue;
-      const first = p.towns.map(id => eco.towns[id]).find(t => t?.alive);
+      // the first entry of the town list (a destroyed one not yet freed too) and its first embassy,
+      // which must be active with its diplomat inside
+      const first = eco.town(p.towns[0] ?? -1);
       if (!first) continue;
-      const emb = this.list(first, B.Embassy).find(e => e.active);
-      const dipl = emb ? this.w.get(emb.operatorId) : undefined;
+      const emb = this.list(first, B.Embassy)[0];
+      const dipl = emb && emb.active ? this.w.get(emb.operatorId) : undefined;
       if (!emb || !dipl || dipl.inside !== emb.id) continue;
       if (dip.offer(emb, i, desired)) ps.lastMission[i] = this.w.tick;
     }
@@ -853,18 +945,42 @@ export class Ai {
     return JSON.parse(JSON.stringify({ v: 1, prerequisites: this.prerequisites, players: this.players, towns: this.towns })) as AiSnapshot;
   }
 
-  restore(s: AiSnapshot | undefined): void {
+  /**
+   * `v`: the world snapshot version. Before version 20 (fidelity batch 6): no gang lists (rebuilt
+   * from the groups on first use, creation order), no "started" set (taken as: some progress, or
+   * selected by a town of the race now), and research was chosen by polling (`labSeen`): a town
+   * left waiting for that poll gets its choice now.
+   */
+  restore(s: AiSnapshot | undefined, v = 20): void {
     if (!s) { this.players = [null, null, null]; this.towns = []; return; }
     const c = JSON.parse(JSON.stringify(s)) as AiSnapshot;
+    const pending: [number, number][] = [];
     // saves before the 2026-10 audit: per-town round-robin counters instead of list order, no intruder records
     for (const t of c.towns) {
       if (!t) continue;
-      const old = t as AiTown & { rr?: number[]; outRot?: number };
+      const old = t as AiTown & { rr?: number[]; outRot?: number; labSeen?: number };
       delete old.rr; delete old.outRot;
       t.moved ??= [];
       t.intruders ??= [];
+      t.gangs ??= {};
+      t.porters ??= [];
+      if (old.labSeen !== undefined) { if (v < 20) pending.push([t.town, old.labSeen]); delete old.labSeen; }
     }
     this.prerequisites = c.prerequisites; this.players = c.players; this.towns = c.towns;
+    const eco = this.w.economy;
+    for (const ps of this.players) {
+      if (!ps || ps.started) continue;
+      const p = eco.players[ps.race];
+      ps.started = [];
+      if (p) for (let i = 0; i < p.costs.length; i++) {
+        if (p.progress[i] > 0 || eco.towns.some(o => o.alive && o.race === ps.race && o.research === i)) ps.started.push(i);
+      }
+    }
+    for (const [id, seen] of pending) {
+      const t = eco.towns[id];
+      if (!t || !t.alive || t.research >= 0 || !this.players[t.race] || !this.w.entities.some(e => e.kind === KIND_BUILDING && e.town === id && e.alive && e.active && (e.oid & 0xffff) === B.Lab)) continue;
+      if (seen) this.researchDone(t); else this.labActive(t);
+    }
   }
 
   digest(mix: (v: number) => void): void {
@@ -873,12 +989,14 @@ export class Ai {
       mix(p.race); mix(p.profile); mix(p.think); mix(p.army); mix(p.armyTown); mix(p.lastArmy); mix(p.cursor); mix(p.founding); mix(p.noSite);
       for (const v of p.armyMembers) mix(v);
       for (const v of p.lastMission) mix(v);
-      for (const v of p.discovered) mix(v);
+      mix(-2); for (const v of p.discovered) mix(v);
+      mix(-3); for (const v of p.started ?? []) mix(v);
     }
     for (const s of this.towns) {
       if (!s) { mix(-1); continue; }
-      mix(s.town); mix(s.planner); mix(s.economy); mix(s.military); mix(s.underAttack); mix(s.reserve); mix(s.labSeen);
-      for (const arr of [s.A, s.B, s.C, s.moved ?? [], s.intruders ?? []]) for (const v of arr) mix(v);
+      mix(s.town); mix(s.planner); mix(s.economy); mix(s.military); mix(s.underAttack); mix(s.reserve);
+      for (const arr of [s.A, s.B, s.C, s.moved ?? [], s.intruders ?? [], s.porters ?? []]) { mix(arr.length); for (const v of arr) mix(v); }
+      for (const k of Object.keys(s.gangs ?? {}).map(Number).sort((a, b) => a - b)) { mix(k); mix(s.gangs[k].length); for (const v of s.gangs[k]) mix(v); }
       for (const r of s.build) for (const v of r) mix(v);
       for (const r of s.train) for (const v of r) mix(v);
     }

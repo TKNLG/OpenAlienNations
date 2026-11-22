@@ -83,9 +83,16 @@ test('diplomat carries a peace offer; refusal; war is always accepted', { skip }
   assert.equal(pe.active, true, 'an errand does not deactivate the embassy');
   assert.deepEqual(dip.errand(PIMMONS), { diplomat: diplomat.id, target: AMAZONS, state: Rel.Peace, decided: false });
   stepUntil(w, () => diplomat.inside === ae.id, 6000);
+  const tIn = w.tick;
   assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Ceasefire, 'in, not decided yet');
-  w.step();
-  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Peace, 'decided on the errand run after entering (3.4 step 3)');
+  // the host embassy's operator job ejects him 100 ticks after he entered (3.3); the errand stays
+  // blocked inside until the leave job has put him outside, then decides (3.4 step 3)
+  stepUntil(w, () => w.logistics.leaving(diplomat), 200);
+  assert.equal(w.tick - tIn, 100, 'ejected by the host embassy 100 ticks after entering');
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Ceasefire, 'not decided while inside');
+  stepUntil(w, () => dip.relation(PIMMONS, AMAZONS) === Rel.Peace, 60);
+  assert.equal(diplomat.inside, -1, 'decided once he is outside');
+  assert.ok(w.tick - tIn >= 120 && w.tick - tIn <= 130, `decided ${w.tick - tIn} ticks after entering`);
   assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 47 + AMAZONS), 'mentor#47+target');
   stepUntil(w, home, 6000);
 
@@ -96,9 +103,8 @@ test('diplomat carries a peace offer; refusal; war is always accepted', { skip }
   dip.setRelation(PIMMONS, AMAZONS, Rel.Ceasefire);
   offer(Rel.Peace);
   stepUntil(w, () => diplomat.inside === ae.id, 6000);
-  w.step();
+  stepUntil(w, () => w.events.some(e => e.race === PIMMONS && e.mentor === 44 + AMAZONS), 200);
   assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.Ceasefire, 'peace refused');
-  assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 44 + AMAZONS));
   stepUntil(w, home, 6000);
 
   offer(Rel.War);
@@ -226,11 +232,13 @@ test('a merchant runs a route between the two markets and stops when peace ends'
   trade.set(ama.id, 1, MF.Buy, 1); trade.set(ama.id, 1, MF.MaxStock, 25); trade.set(ama.id, 1, MF.MaxPrice, 6);
   const u: Entity = w.spawnUnit(PIMMONS, MERCHANT, pim.x + 2, pim.y + 4, pim.id);
   w.economy.joinTown(u, pim);
-  // one end only: a paused route
+  // one end only: a paused route (blocked 599); the other end keeps the paused job (4.4)
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'set', from: pim.id, to: -1 });
-  assert.deepEqual(trade.routeOf(u), { from: pim.id, to: -1, leg: 0, paused: true });
+  assert.deepEqual(trade.routeOf(u), { from: pim.id, to: -1, leg: 1, paused: true });
+  const job0 = u.job;
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'set', from: -1, to: ama.id });
-  assert.deepEqual(trade.routeOf(u), { from: pim.id, to: ama.id, leg: 0, paused: true });
+  assert.deepEqual(trade.routeOf(u), { from: pim.id, to: ama.id, leg: 1, paused: true });
+  assert.equal(u.job, job0, 'the paused route job is kept');
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'start' });
   assert.equal(trade.routeOf(u)?.paused, false);
   const wood0 = pim.stock[1], amaWood0 = ama.stock[1], m0 = w.economy.players[PIMMONS]!.money;
@@ -241,19 +249,36 @@ test('a merchant runs a route between the two markets and stops when peace ends'
   stepUntil(w, () => ama.stock[1] > amaWood0, 8000);
   assert.equal(ama.stock[1], amaWood0 + 5);
   assert.equal(u.carryAmount, 0);
+  // the market ejected him at once (T4); "stop" does nothing while he is on his way out (T7)
+  assert.ok(w.logistics.leaving(u), 'ejected right after the trade');
+  trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'stop' });
+  assert.equal(trade.routeOf(u)?.paused, false, 'ignored while leaving');
+  stepUntil(w, () => !w.logistics.leaving(u) && u.inside < 0, 200);
   // stop and start
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'stop' });
   assert.equal(trade.routeOf(u)?.paused, true);
   for (let i = 0; i < 50; i++) w.step();
   assert.equal(u.path, null, 'a paused merchant stands');
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'start' });
-  // peace ends: at the next leg he goes home to his own market and the route ends
+  // a town click on the running route keeps it running and redirects it (4.4 "Route command")
+  stepUntil(w, () => !!u.path, 600);
+  const job1 = u.job;
+  trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'set', from: -1, to: ama.id });
+  assert.equal(u.job, job1, 'the running route job is kept');
+  assert.deepEqual(trade.routeOf(u), { from: pim.id, to: ama.id, leg: 1, paused: false }, 'redirected to B');
+  // peace ends: at his next run (mid-walk) he turns round to his own market and the route ends there
+  stepUntil(w, () => !!u.path && u.inside < 0, 3000);
   dip.setRelation(PIMMONS, AMAZONS, Rel.Ceasefire);
+  for (let i = 0; i < 30; i++) w.step();
+  assert.ok(trade.routeOf(u) === null || (u.job !== 0 && u.path !== null), 'turned round on the spot');
   stepUntil(w, () => u.job === 0, 8000);
   assert.equal(trade.routeOf(u), null);
-  // foreign merchants and routes to non-partners are refused
+  // no peace test in the command: the route is made, and its first run turns him home (4.4)
   trade.apply({ type: 'route', player: PIMMONS, unit: u.id, action: 'set', from: pim.id, to: ama.id });
-  assert.equal(trade.routeOf(u), null, 'no peace: not a partner');
+  assert.ok(trade.routeOf(u) !== null, 'made without a peace test');
+  stepUntil(w, () => u.job === 0, 8000);
+  assert.equal(trade.routeOf(u), null, 'ended at A');
+  // foreign merchants are refused
   trade.apply({ type: 'route', player: AMAZONS, unit: u.id, action: 'set', from: pim.id, to: -1 });
   assert.equal(trade.routeOf(u), null);
 });
