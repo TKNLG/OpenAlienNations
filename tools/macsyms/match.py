@@ -341,6 +341,10 @@ if __name__ == '__main__':
     M.th = float(sys.argv[sys.argv.index('--th') + 1]) if '--th' in sys.argv else 0.62
     M.om = float(sys.argv[sys.argv.index('--om') + 1]) if '--om' in sys.argv else 0.5
     M.mg = float(sys.argv[sys.argv.index('--mg') + 1]) if '--mg' in sys.argv else 0.08
+    if '--exclude-b' in sys.argv:  # B functions that must stay unmatched (library code, disproved names)
+        for l in open(sys.argv[sys.argv.index('--exclude-b') + 1]):
+            e = l.split('\t')[0].strip()
+            if e in B: M.r[e] = None
     if '--seed' in sys.argv:
         for l in open(sys.argv[sys.argv.index('--seed') + 1]):
             c = l.rstrip('\n').split('\t')
@@ -351,7 +355,7 @@ if __name__ == '__main__':
         M.vt_init(json.load(open(sys.argv[i + 1])), json.load(open(sys.argv[i + 2])), fac)
     for row in M.run(): print(*row, file=sys.stderr)
     with open(sys.argv[3], 'w') as out:
-        for a, b in sorted(M.m.items()):
+        for a, b in sorted((a, b) for a, b in M.m.items() if b is not None):
             how, s = M.how[a]
             out.write(f'{a}\t{b}\t{how}\t{s:.3f}\t{A[a]["name"]}\t{B[b]["name"]}\n')
     print('matched', len(M.m), 'of', len(A), '/', len(B), file=sys.stderr)

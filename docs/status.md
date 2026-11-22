@@ -77,7 +77,8 @@ addresses they were derived from, so any claim can be re-checked.
 - `rendering/`: projection, terrain drawing, objects/picking, unit motion, projectiles, territory.
 - `ui/`: front-end menus, side panel (incl. advisor §1.1), cursors.
 - `architecture/`: simulation/lockstep, multiplayer, AI integration with the list of remaining
-  deviations (`integration-ai.md` §7, §7a–c), add-on integration, runtime recorder.
+  deviations (`integration-ai.md` §7, §7a–c), add-on integration, runtime recorder,
+  `fidelity-audit.md` (the 2026-11 audit work list).
 - `roadmap.md` (vanilla now / enhanced later), `release.md`.
 - Player docs linked from the README: `install.md` (game folder, add-on, music, config file),
   `options.md`, `server.md` (Docker, NAS, multiplayer hosting), `faq.md`; developer entry:
@@ -128,6 +129,9 @@ from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket)
 
 ## 5. Open items
 
+0. **Fidelity audit 2026-11** (`architecture/fidelity-audit.md`): consolidated work list of the
+   six-area audit against the named exes, in batches (pathfinding first). Settles items 4 and the
+   hunter part of 6 below.
 1. Recently done: border stones on water are original (verified, `territory.md` §2); advisor
    line 12 "fehlt ein Betreiber" implemented (`side-panel.md` §1.1.5); function-bar buttons test
    the active flag (§3.4).

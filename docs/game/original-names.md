@@ -19,10 +19,14 @@ exes, which stay the authority for vanilla behaviour.
   call-graph propagation, field-offset constants and function order. Measured precision of the
   propagated names is about 97 % (two-fold cross-validation against the hand-ported names).
   `dvge.exe` names go to `AN.exe` through instruction-level matching of the two PC exes, which agreed
-  with every Gold = AN pair already in these docs. About 1,140 `dvge.exe` and 970 `AN.exe`
+  with every Gold = AN pair already in these docs. About 1,100 `dvge.exe` and 920 `AN.exe`
   functions have an original name.
 - **Treat a name as a strong hint, not proof.** Before a spec relies on one, check that the code
-  fits it. Names from sections 2 to 5 are exact.
+  fits it. Names from sections 2 to 5 are exact. The 2026-11 fidelity audit read several hundred
+  named functions and found about a dozen names that did not fit; those are on a reject list and
+  no longer applied (most came from a message table first aligned one slot off, now fixed).
+- C runtime functions (`rand`, `memcpy`, float conversion, ...) carry their library names, taken
+  from the library signatures in the 3.03 database (about 340 per exe).
 - Separately, Ghidra auto-analysis had missed about 650 functions per exe that are reachable only
   through vtables (virtual methods); `re/dump*` now contain them.
 
@@ -69,7 +73,7 @@ vtable slot 1 (`<Class>::Work`); slots 0, 2, 3 are the destructor, `Save` and `L
 | 0x25 | `DVPullDownJob` | ? | `0047bd60` | `00486af0` |
 | 0x26 | `DVEscapeJob` | flee | `0047da50` | `00488870` |
 | 0x27 | `DVPatrolJob` | guard | `00480a10` | `0048bce0` |
-| 0x28 | `DVScoutJob` | group move | `0047c970` | `00487700` |
+| 0x28 | `DVScoutJob` | group move (wrong: scout job) | `0047c970` | `00487700` |
 | 0x29 | `DVPriestJob` | heal | `00481180` | `0048c450` |
 | 0x2A | `DVEatBushJob` | eat crop | `00473d50` | `0047d810` |
 | 0x2B | `DVHuntsmanJob` | hunting ground | `00479800` | `00483d00` |
@@ -87,12 +91,17 @@ vtable slot 1 (`<Class>::Work`); slots 0, 2, 3 are the destructor, `Save` and `L
 | 0x37 | `OekoJob` | nature respawn | `004826a0` | `0048d920` |
 | 0x38 | `DVDiplomacyJob` | operator errand | `00478910` | `004825c0` |
 | 0x39 | `AutoSaveJob` | (not listed) |  | `0048d400` |
-| 0x3A | (Gold only, not in the Mac factory) | (not listed) |  | `004830b0` |
+| 0x3A | `DVFishermanJob` (Gold only) | (add-on fishing) |  | `004830b0` |
 | 0x3C | `DVUnitOrderJob` | answer request | `0047d940` | `00488700` |
 
-Notes: 0x0A, the house resident job, is the birth job; 0x0B, entering, is "knock" (knocking at the
+Gold-only jobs (constructors in `addon.md` Appendix B; the Mac build compiles these source files
+empty, so its factory lacks them): 0x3A `DVFishermanJob` (fishing), 0x3B `MoveToIsleJob` (sail to
+coast), 0x3D `AIReedOfficer` (the ship AI; its constructor passes type 0x3D to the `AIOfficer`
+base), 0x3E `DVWaitJob`.
+
+Notes: 0x15 `HitJob` is the impact job of `combat.md` §5; 0x0A, the house resident job, is the birth job; 0x0B, entering, is "knock" (knocking at the
 door); 0x19, the job created by an arrest, is "torture" (the interrogation); 0x25, created when a
-building is destroyed, is "pull down"; 0x37, the nature respawn, is the ecology job (`OekoJob`).
+building is destroyed, is "pull down" (the building's collapse job, `combat.md` 10.3); 0x37, the nature respawn, is the ecology job (`OekoJob`).
 **0x28 is the scout job** (`DVScoutJob`, created by `CheckScouts` `00468e10`), not a group move:
 3.1 needs correcting. 0x2C..0x36 are player and AI jobs (finances, mission goals, research, dialog
 refresh, the AI general and its officers), 0x39 the autosave.
@@ -143,111 +152,113 @@ Dialog open table (Gold `004bc448`, index from 1):
 | 16 | `dlg_resourceinfo` | `00417490` |  |
 | 17 | `dlg_buildings` | `00417530` |  |
 
-## 5. Network message types
+## 5. Message types (commands)
 
-Message handler table (Gold `004bce58`, index = message type). These are the message classes
-(`Msg<Name>`) sent between the simulation and the clients; the unit orders called "command 0x.." in
-`units-and-jobs.md` are a separate numbering inside `MsgUnitAction::InterpretMessage` (AN `00450bb0`).
+Message factory table (AN `0x4AFCE0`, Gold `004bce58`): slot s creates message type s + 1 (type byte
+at message +8). The handler of a type is slot 0 of its vtable, `Msg<Name>::InterpretMessage`. The
+"command 0x.." numbers in `units-and-jobs.md` and `combat.md` are these type bytes (e.g. 0x15
+UnitAction = the unit orders, AN `00450bb0`; 0x2A IdleAnim = the idle fidget, `00452000`; 0x3A
+ObjectDismiss = send out, `004520e0`). Handlers without an address were not matched.
 
-| type | original name | Gold | AN |
+| type | original name | AN handler | Gold handler |
 |---|---|---|---|
-| 0x00 | `ObjectMove` | `00458fe0` | `00453480` |
-| 0x01 | `ObjectTurn` | `00459010` | `004534b0` |
-| 0x02 | `ObjectType` | `00459040` |  |
-| 0x03 | `ObjectGoesIn` | `00459060` |  |
-| 0x04 | `ObjectBuildingProgress` | `00459080` |  |
-| 0x05 | `ObjectSetAnimationSet` | `004590a0` |  |
-| 0x06 | `CmdDeactivate` | `004590c0` |  |
-| 0x07 | `CmdResearch` | `004590e0` | `00453580` |
-| 0x08 | `DlgConstructableUnits` | `00459110` |  |
-| 0x09 | `StopResearch` | `00459130` |  |
-| 0x0A | `DlgResConstructableBuildings` | `00459160` | `00453600` |
-| 0x0B | `CmdSelectTown` | `00459190` |  |
-| 0x0C | `DlgUnitInfo` | `004591c0` |  |
-| 0x0D | `DlgBuildingInfo` | `004591e0` |  |
-| 0x0E | `DlgGroupInfo` | `00459200` | `004536a0` |
-| 0x0F | `DlgTownInfo` | `00459220` |  |
-| 0x10 | `DlgResearch` | `00459240` | `004536e0` |
-| 0x11 | `CmdFoundCity` | `00459260` | `00453700` |
-| 0x12 | `LocalAction` | `00459280` |  |
-| 0x13 | `UnitAction` | `004592d0` |  |
-| 0x14 | `CmdBuildUnit` | `004592b0` | `00453750` |
-| 0x15 | `CmdBuildBuilding` | `004592f0` |  |
-| 0x16 | `HitObject` | `00459310` | `004537b0` |
-| 0x17 | `StartAnim` | `00459330` |  |
-| 0x18 | `MainButtonPressed` | `00459350` |  |
-| 0x19 | `Shoot` | `00459370` |  |
-| 0x1A | `NewTown` | `00459390` | `00453830` |
-| 0x1B | `GotoTown` | `004593c0` |  |
-| 0x1C | `ObjectDestroy` | `004593f0` |  |
-| 0x1D | `SetLocalPosition` | `00459410` |  |
-| 0x1E | `CmdMoveHome` | `00459430` |  |
-| 0x1F | `CmdPullDown` | `00459450` | `004538e0` |
-| 0x20 | `DlgResources` | `00459480` | `00453910` |
-| 0x21 | `DlgCitizen` | `004594b0` | `00453940` |
-| 0x22 | `CmdRemoveResource` | `004594d0` |  |
-| 0x23 | `DlgDiplomacy` | `004594f0` |  |
-| 0x24 | `SetFrame` | `00459510` | `004539a0` |
-| 0x25 | `StopAnim` | `00459530` |  |
-| 0x26 | `Mark` | `00459550` |  |
-| 0x27 | `CmdAbortBuild` | `00459570` | `00453a00` |
-| 0x28 | `IdleAnim` | `00459590` |  |
-| 0x29 | `ObjectOpenDoor` | `004595b0` |  |
-| 0x2A | `ObjectCloseDoor` | `004595d0` |  |
-| 0x2B | `ObjectPlayAnims` | `004595f0` |  |
-| 0x2C | `ObjectActivate` | `00459610` |  |
-| 0x2D | `ObjectDeactivate` | `00459650` |  |
-| 0x2E | `BuildCityhall` | `00459670` |  |
-| 0x2F | `DlgBuildingSite` | `00459690` |  |
-| 0x30 | `DlgMotivation` | `004596b0` | `00453b40` |
-| 0x31 | `DlgPurchase` | `004596d0` | `00453b60` |
-| 0x32 | `DlgSale` | `004596f0` |  |
-| 0x33 | `DlgTrader` | `00459720` |  |
-| 0x34 | `CmdLocalPause` | `00459750` | `00453be0` |
-| 0x35 | `DlgHistory` | `00459aa0` |  |
-| 0x36 | `ResearchFinished` | `00459770` |  |
-| 0x37 | `DlgProduction` | `00459790` |  |
-| 0x38 | `ObjectDismiss` | `004597b0` | `00453c40` |
-| 0x39 | `ObjectWasBuilt` | `004597d0` |  |
-| 0x3A | `GameOver` | `004597f0` |  |
-| 0x3B | `Dlg` | `00459810` |  |
-| 0x3C | `DlgResourceInfo` | `00459830` |  |
-| 0x3D | `Credits` | `00459850` |  |
-| 0x3E | `ObjectStopAnims` | `00459870` |  |
-| 0x3F | `ActivateTown` | `00459630` |  |
-| 0x40 | `DeactivateTown` | `00459890` |  |
-| 0x41 | `CmdGotoObject` | `004598b0` |  |
-| 0x42 | `DlgBuildings` | `004598d0` |  |
-| 0x43 | `CmdTradingLot` | `004598f0` |  |
-| 0x44 | `CmdTraderStart` | `00459910` | `00453da0` |
-| 0x45 | `CmdTraderStop` | `00459930` |  |
-| 0x46 | `CmdSetMotivationInv` | `00459950` | `00453de0` |
-| 0x47 | `ObjectSetAnimationFrame` | `00459980` |  |
-| 0x48 | `ObjectBackwardAnimation` | `004599a0` |  |
-| 0x49 | `CmdSetTownName` | `004599c0` |  |
-| 0x4A | `RemoveTown` | `004599e0` | `00453e70` |
-| 0x4B | `MentorTalk` | `00459a00` |  |
-| 0x4C | `CmdPatrol` | `00459a20` |  |
-| 0x4D | `AddPatrolPoint` | `00459a40` | `00453ed0` |
-| 0x4E | `SetPaused` | `00459a70` |  |
-| 0x4F | `LocalReady` | `00459ac0` |  |
-| 0x50 | `CmdSetResearchInv` | `00459ae0` | `00453f70` |
-| 0x51 | `CmdRemoveUnitResource` | `00459b10` |  |
-| 0x52 | `CmdRepair` | `00459b30` | `00453fc0` |
-| 0x53 | `Outpost` | `00459b60` | `00453ff0` |
-| 0x54 | `SetDiplomacy` | `00459b90` | `00454020` |
-| 0x55 | `CmdFood` | `00459bb0` |  |
-| 0x56 | `CmdSale` | `00459bd0` |  |
-| 0x57 | `CmdPurchase` | `00459bf0` |  |
-| 0x58 | `CmdDiplomacy` | `00459c10` |  |
-| 0x59 | `SetRelation` | `00459c30` |  |
-| 0x5A | `MakeVisible` | `00459c50` |  |
-| 0x5B | `RemoveFromHash` | `00459c70` |  |
-| 0x5C | `TownProblem` | `00459c90` |  |
-| 0x5D | `CmdPauseBuild` | `00459cb0` |  |
-| 0x5E | `CmdAbortDiplomacy` | `00459cd0` | `00454160` |
-| 0x5F | `ObjectMark` | `00459d00` | `00454190` |
-| 0x60 | `RefreshMainDlg` | `00459d30` |  |
-| 0x61 | `PlaySfx` | `00459d50` | `004541e0` |
-| 0x62 | `ObjectGoesOut` | `00459d80` |  |
-| 0x63 | `SetTimerIntervall` | `00459da0` | `00454230` |
+| 0x02 | `ObjectMove` |  |  |
+| 0x03 | `ObjectTurn` |  |  |
+| 0x04 | `ObjectType` | `00455a80` | `0045b6d0` |
+| 0x05 | `ObjectGoesIn` | `00455ad0` | `0045b720` |
+| 0x06 | `ObjectBuildingProgress` |  |  |
+| 0x07 | `ObjectSetAnimationSet` |  |  |
+| 0x08 | `CmdDeactivate` | `00450860` | `00456230` |
+| 0x09 | `CmdResearch` | `00450910` | `004562e0` |
+| 0x0A | `DlgConstructableUnits` |  |  |
+| 0x0B | `StopResearch` |  |  |
+| 0x0C | `DlgResConstructableBuildings` |  |  |
+| 0x0D | `CmdSelectTown` |  |  |
+| 0x0E | `DlgUnitInfo` |  |  |
+| 0x0F | `DlgBuildingInfo` |  |  |
+| 0x10 | `DlgGroupInfo` |  |  |
+| 0x11 | `DlgTownInfo` |  |  |
+| 0x12 | `DlgResearch` |  |  |
+| 0x13 | `CmdFoundCity` | `004509d0` | `004563a0` |
+| 0x14 | `LocalAction` |  |  |
+| 0x15 | `UnitAction` | `00450bb0` | `004567a0` |
+| 0x16 | `CmdBuildUnit` |  |  |
+| 0x17 | `CmdBuildBuilding` | `00451780` | `004571e0` |
+| 0x18 | `HitObject` |  |  |
+| 0x19 | `StartAnim` |  |  |
+| 0x1A | `MainButtonPressed` | `00451ac0` | `00457550` |
+| 0x1B | `Shoot` |  |  |
+| 0x1C | `NewTown` | `00456740` | `0045c3b0` |
+| 0x1D | `GotoTown` |  |  |
+| 0x1E | `ObjectDestroy` | `00456770` | `0045c3e0` |
+| 0x1F | `SetLocalPosition` |  |  |
+| 0x20 | `CmdMoveHome` |  |  |
+| 0x21 | `CmdPullDown` |  |  |
+| 0x22 | `DlgResources` |  |  |
+| 0x23 | `DlgCitizen` |  |  |
+| 0x24 | `CmdRemoveResource` | `00451f10` | `004579a0` |
+| 0x25 | `DlgDiplomacy` |  |  |
+| 0x26 | `SetFrame` | `004567b0` | `0045c420` |
+| 0x27 | `StopAnim` |  |  |
+| 0x28 | `Mark` | `00450700` | `004560d0` |
+| 0x29 | `CmdAbortBuild` | `00451fc0` | `00457a50` |
+| 0x2A | `IdleAnim` | `00452000` | `00457a90` |
+| 0x2B | `ObjectOpenDoor` | `004568a0` | `0045c510` |
+| 0x2C | `ObjectCloseDoor` | `004568e0` | `0045c550` |
+| 0x2D | `ObjectPlayAnims` | `00456920` | `0045c590` |
+| 0x2E | `ObjectActivate` | `004569a0` | `0045c610` |
+| 0x2F | `ObjectDeactivate` | `004569e0` | `0045c650` |
+| 0x30 | `BuildCityhall` |  |  |
+| 0x31 | `DlgBuildingSite` |  |  |
+| 0x32 | `DlgMotivation` |  |  |
+| 0x33 | `DlgPurchase` |  |  |
+| 0x34 | `DlgSale` |  |  |
+| 0x35 | `DlgTrader` |  |  |
+| 0x36 | `CmdLocalPause` | `004528b0` | `00458360` |
+| 0x37 | `DlgHistory` |  |  |
+| 0x38 | `ResearchFinished` | `00457190` | `0045ce90` |
+| 0x39 | `DlgProduction` |  |  |
+| 0x3A | `ObjectDismiss` | `004520e0` | `00457b70` |
+| 0x3B | `ObjectWasBuilt` | `00457250` | `0045cf50` |
+| 0x3C | `GameOver` | `00457460` | `0045d160` |
+| 0x3D | `Dlg` | `00455d00` | `0045b950` |
+| 0x3E | `DlgResourceInfo` |  |  |
+| 0x3F | `Credits` |  |  |
+| 0x40 | `ObjectStopAnims` | `00456960` | `0045c5d0` |
+| 0x41 | `ActivateTown` | `00457a60` | `0045d770` |
+| 0x42 | `DeactivateTown` |  |  |
+| 0x43 | `CmdGotoObject` |  |  |
+| 0x44 | `DlgBuildings` |  |  |
+| 0x45 | `CmdTradingLot` |  |  |
+| 0x46 | `CmdTraderStart` |  |  |
+| 0x47 | `CmdTraderStop` |  |  |
+| 0x48 | `CmdSetMotivationInv` |  |  |
+| 0x49 | `ObjectSetAnimationFrame` |  |  |
+| 0x4A | `ObjectBackwardAnimation` |  |  |
+| 0x4B | `CmdSetTownName` |  |  |
+| 0x4C | `RemoveTown` | `00457d70` | `0045da80` |
+| 0x4D | `MentorTalk` | `00457d90` | `0045daa0` |
+| 0x4E | `CmdPatrol` | `00452790` | `00458220` |
+| 0x4F | `AddPatrolPoint` | `00452840` | `004582e0` |
+| 0x50 | `SetPaused` | `00457db0` | `0045dac0` |
+| 0x51 | `LocalReady` |  |  |
+| 0x52 | `CmdSetResearchInv` |  |  |
+| 0x53 | `CmdRemoveUnitResource` |  |  |
+| 0x54 | `CmdRepair` | `00452a70` | `004585d0` |
+| 0x55 | `Outpost` | `004572c0` | `0045cfc0` |
+| 0x56 | `SetDiplomacy` | `00452a90` | `004585f0` |
+| 0x57 | `CmdFood` | `00476630` | `004800f0` |
+| 0x58 | `CmdSale` |  |  |
+| 0x59 | `CmdPurchase` |  |  |
+| 0x5A | `CmdDiplomacy` | `00452c90` | `004587f0` |
+| 0x5B | `SetRelation` |  |  |
+| 0x5C | `MakeVisible` | `00458530` | `0045e260` |
+| 0x5D | `RemoveFromHash` |  |  |
+| 0x5E | `TownProblem` | `004586f0` | `0045e420` |
+| 0x5F | `CmdPauseBuild` | `00452d20` | `00458880` |
+| 0x60 | `CmdAbortDiplomacy` |  |  |
+| 0x61 | `ObjectMark` |  |  |
+| 0x62 | `RefreshMainDlg` |  |  |
+| 0x63 | `PlaySfx` |  |  |
+| 0x64 | `ObjectGoesOut` | `00455b30` | `0045b780` |
+| 0x65 | `SetTimerIntervall` |  |  |
