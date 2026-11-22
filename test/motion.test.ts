@@ -91,7 +91,7 @@ test('turn delays before steps: 45 free, 90 one tick, 180 three ticks', {}, () =
   assert.equal(firstStep(3), base + 1, '90 degrees');
   assert.equal(firstStep(2), base + 2, '135 degrees');
   assert.equal(firstStep(1), base + 3, '180 degrees');
-  assert.equal(base, 1 + 3, 'the command applies on the next tick, the first step 3 ticks after planning');
+  assert.equal(base, 1 + 1 + 3, 'the command applies on the next tick, the walk plans 1 tick later (3.2), the first step 3 ticks after planning');
 });
 
 test('a step moves the simulation position at once; the display gets start tick and duration D', {}, () => {
@@ -186,7 +186,8 @@ test('a busy blocker on the goal: re-plan, and the arrival tolerance stops the w
   const walker = w.get(1)!, busy = w.get(2)!;
   busy.job = w.sched.create(0x7f, busy.id, 599).id;   // any job: not idle, not walking
   walker.dir = 5;
-  w.schedule({ type: 'move', player: 0, ids: [1], x: 15, y: 10 });
+  // a follow-path walk onto the busy unit's cell (a move order would pick a free cell, 3.2)
+  w.follow(walker, 15, 10);
   until(w, () => w.tick > 2 && !walker.path, 300);
   assert.deepEqual(cell(walker), [14, 10]);
   assert.equal(walker.walkResult, WalkResult.Near);

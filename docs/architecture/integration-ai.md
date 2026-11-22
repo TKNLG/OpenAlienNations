@@ -151,7 +151,8 @@ radius-25 disc (the territory disc it would claim, `economy.md` 11.3) stays clea
 a founder inside a building or aboard a ship ends the mission and keeps group 54; a moved site
 cancels the founder's job (and a ship request); once the founder is 8..15 cells from the site,
 `logistics.found(founder, x, y)` creates the town and its town-hall site, and the founder's job
-0x0E completes and enters it (births, goods); an idle founder elsewhere walks (in legs) to the
+0x0E completes and enters it (births, goods); an idle founder elsewhere walks (one follow-path
+walk, first run after 5 ticks) to the
 first cell of the 30-ring site search that is free land 8..15 cells from the site, or, in the
 add-on, asks the naval planner for a ship when that cell is on another island. If `found`
 refuses (the site was taken meanwhile), the mission looks for a new site on its next run. The new town's AI jobs are started by the think
@@ -197,7 +198,8 @@ sensibly:
    in the original.
 2. **Porter-shortage targets (1.4)** are applied to every race. The original's copy loop only
    works for the Amazons (indexing bug), which would leave Pimmon and Sajiki towns building
-   nothing but a house.
+   nothing but a house. Kept deliberately: maintainer decision of 2026-11-22 after the
+   fidelity audit (`fidelity-audit.md`), although the bug is confirmed in the exe and the Mac build.
 3. **Placement (1.5, 7 item 2):** candidate cells are our building anchors (footprint at
    x - sizeX + 1 .. x). The padded rectangle has a 1-cell margin left and top and 1..3 cells
    right and bottom. Every padded cell must be free and not a mountain (except mine and outposts);
@@ -220,16 +222,31 @@ sensibly:
    (`logistics.complete`), as in the original. The military job's refill is dead code in the
    original and is not implemented (fixed in the audit, 7a E).
 6. **Scouts:** only the wanted number (C[24]) explores. Further scouts stay free, so the
-   dispatcher can send them to watchtowers, whose operator is the scout. The explore job walks in
-   legs of at most 24 cells towards its random target, and a new target is picked after 40 legs.
-   The original sends up to C[24] more idle scouts every think, so in the long run every idle
-   scout explores (spec 2.3).
-7. **Long walks** (army members, founders, released units, returning defenders) go in legs of at
-   most 32 cells per axis with small path searches, re-issued by the running job. Long A*
-   searches for armies were the AI's main cost. Exception: the members of an ending army have no
-   job that could re-issue a leg, so they get one follow-path walk (`World.follow`, with its own
-   re-plans) to the first free cell of a spiral around their home town (spec 2.5 last bullet;
-   fixed October 2026, before that they stood after one leg).
+   dispatcher can send them to watchtowers, whose operator is the scout. The explore job picks a
+   random map cell and walks there with one follow-path walk (`World.follow`, the original
+   planner of `units-and-jobs.md` 4.1.1); when the scout stands again it picks the next cell.
+   (Until November 2026 it walked in legs of at most 24 cells and re-picked after 40 legs, a
+   stand-in for the old one-way A*.) The job's own details (usable-cell spiral, 1..5 tick pause)
+   are a separate audit item. The original sends up to C[24] more idle scouts every think, so in
+   the long run every idle scout explores (spec 2.3).
+7. **Long walks** are single follow-path walks (`World.follow`: the original planner of
+   `units-and-jobs.md` 4.1.1, up to 15 plans, the arrival tolerance) to their real targets, as
+   in the original (since November 2026; before that they went in legs of at most 32 cells with
+   small node budgets, a stand-in for the old one-way A*):
+   - army members joining (`00465ad0`, spec 2.5 "Joining and moving", `units-and-jobs.md` 4.7):
+     a member farther than 20 (max + min/2) from the target town's position has its job
+     cancelled and walks to the first cell of the 4.8 spiral around that position whose flags
+     miss 0x3E (the same cell for every member of the join), first run after 2 ticks;
+   - the founder (1.12 step f): to its approach cell, first run after 5 ticks;
+   - returning defenders (2.2): to the town centre ± 20, first run after 5 + rand() mod 10
+     ticks (the third draw);
+   - the members of an ending army (spec 2.5 last bullet): to the first free cell of a spiral
+     around their home town, first run after rand() mod 10 + 2 ticks (the member's draw);
+   - released units (a merchant without partner, `release`): to the first free cell of a spiral
+     around their town's position (our choice of cell; the original's walk target for this case
+     is not specified).
+   A target the planner cannot reach within its 2000 iterations fails after the walk's plans, as
+   in the original, instead of being approached leg by leg.
 8. **Founding** (1.12): the site test is the engine's `canFound(..., territory = true)` (the four
    points outside every territory) and the disc of the town hall's radius (25: 373 blocks)
    around the site free of every territory. Sites are searched in rings of step 2 up to 20 cells around each start candidate in

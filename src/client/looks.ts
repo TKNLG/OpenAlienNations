@@ -188,7 +188,7 @@ export class Looks {
       const cls = rule?.cls ?? -1;
       if (cls === 8) { // tree
         if (e.standing) { entry = slot(S.CA) ?? slot(S.WO); }
-        else if (e.amount === 0 && e.growJob) { entry = slot(S.ST); if (entry) frame = Math.min(entry.frames - 1, Math.floor((e.stage / 100) * entry.frames)); }
+        else if (e.amount === 0 && e.growJob) { entry = slot(S.ST); if (entry) frame = Math.min(entry.frames - 1, Math.round((e.stage / 100) * entry.frames)); }   // growth step = frame (7.5)
         else if (e.action === Action.Work && (entry = slot(S.WO)) && anim(entry, e.actionTick, false) < entry.frames - 1) {
           frame = anim(entry, e.actionTick, false);
         } else { entry = slot(S.MS); if (entry) frame = byLoss(entry); }

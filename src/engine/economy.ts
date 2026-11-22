@@ -44,10 +44,9 @@ export const Mentor = {
 } as const;
 
 /**
- * The advisor time unit D (`DAT_004a5d7c`, economy.md 5.4, side-panel.md 1.1) in milliseconds of
- * the original's clock. Its value is not given by the spec (I): the need lines' interval is
- * rand() mod 2D + 2D, and the one line whose interval is documented with a number (mentor#81,
- * "2 x 60000 ms", units-and-jobs.md 7.7.1) suggests D = 60000 ms, i.e. 120..152.8 s.
+ * The advisor time unit D (`DAT_004a5d7c` = 60000, a constant of the exe, economy.md 5.4,
+ * side-panel.md 1.1) in milliseconds of the original's clock: the need lines' interval is
+ * rand() mod 2D + 2D = 120..152.8 s.
  */
 export const ADVISOR_UNIT_MS = 60000;
 /** the advisor's usual minimum interval, 2 D = 120 s (side-panel.md 1.1.3) */
@@ -60,6 +59,9 @@ export interface Town {
   race: number;
   /** index into the race's pool of 10 town names (DV.tdb 142 + 10 x race) */
   nameIndex: number;
+  /** a name given with the rename command (units-and-jobs.md 11.2 "Renaming a town"); absent =
+   *  the default name of `nameIndex` */
+  name?: string;
   /** settlement id used by the map's records */
   mapId: number;
   hall: number;
@@ -169,14 +171,17 @@ export interface EcoEntity {
   alive?: boolean;
 }
 
-const KIND_UNIT = 0, KIND_BUILDING = 1;
+const KIND_BUILDING = 1;
 const SUBCELL = 256;
 
-export interface EconomySnapshot { players: (Player | null)[]; towns: Town[]; }
+export interface EconomySnapshot { players: (Player | null)[]; towns: Town[]; network?: boolean; }
 
 export class Economy {
   players: (Player | null)[] = [null, null, null];
   towns: Town[] = [];
+  /** a network (lockstep) game: the goal job ignores mission goals and declares the last nation
+   *  alive the winner (mdb.md "Goals") */
+  network = false;
   private host: EconomyHost;
 
   constructor(host: EconomyHost) { this.host = host; }
@@ -280,11 +285,12 @@ export class Economy {
 
   town(id: number): Town | undefined { return id >= 0 ? this.towns[id] : undefined; }
 
-  /** the n-th (1-based) town of a race in founding order; 0 is treated as the first */
+  /** the n-th (1-based) entry of a race's town list (destroyed towns not yet released included);
+   *  none for n <= 0 or past the end (mdb.md "Goals": city-based goals are then false) */
   nthTown(race: number, n: number): Town | undefined {
     const p = this.players[race];
-    if (!p) return undefined;
-    return this.towns[p.towns[Math.max(1, n) - 1]];
+    if (!p || !(n >= 1)) return undefined;
+    return this.towns[p.towns[n - 1]];
   }
 
   /**
@@ -492,6 +498,21 @@ export class Economy {
     if (!b.houseJob && b.alive !== false) b.houseJob = this.host.sched.create(JobKind.House, b.id, 599).id;
   }
 
+  /**
+   * Town destruction moved units here as homeless (combat.md 10.4 step 3): the town's small houses
+   * (37) and then its large houses (38), each in list (creation) order, take homeless at once while
+   * alive and not full. Construction sites are in those lists too and take residents (quirk).
+   */
+  rehouseTown(t: Town): void {
+    for (const type of [T.SmallHouse, T.LargeHouse]) {
+      for (const b of this.host.entities) {
+        if (!t.homeless.length) return;
+        if (b.kind !== KIND_BUILDING || b.town !== t.id || this.typeOf(b) !== type || (b.oid >>> 16) !== t.race || b.alive === false) continue;
+        this.rehouse(b);
+      }
+    }
+  }
+
   /** move homeless units in while there is room (3.3) */
   private rehouse(b: EcoEntity): void {
     const t = this.town(b.town), r = this.ruleOf(b);
@@ -659,8 +680,20 @@ export class Economy {
   private townIncome(t: Town): number {
     const homeless = t.homeless.length;
     const criminals = this.count(t, T.Criminal, false);
-    const income = 7 * Math.max(0, t.population - homeless - criminals);
-    return this.count(t, T.Bank) > 0 ? Math.trunc(income * 1.5) : income;
+    // not clamped: a homeless criminal is subtracted twice and the income can be negative (4.2)
+    const income = 7 * (t.population - homeless - criminals);
+    return this.firstActive(t, T.Bank) ? Math.trunc(income * 1.5) : income;
+  }
+
+  /**
+   * Whether the first building of a type in the town's list (sites included, in the order they
+   * joined the town) is active: the bank, laboratory and library tests look at no other (4.2, 4.4)
+   */
+  firstActive(t: Town, type: number): boolean {
+    for (const e of this.host.entities) {
+      if (e.kind === KIND_BUILDING && e.alive !== false && e.town === t.id && (e.oid & 0xffff) === type && (e.oid >>> 16) === t.race) return e.active;
+    }
+    return false;
   }
 
   /**
@@ -684,12 +717,15 @@ export class Economy {
     const income = this.townIncome(t);
     t.income = income;
     let available = money;
-    const m = Math.trunc((t.motivationPct * income) / 100);
+    const m = income > 0 ? Math.trunc((t.motivationPct * income) / 100) : 0;
     let paidM = 0;
     if (income > 0 && (t.happiness < 100 || t.bonus) && m < available) { paidM = m; available -= m; }
-    const net = Math.trunc(f32(f32(income - paidM) - f32(4 * t.researchAcc) - t.overheads));
+    // x87: one truncation at the end, no float32 rounding of the intermediates (4.6); the
+    // accumulator is a float32 and 4 x acc is exact
+    const net = Math.trunc((income - paidM) - 4 * t.researchAcc - t.overheads);
+    // the stored spendings: the full slider values when the income is positive, else 0 (4.6)
     t.motivationSpent = m;
-    t.researchSpent = Math.trunc((t.researchPct * income) / 100);
+    t.researchSpent = income > 0 ? Math.trunc((t.researchPct * income) / 100) : 0;
     return net;
   }
 
@@ -729,6 +765,8 @@ export class Economy {
   updateHappiness(t: Town): void {
     const p = this.players[t.race];
     const hall = this.host.get(t.hall);
+    // the bonus flag is cleared for every town, whatever follows (5.5)
+    t.bonus = 0;
     // only for human towns with population whose first town hall is active (5.5)
     if (!p || p.computer || t.population <= 0 || !hall || !hall.active) {
       t.crime = 0; t.foodPct = 100; t.needsPct = 100; t.happiness = 100;
@@ -740,7 +778,6 @@ export class Economy {
     t.foodPct = Math.min(100, Math.trunc((t.stock[Good.Food] * 100) / Math.max(1, Math.trunc(t.population / 5))));
     t.needsPct = Math.trunc(100 / (t.open.length + 1));
     let h = Math.trunc((t.needsPct - t.crime + 100 + t.foodPct) / 3);
-    t.bonus = 0;
     if (h < 100 && t.income !== 0) {
       t.bonus = 1;
       h = Math.min(100, h + Math.trunc((t.motivationSpent * 100) / t.income));
@@ -787,14 +824,28 @@ export class Economy {
 
   // ---------------------------------------------------------------- research (4.4)
 
+  /**
+   * Choose a research project (`0045a570`, economy.md 4.4.1 "Starting"); -1 stops research (our
+   * form of the stop command). Choosing the project whose job is running cancels that job and
+   * leaves the project set, so research stops until it is chosen again (toggle quirk); any other
+   * choice cancels a running job and starts a new one, first run after 30 ticks. Our build
+   * refuses unknown and finished inventions (the panel offers only open ones).
+   */
   selectResearch(t: Town, invention: number): void {
     const p = this.players[t.race];
     if (!p) return;
     if (invention >= 0 && (invention >= p.costs.length || this.researched(p, invention))) return;
-    t.research = invention;
-    if (invention >= 0 && !(t.researchJob && this.host.sched.get(t.researchJob))) {
-      t.researchJob = this.host.sched.create(JobKind.Research, t.id, 30).id;
+    const job = t.researchJob ? this.host.sched.get(t.researchJob) : undefined;
+    const running = !!job && !job.cancelled;
+    if (invention >= 0 && running && t.research === invention) {
+      this.host.sched.cancel(t.researchJob);
+      t.researchJob = 0;
+      return;
     }
+    t.research = invention;
+    if (invention < 0) return;
+    if (running) this.host.sched.cancel(t.researchJob);
+    t.researchJob = this.host.sched.create(JobKind.Research, t.id, 30).id;
   }
 
   researched(p: Player, i: number): boolean { return p.costs[i] !== undefined && p.progress[i] >= p.costs[i]; }
@@ -804,14 +855,17 @@ export class Economy {
     if (!t || !t.alive || t.research < 0) { if (t) t.researchJob = 0; return 0; }
     const p = this.players[t.race]!;
     const r = t.researchSpent;
-    if (r < p.money && this.count(t, T.Lab) > 0) {
+    // only the first laboratory and the first library of the town's lists are tested (4.4)
+    if (r < p.money && this.firstActive(t, T.Lab)) {
       let s = f32(r * f32(0.025));
-      if (this.count(t, T.Library) > 0) s = f32(s * f32(1.5));
+      if (this.firstActive(t, T.Library)) s = f32(s * f32(1.5));
       const i = t.research;
       p.progress[i] = Math.min(p.costs[i], f32(p.progress[i] + s));
       t.researchAcc = f32(t.researchAcc + s);
       if (this.researched(p, i)) {
-        for (const o of this.towns) if (o.race === t.race && o.research === i) o.research = -1;
+        // only this town's project is cleared: another town of the nation on the same invention
+        // finishes again at its next step (one more step charged, mentor#15 again, 4.4.1)
+        t.research = -1;
         if (!p.computer) this.host.notify(t.race, 15);   // mentor#15 "Forschung abgeschlossen."
         t.researchJob = 0;
         return 0;
@@ -822,9 +876,21 @@ export class Economy {
 
   // ---------------------------------------------------------------- goals (mdb.md "Goals")
 
+  /**
+   * The goal job of a human nation, every 50 ticks (mdb.md "Goals"). Network game: mission goals
+   * are not read; "won" once no other nation is alive (sent again on every run, only the first
+   * result counts), "lost" when this nation is dead (the job ends). Single player: dead = lost,
+   * then the loss and win conditions; a result ends the job.
+   */
   private runGoals(job: Job): number {
     const p = this.players[job.owner];
-    if (!p || p.outcome !== 0) return 0;
+    if (!p) return 0;
+    if (this.network) {
+      if (p.outcome === 0 && this.players.every(o => !o || o === p || this.dead(o.race))) p.outcome = 1;
+      if (this.dead(p.race)) { if (p.outcome === 0) p.outcome = -1; return 0; }
+      return 50;
+    }
+    if (p.outcome !== 0) return 0;
     if (this.dead(p.race)) { p.outcome = -1; return 0; }
     const wins = p.goals.filter(g => !g.defeat), losses = p.goals.filter(g => g.defeat);
     if (losses.some(g => this.goalMet(p, g))) { p.outcome = -1; return 0; }
@@ -832,10 +898,12 @@ export class Economy {
     return 50;
   }
 
-  /** a race is dead when it has neither buildings nor units */
+  /**
+   * A nation is dead only once its last living town was destroyed (the defeat of combat.md 10.4,
+   * `Player.defeated`); having no units and no buildings is not enough (mdb.md "Goals")
+   */
   dead(race: number): boolean {
-    for (const e of this.host.entities) if (e.owner === race && (e.kind === KIND_UNIT || e.kind === KIND_BUILDING)) return false;
-    return true;
+    return !!this.players[race]?.defeated;
   }
 
   private objects(race: number, t: Town | undefined, type: number, completeOnly: boolean): number {
@@ -853,7 +921,11 @@ export class Economy {
     const me = p.race;
     switch (g.type) {
       case 1: { const t = this.nthTown(me, g.p3); return !!t && t.stock[g.p1] >= g.p2; }
-      case 2: return this.objects(me, this.nthTown(me, g.p3), g.p1, true) >= g.p2;
+      case 2: {
+        // the count is only tested on a finished object: none finished = false, even for p2 <= 0
+        const n = this.objects(me, this.nthTown(me, g.p3), g.p1, true);
+        return n > 0 && n >= g.p2;
+      }
       case 3: {
         const t = this.nthTown(me, g.p2);
         if (!t) return false;
@@ -869,10 +941,15 @@ export class Economy {
       case 9: { const t = this.nthTown(me, g.p2); return !!t && t.open.length >= g.p1; }
       case 10: { const t = this.nthTown(me, g.p2); return !!t && t.happiness <= g.p1; }
       case 11: return p.relations[g.p1] === g.p2;
-      case 12: return this.objects(g.p1, this.nthTown(g.p1, g.p3), g.p2, false) === 0;
+      case 12: {
+        // an absent race would crash the original (mdb.md open questions): true; a missing city: false
+        if (!this.players[g.p1]) return true;
+        const t = this.nthTown(g.p1, g.p3);
+        return !!t && this.objects(g.p1, t, g.p2, false) === 0;
+      }
       case 13: return !this.players[g.p1] || this.dead(g.p1);
       case 14: { const t = this.nthTown(1, g.p3); return !!t && t.stock[g.p1] >= g.p2; }
-      case 15: return this.objects(me, this.nthTown(me, g.p3), g.p1, false) <= g.p2;
+      case 15: { const t = this.nthTown(me, g.p3); return !!t && this.objects(me, t, g.p1, false) <= g.p2; }
       case 16: return p.money >= g.p1;
       // Gold Edition goals (docs/game/addon.md 9.2, docs/formats/addon.md 7.2). Goal object ids are
       // creation indices from 0; our entity ids start at 1, so object #p1 is entity p1 + 1.
@@ -912,18 +989,20 @@ export class Economy {
   // ---------------------------------------------------------------- state
 
   snapshot(): EconomySnapshot {
-    return structuredCloneLite({ players: this.players, towns: this.towns });
+    return structuredCloneLite({ players: this.players, towns: this.towns, ...(this.network ? { network: true } : {}) });
   }
 
   restore(s: EconomySnapshot): void {
     const c = structuredCloneLite(s);
     this.players = c.players; this.towns = c.towns;
+    this.network = !!c.network;
   }
 
   digest(mix: (v: number) => void): void {
+    mix(this.network ? 1 : 0);
     for (const p of this.players) {
       if (!p) { mix(-1); continue; }
-      mix(p.money); mix(p.outcome);
+      mix(p.money); mix(p.outcome); mix(p.defeated ? 1 : 0);
       for (const v of p.progress) mix(Math.round(v * 4096));
       mix(p.towns.length); for (const id of p.towns) mix(id);
     }
@@ -933,6 +1012,7 @@ export class Economy {
       for (const s of t.stock) mix(s);
       mix(t.criminals.length); for (const id of t.criminals) mix(id);
       mix(t.cropPct); mix(Math.round(t.cropAcc * 4096));
+      if (t.name !== undefined) { mix(-5); mix(t.name.length); for (let i = 0; i < t.name.length; i++) mix(t.name.charCodeAt(i)); }
     }
   }
 }

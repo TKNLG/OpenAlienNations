@@ -168,6 +168,12 @@ export class Diplomacy {
     (kind === 'peace' ? this.acceptPeace : this.acceptCeasefire)[race][from] = value ? 1 : 0;
   }
 
+  toggleAccept(race: number, from: number, kind: 'peace' | 'ceasefire'): void {
+    if (race < 0 || race >= RACES || from < 0 || from >= RACES || race === from) return;
+    const t = kind === 'peace' ? this.acceptPeace : this.acceptCeasefire;
+    t[race][from] = t[race][from] ? 0 : 1;
+  }
+
   /** would `target` accept `state` from `sender` now (3.4 step 3) */
   accepts(target: number, sender: number, state: number): boolean {
     if (state === Rel.War) return true;
@@ -180,7 +186,9 @@ export class Diplomacy {
 
   apply(cmd: DiplomacyCommand): void {
     const me = cmd.player;
-    if (cmd.action === 'accept') { this.setAccept(me, Math.trunc(cmd.race), cmd.kind === 'peace' ? 'peace' : 'ceasefire', !!cmd.value); return; }
+    // the check boxes toggle the flag (command 0x5A with offer byte 0, 3.5): the value the client
+    // sends is not used, so two clicks inside one lockstep delay cancel out as in the original
+    if (cmd.action === 'accept') { this.toggleAccept(me, Math.trunc(cmd.race), cmd.kind === 'peace' ? 'peace' : 'ceasefire'); return; }
     const b = this.w.get(cmd.embassy);
     if (!b || !this.isEmbassy(b) || b.owner !== me) return;
     if (cmd.action === 'offer') this.offer(b, Math.trunc(cmd.race), Math.trunc(cmd.state));
@@ -250,24 +258,25 @@ export class Diplomacy {
     data[ER.Dest] = best ? best.id : DEST_NONE;
   }
 
-  /** "Diplomat zurückbeordern": the errand stops and he walks home (3.4 step 6) */
+  /**
+   * "Diplomat zurückbeordern" (command 0x60, 3.4 step 6): only while the embassy's diplomat has an
+   * errand (current, or waiting behind a leave job). The errand is cancelled, and since it is under
+   * way the embassy loses him and is deactivated (8.5; with the nation's last embassy every
+   * relation drops to 0); he gets a plain go-to back into the embassy, first run after 1 tick, held
+   * 5 and ejected when he is inside a building. Walking back in activates the embassy anew, and
+   * first contact makes war (3.3).
+   */
   recall(b: Entity): void {
     const d = this.diplomatOf(b);
-    if (!d || d.inside === b.id) return;
+    if (!d) return;
     const j = this.errandJob(d);
-    if (!j) {
-      // standing outside without an errand: walk home and move back in
-      const data = new Array<number>(ER.Size).fill(0);
-      data[ER.Phase] = PH.Home; data[ER.Target] = -1; data[ER.Home] = b.id; data[ER.Dest] = -1;
-      this.w.logistics.assign(d, DiplomacyJob.Errand, 1, data);
-      return;
-    }
-    const ph = j.data[ER.Phase];
-    if (ph === PH.Start || ph === PH.ToDest) {
-      leaveQueues(this.w, d);
-      stopWalking(this.w, d);
-      j.data[ER.Phase] = PH.Home;
-    }
+    if (!j) return;
+    const home = this.w.get(j.data[ER.Home]) ?? b;
+    if (!this.w.logistics.leaving(d)) { leaveQueues(this.w, d); stopWalking(this.w, d); }
+    // behind a leave job the new go-to replaces the errand there (held 5, `00465650`); otherwise it
+    // replaces the errand and, inside a building, waits behind the eject's leave job
+    this.w.logistics.goInto(d, home, 1);
+    if (d.inside >= 0 && !this.w.logistics.leaving(d)) this.w.logistics.leave(d);
   }
 
   /** the pending errand of a race's diplomats (first in id order), for the panel's status line */

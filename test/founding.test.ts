@@ -142,8 +142,9 @@ test('founding: destroyed towns leave the nation list; repeated failures do not 
     assert.equal(w.economy.towns.length, n + 1, `attempt ${k}: a new town record`);
     const t = w.economy.towns[n];
     assert.ok(t.alive && p.towns.includes(t.id));
-    // interrupt the walk: the site and its town are destroyed, the founder goes back home
-    w.schedule({ type: 'move', player: human, ids: [founder.id], x: fx, y: fy }, w.tick + 1);
+    // interrupt the walk: the site and its town are destroyed, the founder goes back home (a
+    // move order onto the founder's own cell would leave him alone, units-and-jobs.md 3.2)
+    w.schedule({ type: 'move', player: human, ids: [founder.id], x: fx + 2, y: fy + 2 }, w.tick + 1);
     for (let i = 0; i < 5; i++) w.step();
     assert.equal(t.alive, false, `attempt ${k}: town destroyed`);
     assert.equal(founder.town, home.id, 'founder resettled in the first town');

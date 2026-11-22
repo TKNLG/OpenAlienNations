@@ -25,16 +25,22 @@ export const LJ = {
 const LV = { Building: 0, Runs: 1, SentOut: 2 } as const;
 /** found-town job data (units-and-jobs.md 11.3) */
 const FD = { Phase: 0, Hall: 1, Done: 2 } as const;
+/** the original's go-to job kind (0x07), for the repeated-order test of the order command */
+const GOTO = 0x07;
 const LOGISTICS_KINDS = new Set<number>(Object.values(LJ));
 export const isLogisticsJob = (kind: number) => LOGISTICS_KINDS.has(kind);
 
 /** nature behaviour classes (odb.md 4) */
 export const NC = { Animal: 7, Tree: 8, Bush: 9, CropA: 10, CropS: 12, Stone: 13 } as const;
 const RUBBLE = 38;
-/** growth stages of a planted tree, 599 ticks each (the original counts its sprite's frames) */
-const TREE_STAGES = 5;
-/** animals only walk a few cells: keep their path searches small */
-const ANIMAL_PATH_NODES = 400;
+/**
+ * Growth steps F of a planted tree per nature type, 599 ticks each: the frame count of the type's
+ * stage-1 sprite `ST0` (units-and-jobs.md 7.5): BAUM1 3, BAUM2 6, BAUM3 5, BAUM4 6, Gold palms 4.
+ */
+const TREE_GROWTH_STEPS: Record<number, number> = { 9: 3, 10: 6, 11: 5, 12: 6, 46: 4, 47: 4, 48: 4, 49: 4 };
+export const treeGrowthSteps = (type: number): number => TREE_GROWTH_STEPS[type] ?? 5;
+/** plant job data (units-and-jobs.md 7.6): phase, farm, recorded cell, crop type, planted flag */
+const PL = { Phase: 0, Farm: 1, X: 2, Y: 3, Type: 4, Planted: 5 } as const;
 const NATURE_GROUP = 6;
 /** extra unit types used here */
 const U = { Hunter: 17, Woodcutter: 19, NewsSeller: 20, Stonemason: 27, Merchant: 28 } as const;
@@ -110,15 +116,20 @@ export class Logistics {
     return Math.max(0, (this.rule(b)?.amount ?? 0) - b.local[good]);
   }
 
-  /** best store of a town for a point: town hall or completed warehouse; score = distance + 2 x door queue (4.3) */
+  /**
+   * Best store of a town for a point (4.3, `0045b3f0`): the town's first town hall in any state (a
+   * site counts), then its completed warehouses in list order; score = distance to the building's
+   * position (anchor cell, not the entrance) + 2 x door queue, a warehouse wins only with a
+   * strictly smaller score. No town hall: no store at all.
+   */
   nearestStore(t: Town, x: number, y: number): Entity | null {
-    let best: Entity | null = null, bestScore = Infinity;
+    const hall = this.w.entities.find(e => e.kind === Kind.Building && e.town === t.id && this.type(e) === T.TownHall);
+    if (!hall) return null;
+    const score = (e: Entity) => { const [ex, ey] = this.cellOf(e); return this.dist(x, y, ex, ey) + 2 * e.doorQueue.length; };
+    let best = hall, bestScore = score(hall);
     for (const e of this.w.entities) {
-      if (e.kind !== Kind.Building || e.town !== t.id || !e.complete) continue;
-      const ty = this.type(e);
-      if (ty !== T.TownHall && ty !== T.Warehouse) continue;
-      const [ex, ey] = this.entrance(e);
-      const s = this.dist(x, y, ex, ey) + 2 * e.doorQueue.length;
+      if (e.kind !== Kind.Building || e.town !== t.id || !e.complete || this.type(e) !== T.Warehouse) continue;
+      const s = score(e);
       if (s < bestScore) { best = e; bestScore = s; }
     }
     return best;
@@ -148,6 +159,24 @@ export class Logistics {
    */
   static free(u: Entity, group: number): boolean {
     return u.alive && u.group === group && ((u.job === 0 && u.inside < 0) || (u.idle === -1 && !(u.inside >= 0 && u.job !== 0)));
+  }
+
+  /**
+   * Whether "Du hast keine freien Träger!" (mentor#14) is said when no free porter was found
+   * (side-panel.md 1.1.3 line 14): the town has no porter at all, or no porter has a current job
+   * other than a harvest (0x16). `freeClears`: a free porter of `group` also clears it (the
+   * transport part, `0045aed0`); the worker-request part (`0045b2f0`) ignores free porters.
+   */
+  private noFreePorterLine(t: Town, freeClears: boolean, group: number): boolean {
+    let porters = 0, flag = true;
+    for (const u of this.w.entities) {
+      if (u.kind !== Kind.Unit || u.town !== t.id || (u.oid & 0xffff) !== T.Porter || (u.oid >>> 16) !== t.race) continue;
+      porters++;
+      if (Logistics.free(u, group)) { if (freeClears) flag = false; continue; }
+      const j = u.job ? this.w.sched.get(u.job) : undefined;
+      if (j && !j.cancelled && j.kind !== LJ.Harvest) flag = false;
+    }
+    return porters === 0 || flag;
   }
 
   private isFree(u: Entity, t: Town, type: number, group = 0): boolean {
@@ -230,6 +259,7 @@ export class Logistics {
   cancelJob(u: Entity): void {
     u.charging = false;
     u.walks = [];
+    u.goTarget = 0;
     this.abortEnter(u);
     for (const id of u.suspended.splice(0)) {
       const sj = this.w.sched.get(id);
@@ -794,7 +824,12 @@ export class Logistics {
         if (b.queue.length <= this.trainees(b).length) continue;
       } else if (b.complete && b.operatorId >= 0 && this.w.get(b.operatorId)?.inside === b.id) continue;
       const u = this.nearestFree(t, type, ex, ey, taken);
-      if (!u) { keep.push([type, bid]); continue; }
+      if (!u) {
+        keep.push([type, bid]);
+        // mentor#14 for an unserved porter request (side-panel.md 1.1.3 line 14, `0045b2f0`)
+        if (type === T.Porter && this.noFreePorterLine(t, false, 0)) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
+        continue;
+      }
       taken.add(u.id);
       this.assign(u, LJ.Answer, 1, [0, bid, type, 0]);
     }
@@ -807,6 +842,8 @@ export class Logistics {
       else if (t.rr[1] < 4) { start = 1; t.rr[1]++; }
       else if (t.rr[2] < 2) { start = 2; t.rr[2]++; }
       else { start = 3; t.rr = [0, 0, 0]; }
+      // the "no porter busy" flag is taken once, before any porter is handed out (`0045aed0`)
+      const sayNoPorter = this.noFreePorterLine(t, true, this.haulGroup(t));
       let noPorter = false;
       for (let k = 0; k < 4 && !noPorter; k++) {
         const li = (start + k) % 4, list = t.lists[li];
@@ -819,7 +856,7 @@ export class Logistics {
         }
         t.lists[li] = rest;
       }
-      if (noPorter && this.w.economy.count(t, T.Porter, false) === 0) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
+      if (noPorter && sayNoPorter) this.w.notify(t.race, M.NoPorter, true, ADVISOR_REPEAT_MS);
     }
     const pending = t.workerReqs.length > 0 || t.lists.some(l => l.length);
     if (!pending) t.dispatcher = 0;
@@ -1305,7 +1342,8 @@ export class Logistics {
       o.counter = o.N + o.step - (o.N % o.step);
       o.E = o.step - (o.N % o.step);
       o.d = Math.trunc((r.hp - b.hp) / 9);
-      o.stage = -1;
+      // the stored stage is 0 from the job's creation (newOrder), so with T > 10 the first work
+      // ticks (stage 0) do not count: 9 counted ticks, then completion adds d once more (6.3)
     }
     // consume a good
     if ((d[BJ.Step] === 0 || d[BJ.Step] === 2) && o.list.length && o.counter % o.step === 0) {
@@ -1372,11 +1410,14 @@ export class Logistics {
     return g ? g.cost : new Array(GOODS).fill(0);
   }
 
-  /** request the inputs missing for one run (net of stock and of what is already on its way) */
+  /**
+   * Request the inputs of one run: need minus the local stock, one priority-2 request each. Goods
+   * already requested or on their way are not subtracted, so inputs can be over-ordered (8.2).
+   */
   private orderInputs(b: Entity, t: Town, product: number): void {
     const need = this.inputs(product);
     for (let g = 0; g < GOODS; g++) {
-      const missing = need[g] - b.local[g] - b.needed.filter(x => x === g).length;
+      const missing = need[g] - b.local[g];
       for (let k = 0; k < missing; k++) { b.needed.push(g); this.requestTransport(t, List.Production, b.id); }
     }
   }
@@ -1749,10 +1790,12 @@ export class Logistics {
     const n = this.w.get(job.owner);
     if (!n) return 0;
     if (this.rule(n)?.cls === NC.Tree) {
-      // a planted tree grows one stage every 599 ticks; then it is full and standing (7.5)
+      // a planted tree grows one step every 599 ticks; at F steps (the frame count of its ST0
+      // sprite) it is full and standing (7.5). stage = shown growth frame as a percentage of F
+      const f = treeGrowthSteps(n.oid & 0xffff);
       job.data[0] = (job.data[0] ?? 0) + 1;
-      n.stage = Math.trunc((job.data[0] * 100) / TREE_STAGES);
-      if (job.data[0] < TREE_STAGES) return 599;
+      n.stage = Math.trunc((job.data[0] * 100) / f);
+      if (job.data[0] < f) return 599;
       n.amount = n.full; n.standing = true; n.growJob = 0; n.stage = 0;
       return 0;
     }
@@ -1897,65 +1940,95 @@ export class Logistics {
     const op = this.w.get(b.operatorId);
     if (!op || op.inside !== b.id) { b.opJob = 0; return 0; }
     const opRule = this.rule(op);
-    // farms: plant while fewer than 10 crops grow within radius 6 (7.6)
+    // farms: plant while fewer than 10 crops grow on the disc dx² + dy² < 36 around the farm (7.6)
     if (opRule && opRule.product >= 0 && (b.oid & 0xffff) === 45) {
       const base = opRule.product;
       const [fx, fy] = this.cellOf(b);
+      const n = this.w.size, wrap = (v: number) => { v = ((v % n) + n) % n; return v > n / 2 ? v - n : v; };
       let crops = 0;
       for (const e of this.w.entities) {
         if (e.kind !== Kind.Nature) continue;
         const ty = e.oid & 0xffff;
-        if (ty >= base && ty <= base + 3) { const [x, y] = this.cellOf(e); if (this.dist(x, y, fx, fy) <= 6) crops++; }
+        if (ty < base || ty > base + 3) continue;
+        const [x, y] = this.cellOf(e), dx = wrap(x - fx), dy = wrap(y - fy);
+        if (dx * dx + dy * dy < 36) crops++;
       }
-      if (crops < 10) {
-        const pick = (c: number) => (this.w.rand.next() % 2 === 0 ? c + (this.w.rand.next() % 3) : c - (this.w.rand.next() % 3) - 2);
-        const px = pick(fx), py = pick(fy);
-        const type = base + (this.w.rand.next() % 4);
-        if (!this.w.occupied(px, py)) {
-          const j = this.w.sched.create(LJ.Plant, op.id, 1, [0, b.id, px & (this.w.size - 1), py & (this.w.size - 1), type]);
-          op.job = j.id;
-          this.leave(op);   // the plant job waits behind the leave job
-          b.opJob = 0;
-          return 0;
-        }
-      }
-      return 99;
+      if (crops >= 10) return 99;
+      // the crop type is drawn here; the cell only in the plant job's first run, outside
+      if (op.job) this.cancelJob(op);
+      const type = base + (this.w.rand.next() % 4);
+      const j = this.w.sched.create(LJ.Plant, op.id, 1, [0, b.id, -1, -1, type, 0]);
+      op.job = j.id;
+      this.leave(op);   // the plant job waits behind the leave job
+      b.opJob = 0;
+      return 0;
     }
     return 0;
   }
 
+  /** an area-search cell for a crop (mask 0x17F, 7.6): no path flag, unit, building, nature, water, slope, mountain */
+  plantSiteFree(x: number, y: number): boolean {
+    const w = this.w, m = w.size - 1;
+    x &= m; y &= m;
+    const i = (y << w.bits) | x;
+    if (!w.motion.free(x, y) || w.pathFlag[i] === 1 || w.terrain.height[i] > w.mountain) return false;
+    let lo = Infinity, hi = -Infinity;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const h = w.heightAt(x + dx, y + dy);
+      lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    return hi - lo <= 64;
+  }
+
+  /**
+   * Plant job (0x21, 7.6). Phase 0: draw the cell (coin, offset for x, then for y) and area-search
+   * around it; walk there, or with no cell walk straight back (planted flag set, no crop). Phase 1:
+   * the walk ended: record the cell, work 50 ticks. Phase 2: walk back into the farm. Phase 3:
+   * walking back; the crop appears on the recorded cell once the farmer is off it.
+   */
   private runPlant(job: Job): number {
     const u = this.w.get(job.owner), d = job.data;
-    if (!u) return 0;
-    const farm = this.w.get(d[1]);
-    switch (d[0]) {
-      case 0:
-        if (!this.goCell(u, d[2], d[3])) { d[0] = 3; return 1; }
-        d[0] = 1; return 1;
-      case 1: {
-        if (u.path) return 1;
-        this.setAction(u, Action.Work);
-        d[0] = 2; return 50;
-      }
-      case 2: {
-        // the work time is up: the stop message ends the work animation (unit-motion.md 3)
-        this.setAction(u, Action.Idle);
-        const [x, y] = this.cellOf(u);
-        if (!this.w.occupied(x, y) && farm) {
-          const crop = this.w.spawn({ cls: 2, group: NATURE_GROUP, type: d[4], owner: -1, x, y, z: 0 });
+    if (!u || !u.alive) return 0;
+    const farm = this.w.get(d[PL.Farm]);
+    if (!farm || !farm.alive) return this.finish(u);
+    if (d[PL.Phase] === 3 && !d[PL.Planted] && u.inside < 0) {
+      const [x, y] = this.cellOf(u);
+      if (x !== d[PL.X] || y !== d[PL.Y]) {
+        d[PL.Planted] = 1;
+        if (this.w.motion.free(d[PL.X], d[PL.Y])) {   // flags miss 0x3E
+          const crop = this.w.spawn({ cls: 2, group: NATURE_GROUP, type: d[PL.Type], owner: -1, x: d[PL.X], y: d[PL.Y], z: 0 });
           crop.amount = 0; crop.full = 1; crop.stage = 100; crop.actionTick = this.w.tick;
           crop.growJob = this.w.sched.create(LJ.Growth, crop.id, 599).id;
-          const t = this.town(farm);
+          const t = this.town(u);
           if (t) this.requestTransport(t, List.Pickup, crop.id);
         }
-        d[0] = 3; return 1;
       }
-      case 3:
-        if (!farm || !this.goEntity(u, farm)) return this.finish(u);
-        d[0] = 4; return 1;
+    }
+    switch (d[PL.Phase]) {
+      case 0: {
+        const [fx, fy] = this.cellOf(farm), m = this.w.size - 1;
+        const pick = (c: number) => (this.w.rand.next() % 2 === 0 ? c + (this.w.rand.next() % 3) : c - (this.w.rand.next() % 3) - 2);
+        const x = pick(fx) & m, y = pick(fy) & m;
+        const c = this.w.naval.siteSearch(x, y, 2, (px, py) => this.plantSiteFree(px, py));
+        if (!c) { d[PL.Planted] = 1; d[PL.Phase] = 2; return 1; }
+        // the walk's outcome does not matter: phase 1 runs when it ends either way
+        this.goCell(u, c[0], c[1]);
+        d[PL.Phase] = 1; return 1;
+      }
+      case 1: {
+        if (u.path) return 1;
+        const [x, y] = this.cellOf(u);
+        d[PL.X] = x; d[PL.Y] = y;
+        this.setAction(u, Action.Work);
+        d[PL.Phase] = 2; return 50;
+      }
+      case 2:
+        if (!this.goEntity(u, farm)) return this.finish(u);
+        d[PL.Phase] = 3; return 1;
       default: {
         if (u.path) return 1;
-        if (!farm || !this.near(u, farm)) return this.finish(u);
+        if (!this.near(u, farm)) return this.finish(u);
         const e = this.enter(u, farm);
         if (e) return e;
         u.job = 0;
@@ -1963,6 +2036,23 @@ export class Logistics {
         if (r && farm.active && !farm.opJob) farm.opJob = this.w.sched.create(LJ.Operator, farm.id, 100).id;
         return 0;
       }
+    }
+  }
+
+  /**
+   * Saves before version 16 kept the old plant job layout [phase 0..4, farm, target x, y, type]
+   * (cell drawn in the operator run, crop made after the work): map it onto the new phases.
+   */
+  migratePlantJobs(): void {
+    for (const j of this.w.sched.jobs()) {
+      if (j.kind !== LJ.Plant) continue;
+      const d = j.data, u = this.w.get(j.owner);
+      const [x, y] = u ? this.cellOf(u) : [-1, -1];
+      const old = d[0];
+      // 0: not started (redraw the cell); 1: walking there; 2: working (the crop comes when he
+      // steps off); 3, 4: on the way back, the crop already made
+      const phase = old === 0 ? 0 : old === 1 ? 1 : old === 2 ? 2 : old === 3 ? 2 : 3;
+      j.data = [phase, d[1], old === 2 ? x : -1, old === 2 ? y : -1, d[4], old >= 3 ? 1 : 0];
     }
   }
 
@@ -2169,7 +2259,7 @@ export class Logistics {
   }
 
   private ensureTrainingJob(b: Entity): void {
-    if (!b.trainJob || !this.w.sched.get(b.trainJob)) b.trainJob = this.w.sched.create(LJ.Training, b.id, 30).id;
+    if (!b.trainJob || !this.w.sched.get(b.trainJob)) b.trainJob = this.w.sched.create(LJ.Training, b.id, 1).id;   // first run 1 tick later (9)
   }
 
   private runTraining(job: Job): number {
@@ -2253,7 +2343,9 @@ export class Logistics {
     if (action === 'pause' || action === 'resume') { this.togglePause(b, t); return; }
     if (action === 'deactivate') { this.deaktivieren(b, r); return; }
     // mentor#80 comes at the end of the collapse (phase 2), not here (side-panel.md 1.1.3)
-    if (action === 'demolish') this.demolish(b);
+    // command 0x21 (`00451ec0`, units-and-jobs.md 11.6 "Demolish"): only a living building whose
+    // town's first town hall is alive
+    if (action === 'demolish' && b.alive && this.w.get(t.hall)?.alive) this.demolish(b);
   }
 
   /**
@@ -2469,7 +2561,7 @@ export class Logistics {
     if (d[AM.Mode] === AnimalMode.Wander) {
       const x = n.homeX + (rand() % 15) - 7, y = n.homeY + (rand() % 15) - 7;
       const c = w.freeSpiral(x, y, 8);
-      if (c && w.walk(n, c[0], c[1], ANIMAL_PATH_NODES) && n.path) { d[AM.Running] = 1; return 1; }
+      if (c && w.walk(n, c[0], c[1]) && n.path) { d[AM.Running] = 1; return 1; }
       return 25 + (rand() % 25);   // nothing started
     }
     if (d[AM.Mode] === AnimalMode.Idle) { d[AM.Running] = 1; return 1; }
@@ -2514,7 +2606,7 @@ export class Logistics {
       case EatPhase.Plan: { // the follow-path child's first run: plan to exactly that cell
         if (!live) return 0;
         const [x, y] = this.cellOf(food!);
-        if (!w.walk(n, x, y - 1, ANIMAL_PATH_NODES)) return 0;
+        if (!w.walk(n, x, y - 1)) return 0;
         d[AM.Phase] = EatPhase.Walk;
         return n.path ? 1 : this.eatStep(n, d);
       }
@@ -2745,10 +2837,17 @@ export class Logistics {
         if (this.w.isShip(u)) { this.shipOrder(u, target); continue; }
       }
       if (target.kind === Kind.Nature) {
-        // a hunter's order on an animal makes the animal's cell his hunting ground (7.3.1)
-        if (this.canHarvest(u, target) && ut === U.Hunter) { const [x, y] = this.cellOf(target); this.startHunt(u, x, y, target, 1); }
-        else if (this.canHarvest(u, target)) this.startHarvest(u, target, true);
-        else { this.cancelJob(u); this.goEntity(u, target); }
+        // a running ordered harvest / go-to on this target is not restarted (3.2 "Repeated
+        // orders"); the hunter's hunting ground (0x2B) is never guarded
+        if (this.canHarvest(u, target)) {
+          if (this.ordering(u, LJ.Harvest, target)) continue;
+          // a hunter's order on an animal makes the animal's cell his hunting ground (7.3.1)
+          if (ut === U.Hunter) { const [x, y] = this.cellOf(target); this.startHunt(u, x, y, target, 1); }
+          else this.startHarvest(u, target, true);
+        } else {
+          if (this.ordering(u, GOTO, target)) continue;
+          this.cancelJob(u); this.goEntity(u, target); u.goTarget = target.id;
+        }
         continue;
       }
       if (target.kind === Kind.Building && target.owner === u.owner) {
@@ -2765,13 +2864,32 @@ export class Logistics {
           this.startDelivery(u, target);
           continue;
         }
+        if (this.ordering(u, GOTO, target)) continue;
         this.assign(u, LJ.Answer, 1, [0, target.id, ut, 1]);
         continue;
       }
+      // the go-to the attack branch makes when 2.1 refuses is not guarded (3.2)
+      if (!this.w.combat.attackBranch(u, target) && this.ordering(u, GOTO, target)) continue;
       this.cancelJob(u);
       const [x, y] = this.cellOf(target);
       this.goCell(u, x, y);
+      u.goTarget = target.id;
     }
+  }
+
+  /**
+   * The repeated-order test (units-and-jobs.md 3.2 "Repeated orders"): the unit's current job is
+   * a player order of this kind on this target. `GOTO` (0x07): our go-to into an own building (the
+   * go-to job 0x3C with the player's mark) or a player-ordered walk to a unit or nature object
+   * (no job, `goTarget`, still walking).
+   */
+  private ordering(u: Entity, kind: number, target: Entity): boolean {
+    if (!u.ordered) return false;
+    if (kind === GOTO && !u.job) return (!!u.path || u.walkResult === WalkResult.Running) && u.goTarget === target.id;
+    const j = u.job ? this.w.sched.get(u.job) : undefined;
+    if (!j || j.cancelled) return false;
+    if (kind === GOTO) return j.kind === LJ.Answer && !j.data[AN.Duty] && j.data[AN.Building] === target.id;
+    return j.kind === kind && kind === LJ.Harvest && j.data[HV.Target] === target.id;
   }
 }
 
@@ -2805,6 +2923,6 @@ export const NewsChild = { None: 0, Created: 1, Walking: 2, Door: 3 } as const;
 const NEWS_DONE = 0, NEWS_FAILED = -1, NEWS_INSIDE = -2;
 
 export function newOrder(kind: BuildOrder['kind'], type: number, total: number, list: [number, number][]): BuildOrder {
-  return { kind, type, T: total, R: total, list, started: 0, N: 0, step: 1, counter: 0, E: 0, d: 0, stage: -1, builders: [] };
+  return { kind, type, T: total, R: total, list, started: 0, N: 0, step: 1, counter: 0, E: 0, d: 0, stage: 0, builders: [] };
 }
 

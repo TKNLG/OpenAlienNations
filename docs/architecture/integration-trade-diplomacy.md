@@ -146,8 +146,9 @@ embassy, 3.4 step 2) would come straight out again. Suggested first rule in `ent
     if (b.operatorId === u.id && b.active) { u.job = 0; this.setAction(u, Action.Idle); return; }
 ```
 
-(The errand job itself re-enters the embassy on its own; the panel's recall button also works
-for a diplomat standing outside.)
+(The errand job itself re-enters the embassy on its own. The panel's recall button acts only on
+a diplomat with an errand: it cancels the errand, which deactivates the embassy, and walks him back
+in with a plain go-to, ai-diplomacy-trade.md 3.4 step 6.)
 
 ### Not needed
 
@@ -225,8 +226,8 @@ selection filter can use `world.diplomacy.relation(player, e.owner) > 0` for for
   (the original creates a paused job with only the given end; its panel keeps the other selection).
 - The receiving side of refused offers gets no advisor line (Mentor.tdb 82..87 have no text).
 - Advisor lines go to human players only (computer players have no advisor, 1.14).
-- A diplomat left standing outside (no foreign embassy to go to) can still be sent again or
-  recalled from the panel.
+- A diplomat left standing outside (no foreign embassy to go to) can still be sent again; a
+  recall does nothing for him (he has no errand, as in the original).
 - The trade route page's good buttons only show the carried good (no simulation counterpart,
   4.5 / 7 item 6). The diplomacy page's offer buttons and recall portrait positions are ours
   (side-panel.md gives x = 150 for the offers and (135,195) for the portrait, which overlap).

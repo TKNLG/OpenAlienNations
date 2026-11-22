@@ -203,7 +203,7 @@ The type id is job+0x10. The run function is vtable slot 1. Animation actions ar
 | 0x21 | plant | unit | `0047ead0` | farmer plants one crop (7.6) | C |
 | 0x22 | operator / visit | building | `00478cb0` | 8.3 | C |
 | 0x24 | animal | nature | `004743b0` | wander, idle, eat crops (7.7) | C |
-| 0x25 | ? | unit | `0047bd60` | created when a building is destroyed (`0045f5a0`) | I |
+| 0x25 | building collapse (`DVPullDownJob`) | building | `0047bd60` | created by the destroyed building's die method, phase 1 (`0045f5a0`): waits until the ejected occupants are out, sends the collapse steps, then runs phase 2 (`combat.md` 10.3) | C |
 | 0x26 | flee | unit | `0047da50` | unarmed unit runs from an attacker (`00462e30`) | I |
 | 0x27 | guard / patrol | unit | `00480a10` | created at map load and by a command (`00452790`) | I |
 | 0x28 | group move | unit | `0047c970` | formation movement (`00468e10`) | I |
@@ -235,8 +235,24 @@ footprint; unit/nature/building priority) is decided by the client's hit test,
 - *Our build:* the order command is refused as a whole when it names a criminal; the move and
   the unit-page commands (go home, drop goods) skip criminals one by one. This also guards
   against a peer that sends commands for criminals in a network game.
-- An order that is already running against the same target is not restarted (attack, harvest,
-  heal, go to object). The arrest job has no target and is always restarted.
+- **Repeated orders** (C, `00450bb0`; `450c93`, `450d63`, `450dba`..`450dce`, `450ff1`,
+  `451083`..`451097`): before a job is made for a unit, its **current** job (+0x30) is compared;
+  when it is a **player order** (job +8 set, combat.md 7.2) of the same kind on the **same
+  target** (job +0x24 = the clicked object), nothing happens for this unit and the next one is
+  processed. The running job keeps its state (an attack keeps its search counter and walk, a
+  harvest its trips). The test exists only in these branches:
+
+  | branch | compared kind |
+  |---|---|
+  | nature the unit may harvest | 0x16 harvest (so a hunter, whose order makes 0x2B, is never guarded) |
+  | other nature | 0x07 go to |
+  | unit or building, attack branch (byte 0, armed, not a priest) | 0x08 attack, tested **before** 2.1; the go-to made when 2.1 refuses is not guarded |
+  | other own building (the go-to row) | 0x07 go to |
+  | own wounded unit, priest | 0x29 heal |
+  | any other unit (the last go-to row) | 0x07 go to |
+
+  Builder, transport (delivery), found town, hunting ground and arrest have no such test: those
+  orders always make a new job. The arrest job has no target anyway.
 - **Which branch a unit target or building takes** (re-checked in the machine code, October 2026):
   the order command carries a byte "target is own" (+0x0F), which the client sets to 1 for an
   own unit or own building and to 0 for everything else (`00441440`, `4416da`/`44174f`;
@@ -280,10 +296,34 @@ dispatcher serves it for another entry of the list, or drops it when the list is
 Ordering a carrier to a site again while he is already delivering there removes one more entry
 and re-files the old one (net: the same needed list, one spare request).
 
-A plain **move order** (group move `00465ad0`) gives every unit a follow-path job (0x06) to a
-free cell near the target point, scheduled after 2 ticks. Units already within half the group's
-spread of the target are not moved. Group membership (+0x48) is cleared when the group object
-dies (`004657c0`). After arriving, the unit has no job and counts as free again (5.4).
+A plain **move order** (command 0x14, `00451170`, with `DVUnit::MoveTo` `004644a0`; C at
+instruction level, November 2026) treats the selected units **one by one**, in selection order:
+
+1. skipped: not the player's, not a unit, a criminal (type 12), or inside a building (3.2 above);
+2. a unit standing **exactly on the clicked cell** is left alone (no new job, its current job
+   goes on);
+3. otherwise its target is the first cell of the square spiral of 4.8 (the clicked cell, then
+   ring 1 from (x+1, y−1), and so on, no limit) whose flags miss the unit's **movement** mask
+   +0x24 (0x3E: no unit, building, special, nature object or water; ships 0xA01E) **and** that no
+   earlier unit of this order has taken. So every unit gets its own cell, the nearest free ones
+   around the click in spiral order (the moving units' own cells hold a unit and never qualify);
+4. if the unit's current job is already a follow-path job (0x06) marked as a player order
+   (job +0x08) whose goal is exactly that cell, nothing happens; the cell is then **not** taken,
+   so a later unit of the same order may get it (quirk);
+5. otherwise the cell is taken, the current job gets its cancel flag and is unhooked (not through
+   1.2's assign), and a new follow-path job (plan counter 0, status "no path", planning mask
+   +0x28) becomes the current job with its first run after **1 tick**; the move command then marks
+   it as a player order (+0x08 = 1).
+
+The walk's first run plans (mode 1, 4.1), so the first step comes 1 + 3 = **4 ticks** after the
+order. It is an ordinary walk: up to 15 plans, the arrival tolerance, never a partial path; a
+target the planner cannot reach costs the plans and the unit stays where it stood. After
+arriving, the unit has no job and counts as free again (5.4). The shared-cell group move
+`00465ad0` (4.7 "Moves of a computer army") is used only by the computer players' armies; the
+fidelity audit (M3) had attributed it to the player's move order, which the code does not
+confirm. *Our build (November 2026): as above, except that the units are taken in ascending id
+order (the command carries unit ids; the original walks the sender's selection list in selection
+order). Ships keep the add-on move order of `addon.md` 4.1.*
 
 **Go home** (`MOVEHOME` on the unit page, command class **0x20**, `00451c40`; C) is a walk, not an
 entry:
@@ -394,13 +434,16 @@ The record's sound (+0x08) plays at frame +0x04 of action +0x134 (see odb.md).
      than one step it waits and does not step in this run. Then it tests the next cell's flags
      against its movement mask +0x24 (4.7). A free cell is stepped onto; a blocked cell goes to
      the blocking rules of 4.7.
-- **Planning** (`0047fc00`): a new plan is started when the job has no path, after a search that
-  failed, and after every blocked step that cannot be waited out. Each plan raises the job's
-  retry counter (+0x3C) by 1 and returns a delay of 3 + the old counter (3, 4, 5, ... ticks).
-  While the planner works, the job polls every 2 ticks. The planner (`0047fe70`, run `004706e0`)
-  is a separate object that searches from both ends at 100 node expansions per run and gives up
-  after 2000 *(I: the per-run budget and its scheduling were not traced further)*. Animals
-  (class 7) use another planner queue and mode.
+- **Planning** (`0047fc00`, C at instruction level, November 2026): a new plan is started when
+  the job has no path, after a search that failed, and after every blocked step that cannot be
+  waited out. The caller first tests the 15-plan limit (counter +0x3C greater than 14: the walk
+  fails; `00480410`, `0047f520`); only then does `0047fc00` apply the arrival tolerance (below):
+  if the counter is not below the distance max + min/2 from the unit to the goal, no plan is made
+  and the walk ends with success (return 0). Otherwise the planner is created (4.1.1), the
+  counter rises by 1 and the job returns a delay of 3 + the old counter (3, 4, 5, ... ticks).
+  While the planner works, the job polls every 2 ticks. The planner itself (two searches, path
+  and slope costs, 100 iterations per run, a cap of 2000 iterations, never a partial path) is
+  specified in 4.1.1. Animals (class 7) use another idle queue and a different path cost.
 - **A walk made from a ready path** (`0047f320`, used only by the attack job, `combat.md` 3.3.1):
   the goal is the path's last cell, the plan counter starts at 1 and the path is taken over from
   the cell after the first stored cell that shares the unit's x **or** y. No match: an empty walk
@@ -420,14 +463,14 @@ The record's sound (+0x08) plays at frame +0x04 of action +0x134 (see odb.md).
     them.
   - A mode-0 search that finds nothing (all ways nearby are filled with units) is not a failure
     of the walk: the job's next run plans again in mode 1 (which costs another plan).
-- **Planner costs** (`004717a0`, `004714e0`) (C for the terms, I for the exact search order):
-  entering a cell costs the walker's step time for the slope class (record +0xC4, 4.1), doubled
-  on a cell without the path flag 0x01 and single on a paved cell, so paths and foundations
-  (4.5, 6.6) are preferred. For animals (class 7) a paved cell costs four times the step time
-  instead, so animals avoid paths. A slope class with step time 0 is impassable. Each node also
-  carries a move count (+2 straight, +3 diagonal) and the priority is move count + 4 × (cost of
-  the last step + doubled distance to the other end of the search). Our A* only has to be
-  deterministic and keep these preferences; it need not reproduce the order of expansion.
+- **Planner costs** (`004717a0`, `004714e0`) (C): entering a cell costs the walker's step time
+  for the slope class (record +0xC4, 4.1), doubled on a cell without the path flag 0x01 and
+  single on a paved cell, so paths and foundations (4.5, 6.6) are preferred. For animals
+  (class 7) a paved cell costs four times the step time instead, so animals avoid paths. A slope
+  class with step time 0 is impassable. Each node also carries a move count (+2 straight, +3
+  diagonal) and the priority is move count + 4 × (cost of the last step + doubled distance to the
+  other end of the search). The exact search, order of expansion and tie-breaks included, is in
+  4.1.1; vanilla reproduces it exactly.
 - **Diagonal steps cut corners** (C, checked in the disassembly, October 2026): the planner
   expands all 8 neighbours (`00471a80`: (+1, −1) first, then (−1, −1), (+1, +1), (−1, +1),
   (0, −1), (0, +1), (+1, 0), (−1, 0), each through `004714e0`), and the only cell test
@@ -443,7 +486,10 @@ The record's sound (+0x08) plays at frame +0x04 of action +0x134 (see odb.md).
 - **Arrival tolerance**: before re-planning, the job measures the distance (max + min/2) from the
   unit to its goal. If it is **not greater than the retry counter**, the job ends with success
   instead. After the first plan the counter is 1, so a unit whose last cell is taken by a busy
-  unit stops one cell short, and that counts as arrived. After 15 plans the job fails.
+  unit stops one cell short, and that counts as arrived. After 15 plans the job fails. **Order**
+  (C, `00480410`, `0047f520` "counter > 14" before the call of `0047fc00`, which holds the
+  tolerance): the 15-plan limit is tested **first**, so once 15 plans are used up the walk fails
+  even when the unit stands within the tolerance (fidelity audit M13).
 - **What a failed walk means.** The follow-path job reports failure (+0x19 = 0) after 15 plans,
   when its next cell is not a neighbour, when the owner died, or when the cell of a blocking unit
   holds no object (a degenerate case of 4.7). Most callers do **not** treat this as a failure of
@@ -458,6 +504,156 @@ The record's sound (+0x08) plays at frame +0x04 of action +0x134 (see odb.md).
   | flee 0x26 | the outward or home walk simply counts as done (`combat.md` 7.3) |
   | a plain move order (top-level 0x06) | the unit stops where it is |
   | animal walk (7.7) | phase-specific; no tolerance |
+
+#### 4.1.1 The path planner (`AStarIdle`: ctor `0047fe70`, run `004706e0`) (C)
+
+Re-derived at instruction level in November 2026 (fidelity audit M1, M2, M13, M16): run
+`004706e0`, end test `00471490`, expand `00471a80` (first neighbour inline, the other seven
+through `004714e0`), step cost `004717a0`, insertion `00471940` (checked in the disassembly),
+close `00471450` (the same unlinking as the end of `00471a80`), rating `00471cc0`, distance
+`00471ce0`, wrapped delta `00435fe0`, wrap `00471c90` / `004485f0`, node pool `00471d10` /
+`00471d60`, path `00471df0`, hash insert of the second root `004803e0`. **Gold** (`dvge.exe`) is
+the same code: request `0048aa20`, ctor `0048ac90` (100 iterations per run), step cost `0047b210`,
+the 2000 test in its run; ships use it unchanged with their own masks and step times
+(`addon.md` 2.3: path mask 0xA01C, the same step time in all four slope classes).
+
+**The request** (`0047fc00`, 4.1 "Planning") hands the planner:
+
+| input | value |
+|---|---|
+| start | the walker's cell at the moment of the request (fixed for the whole search) |
+| goal | the walk's goal (job +0x45/+0x49) |
+| step times | the walker's record +0xC4, one value per slope class 0..3 |
+| planning mask | the job's +0x40 (= the unit's +0x28: 0x3C; ships 0xA01C; the flee's outward walk 0x3E, `combat.md` 7.3) |
+| mode | 1 "ignore units" or 0 "avoid nearby units" (4.1 "Two planning modes") |
+| path shift | 0; **2 for animals** (record class 7) |
+| idle group | 2; 3 for animals (scheduling only) |
+| iterations per run | 100 (+0x0C, set by the constructor) |
+
+**Distances.** All deltas are wrapped: on each axis the shorter way round the map (a tie at half
+the map size gives the same absolute value either way). The planner's distance between two cells
+is **D = 2·max(|dx|, |dy|) + min(|dx|, |dy|)** (computed as the larger doubled delta plus half the
+smaller doubled delta, which is exact because doubled deltas are even).
+
+**Two searches.** The planner keeps a **forward** search (direction 1) that starts on the start
+cell and heads for the goal, and a **backward** search (direction 0) that starts on the goal cell
+and heads for the start. Each has its own open list; both share one node pool and one hash table.
+A node holds: cell, move count, rating, priority, parent, a closed flag and its direction. The
+distance term of a node is always measured to the **far end of its own search**: forward nodes to
+the goal, backward nodes to the start. Neither search ever stops at the other one: a search ends
+only when its own best node stands on its own far end.
+
+The two root nodes: forward on the start, backward on the goal; move count 0, rating D(start,
+goal), priority 999999 (irrelevant: each root is alone in its list), no parent, open. Both go into
+the hash table at the front of their bucket, forward root first, then backward root.
+
+**One run** (one call of the idle job) performs up to **100 iterations**. An iteration only
+starts while both open lists are non-empty and no path has been found in this run. Each
+iteration:
+
+1. the planner's total iteration counter (+0x8060, kept across runs, starts at 0) rises by 1;
+2. F = the head of the forward list, B = the head of the backward list (both read now);
+3. if F stands on the goal, the path is built from F; otherwise, if B stands on the start, the
+   path is built from B. Either way the run stops (no expansion in this iteration);
+4. otherwise F is expanded, then B (B as read in step 2).
+
+After the run the result is decided in this order, a later line overriding an earlier one: a
+path was built = success; **total counter above 2000 = failure**; forward list empty = failure;
+backward list empty = failure; none of these = still running (the next run goes on). Because
+every run without a path or an empty list makes exactly 100 iterations, the counter passes 2000
+only in the 21st run: a search that has not found its path within 2000 iterations fails, and a
+path found at iterations 2001..2100 is **thrown away** (the walk then re-plans in mode 1 or
+fails, 4.1). There is never a partial path: a failure gives the walk nothing.
+
+**Expanding a node N** (`00471a80`): the 8 neighbours in this fixed order (wrapped):
+(+1, −1), (−1, −1), (+1, +1), (−1, +1), (0, −1), (0, +1), (+1, 0), (−1, 0). For each neighbour C
+the step cost c from N's cell to C is computed (below). c = 0: no node. Otherwise a new node:
+
+- move count = N's move count + **3** for a diagonal step, + **2** for a straight one;
+- rating = c + D(C, far end of N's search);
+- **priority = move count + 4 × rating**;
+- parent N, N's direction, open.
+
+It is then inserted (below). Nothing tests beforehand whether C is N's parent or a closed cell:
+that is left to the insertion. After the eighth neighbour, N is taken off its open list and
+**closed**. A closed node is never opened again.
+
+**Step cost** from cell A (the cell of the node being expanded) to the neighbour C (`004717a0`):
+
+1. the mask is the planning mask; in **mode 0** the unit flag 0x02 is added when D(start, C)
+   < 32 (start = the walker's cell, for both searches);
+2. C's flags are taken as **0** when C is the start or the goal cell, otherwise C's cell flags
+   (4.7 table; bit 0x01 = path flag);
+3. **slope class** = |floor((height(A) − height(C)) / 16)|, capped at 3 (the subtraction is
+   shifted arithmetically right by 4 before the absolute value is taken): a rise of 1..16 is
+   class 1, 17..32 class 2; a drop of 1..15 is class 0, 16..31 class 1 (odb.md 2.3);
+4. flags meet the mask: c = 0 (impassable);
+5. t = step_time[class]; t = 0 (an impassable slope): c = 0. A cell with the path flag costs t
+   shifted left by the path shift (× 1, animals × 4); any other cell costs **2 t**.
+
+In the backward search A is the cell nearer the goal, so its slope classes are measured opposite
+to the way the path will be walked.
+
+**Insertion** (`00471940`). The hash table has **8192 buckets**, key = (y × 256 + x) mod 8192 over
+the wrapped cell coordinates; each bucket is a list with new nodes put at its **front**. A new node
+is checked against its bucket from the front, **up to and including the first node of its own
+direction**; the **last** node in that stretch that has the same cell is the match. Nodes behind
+that stretch are not looked at (quirk: a node of the same direction but another cell in front
+hides a real duplicate behind it, so one cell can carry several nodes of one direction; this
+matters on long searches and where several cells share a bucket).
+
+- **No match**: the node goes to the front of its bucket and into its open list.
+- **Match of the same direction**: if the new move count is **smaller** than the match's, the
+  match takes the new node's parent and move count, and its priority becomes the smaller of the
+  two priorities (its rating is left alone). Then: a **closed** match stays closed and nothing
+  else happens (its parent may thus change after it was expanded; a path built through it later
+  follows the new parent); an **open** match is taken off its open list and inserted again,
+  **even when nothing changed**. The new node is dropped in both cases.
+- **Match of the other direction** (the cell was already reached by the other search): the new
+  node's priority is **divided by 4** (shifted right by 2) and the node goes in normally (bucket
+  front, open list). This meeting boost draws each search along the cells the other one has
+  explored, which is how the two find each other's far end.
+
+**Open lists** are kept in ascending priority. A node is inserted **before the first node whose
+priority is greater than or equal to its own**, so among equal priorities the newest comes first
+(a re-inserted node counts as new). The head is the node with the lowest priority.
+
+(Unreachable branch, for completeness: when an open same-direction match had no predecessor, the
+unlinking always writes the forward list's head, whichever direction the match has. A match can
+only be at the head of its list if it was inserted during the current expansion, and the eight
+neighbours of one expansion are different cells, so this never happens.)
+
+**The path** (`00471df0`), written into the job's path list after clearing it:
+
+- from F on the goal: the cells of F's parent chain from the start's neighbour to the goal, in
+  walking order (the start root itself is not included);
+- from B on the start: the cells from B's parent along its parent chain to the goal root, in that
+  order (B itself, on the start, is not included).
+
+So the path never contains the start cell and always ends on the goal. Re-parented closed nodes
+(above) are followed through their current parents.
+
+**Properties.** The search reads only map state (cell flags, heights, the unit flag near the
+start), so it is fully deterministic. On open ground the 4 × weight on the distance makes each
+search run almost straight, about one iteration per cell; the forward search reaches the goal
+after roughly as many iterations as the walk has cells, so ordinary walks stay far below the cap,
+while a long detour (round a lake, through a dense forest) can exceed 2000 iterations and then
+fails in every plan (I: not measured in the original). A goal in a closed pocket fails quickly:
+the backward search runs out of open nodes.
+
+**Timing in the original** (M16, I for the latency): the planner is an idle job (group 2, animals
+group 3, round robin with the other idle jobs) driven by the main loop between ticks, 100
+iterations per call. Ticks are wall-clock gated (95 ms at speed 100), so how many ticks a plan
+takes depends on the machine; the walker polls every 2 ticks while it runs, and its first poll is
+3 + counter ticks after the request. Because the planner reads the map while it runs, it sees the
+state between ticks, after the jobs of the tick that requested it.
+
+**Our build (chosen lockstep interpretation, M16):** a plan requested during tick T is computed
+whole (all its runs, up to the cap) **after all jobs and steps of tick T**, from the start cell
+recorded at the request; the walker reads the result at its next run (3 + counter ticks later, so
+it never has to poll). During the rest of tick T the walker counts as "planner still running" for
+other walkers blocked by it (4.7 case 3). Searches made outside a follow-path walk (World.walk:
+the attack's stored plan, animals, ships, the computer players' one-off walks) run at once.
 
 ### 4.2 Go to object (job 0x07, `0047ac90`) (C)
 
@@ -475,11 +671,26 @@ So a go-to to a building fails only if the building dies or refuses the unit at 
 request (4.4). Walking problems never make it fail; they only cost time (up to 15 plans here and
 up to 15 more in the enter job's last walk, 4.10).
 
-### 4.3 Store selection (C, `0045b3f0`)
+### 4.3 Store selection (C, `0045b3f0` Town::GetNearestStore)
 
-"Nearest store" means the best of the town hall and all completed warehouses. Markets are never
-chosen even though they carry the store flag. Score = distance + 2 × (number of units waiting in
-that building's door queue).
+"Nearest store" for a point P (the caller's point: the requester's entrance, the gatherer's cell):
+
+- Candidates: the town's **first town hall** (first entry of its town-hall list, +0x298) with
+  **no state test** (a town-hall site counts, so does a collapsing hall), then every entry of the
+  town's warehouse list (+0x2A4) whose state (+0xB0) is **not 1** (not a site). Markets are never
+  chosen even though they carry the store flag.
+- Score = wrapped distance from P to the building's **position** (+0x10/+0x14, the anchor cell,
+  not the entrance), max + min / 2, plus 2 × the number of units in its door queue (+0x68).
+- The hall is scored first; a warehouse replaces the best only with a **strictly smaller** score
+  (list order breaks ties).
+- A town with **no town hall** in its list has **no store at all** (the warehouses are not even
+  looked at).
+
+*Our build:* the warehouse candidates are the completed ones; a warehouse that is collapsing (its
+phase 1 ran, `combat.md` 10.3) is no longer a candidate, while the original keeps it until phase 2
+(about 10 ticks after its last occupant left). A town-hall site chosen as the store is not a store
+for goods (no town storage until completion); this only matters during a founder's walk to his
+new site, when the town has no other units.
 
 ### 4.4 Door queue: the "queues at the town hall" (C)
 
@@ -816,14 +1027,21 @@ So an idle unit in the way moves to the first free neighbour, in the order above
 neither next to the walker nor on the walker's next two cells. If none is free, it pushes the
 next idle unit, and the chain can continue. The pushed unit ends with no job, on its new cell.
 
-#### Moves of a group (`00465ad0`)
+#### Moves of a computer army (`00465ad0`)
 
-A move order computes **one** target cell: the first cell of the square spiral (4.8) around the
-clicked point whose flags miss 0x3E. Every unit of the group gets a follow-path job to **that
-same cell**, unless it is already within half the group's spread of it. The units then spread
-out through the rules above: the first to arrive takes the cell, later arrivals push it aside
-while it is idle, and the arrival tolerance stops the rest around it (C by reading; the shape
-that results was not observed).
+Called only by the computer players' army tactics (`ai-diplomacy-trade.md` 2.5 "Joining and
+moving"; callers `00468f10`, `004693b0`, `00469840`, `00469cd0`, `0046a0e0`, `0046a320`), not by
+the player's move order (3.2). Per member (C, instruction level, November 2026): the group id and
+a reference are set; a member whose distance max + min/2 to the group point is **not above half
+the group's spread** (+0x38 shifted right by 1) is left alone. Any other member: its current job
+gets the cancel flag and is unhooked, its goal is the first cell of the square spiral (4.8,
+`0x465d11`..`0x465dc8`: the point, then ring r from (x+r, y−r) along +y, −x, −y, +x, no limit)
+around the group point whose flags miss **0x3E**, and a follow-path job (plan counter 0, not a
+player order) becomes its current job, first run after **2 ticks**. No cell is reserved, and
+nothing moves before the walks start, so every moved member gets **the same cell**. The members
+then spread out through the rules above: the first to arrive takes the cell, later arrivals push
+it aside while it is idle, and the arrival tolerance stops the rest around it (the shape that
+results was not observed).
 
 ### 4.8 Where workers stand (C)
 
@@ -1628,13 +1846,11 @@ re-filed (144 of 180 lost transports were failed walks). The following points no
    the docking range test).
 3. **Follow-path walks** (`World.follow`, `Motion.start`/`replan`): a search that finds nothing
    costs one plan and is retried in mode 1 at the next run, until the arrival tolerance or the
-   15-plan limit. The start and goal cells are never blocked in these searches. Our A* returns a
-   partial way when it cannot reach the goal; for these walks that counts as a failed search. A
-   goal in a small closed pocket without the start fails at once (`Motion.closedAround`, a
-   goal-side flood standing in for the original's search from both ends; same result as the full
-   search, only cheaper). `World.walk` (one search, false when nothing is found, partial ways
-   accepted) is kept for the attack's firing-position search, animals, patrols and the computer
-   players' legs.
+   15-plan limit. The start and goal cells are never blocked in these searches. Since November
+   2026 every search is the original planner of 4.1.1 (two searches, path and slope costs, cap
+   of 2000 iterations, no partial way), computed at the end of the tick that requested it.
+   `World.walk` (one search at once, false when nothing is found) is kept for the attack's
+   stored plan, animals, patrols, ships and the computer players' one-off walks.
 4. **Re-plans** after a blocked step or a failed step-aside child are mode 0 (all units with
    2 max + min < 32 kept out, start and goal never blocked); the flee's outward walk keeps out
    every unit (walk mask 1 = 0x3E).
@@ -1860,6 +2076,9 @@ On the first call:
 - end value E = step − (N mod step);
 - HP increment d = (record HP − current HP) / 9, integer division.
 
+The stored stage (job +0x40) is set to **0** when the construction job is created (`00475230`,
+instruction `004752d4`; Gold `0047ecf0`), not on the first call (C).
+
 Each call (the builder calls every 15 ticks):
 
 1. **Consume** (builder phase 0 or 2, goods left in the list, and counter divisible by step):
@@ -1885,6 +2104,16 @@ Each call (the builder calls every 15 ticks):
 
 The `BU0` frame therefore advances 9 or 10 times. The site starts at frame 0 and HP/10, and
 finishes at full HP.
+
+**Stage start (C).** Because the stored stage starts at 0, the first work ticks of a site with
+T > 10 do not count: the first consume makes R = T − 1, so s = floor(10 / T) = 0 equals the
+stored 0. Over its N = T work ticks the stage takes the values 1 .. 9 once each, so there are
+exactly **9** counted ticks (9 × d and 9 frame advances, frame 9 at the end), then completion adds
+d once more. With T ≤ 10 every one of the N = 10 work ticks counts (10 × d), then completion
+adds d. In the shipped data (Pimmons, odb.md A.2) T > 10 holds for every building except the town hall (0), house
+(7), laboratory (8), school (6) and watchtower (7); e.g. large house 17, warehouse 12, barracks
+15, mine 35. *(Our build before November 2026 started the stage at −1, so the first work tick
+already counted: 10 advances, and the site's HP ran one d, about 10 % of the maximum, ahead.)*
 
 Worked example, Pimmon school (2 wood + 4 stone, HP 500): T = 6, N = 10, step = 1. The site
 starts at 50 HP and d = 50. The builder alternates "consume a good" (15 ticks), "one work tick"
@@ -2811,8 +3040,25 @@ When remaining reaches 0:
   run after 599 ticks). On that run the crop becomes ripe (`004020a0`): amount 1, stage 0,
   "removed when empty". It is then picked by the waiting list-3 porter.
 - **Planted trees** (respawned trees, `004638d0` with the planted flag): amount 0, stage 1,
-  growth job. Every 599 ticks the growth frame +0x58 advances. When it equals the frame count of
-  the tree's growth sprite, the tree is full: amount = full, stage 4, standing (`00481ee0`).
+  growth counter (+0x58) 0, growth job (0x1D) with first run 599 ticks later. Each run
+  (`00481e90` → `00481ee0`, Gold `0048d120` → `0048d170`) adds 1 to the counter and sends it as
+  the display frame (message (0x26,9): the sapling shows frame `counter` of its `ST0` sprite).
+  When the counter equals **F**, the frame count of the type's stage-1 animation (descriptor
+  slot 8, `ST0`), the tree is full: amount = full, counter 0, standing, stage 4 (animation-set
+  message), and the job ends; otherwise the job runs again 599 ticks later. So a sapling is full
+  **F x 599 ticks** after it was created (C; F read from `dv.OD` / `Addon.od` and the `.gd`
+  index, identical in GOG and Gold):
+
+  | nature type | sprite | F | full after |
+  |---|---|---|---|
+  | 9 | `RS\VE\BAUM1\ST0` | 3 | 1797 ticks |
+  | 10 | `RS\VE\BAUM2\ST0` | 6 | 3594 ticks |
+  | 11 | `RS\VE\BAUM3\ST0` | 5 | 2995 ticks |
+  | 12 | `RS\VE\BAUM4\ST0` | 6 | 3594 ticks |
+  | 46..49 (Gold palms) | `RS\VE\PALME1..4\ST0` | 4 each | 2396 ticks |
+
+  The frame shown while growing is 0 (created), then 1 .. F − 1; at F the tree switches to its
+  standing picture. *(Our build before November 2026 used 5 steps for every tree.)*
 - **Respawn manager**: see 7.5.1.
 - Stones and rubble never come back. Bushes regrow (7.4).
 
@@ -2970,26 +3216,76 @@ measured base free-play game (three computer players, seed 3, Mittel) went from 
 mountain cells to 21 of 449 after 96,000 ticks. An "enhanced" option that adds 0x100 to the mask
 would be a deviation and is not implemented.
 
-### 7.6 Farms and farmers (C, `00478cb0` case 14, `0047ead0`)
+### 7.6 Farms and farmers (C, `00478cb0` case 14, `0047e940`, `0047ead0`; Gold `004898f0`)
 
-- The farm (45) is "staffed" (flag 0x4). When its farmer enters, the operator job (0x22) is
-  created with first delay 100, then runs every **99 ticks**.
-- Each run:
-  1. Count objects of nature type crop_base .. crop_base+3 within **radius 6** of the farm.
-     crop_base is the farmer record's +0x11C: 17 cocoa, 21 mushrooms, 25 maggots.
-  2. If there are fewer than **10**, the farmer is sent out with a planting job (0x21) for type
-     crop_base + random(0..3).
-- Planting job:
-  1. Choose a cell: x = farm x + random(0..2), or farm x − random(0..2) − 2, each with
-     probability ½. y is chosen the same way.
-  2. If that cell cannot take an object, give up. Otherwise walk there.
-  3. Play the work animation for **50 ticks**.
-  4. Walk back to the farm.
-  5. As soon as the farmer steps off the planting cell, the crop is created (if the cell is
-     still free) and a **list-3 pickup request** is filed for it.
-  6. Re-entering the farm restarts the operator job.
+Re-derived at instruction level (November 2026, fidelity audit E2..E5).
+
+**The operator job** (0x22). The farm (45) is "staffed" (flag 0x4). When its farmer enters, the
+operator job is created with first delay 100, then runs every **99 ticks**. Each run:
+
+1. Count the nature objects of type crop_base .. crop_base+3 on the cells of the **disc
+   dx² + dy² < 36** around the farm's position (`0044a7c0` in nature mode, wrapped; this is the
+   "radius 6": the cells with max + min/2 ≤ 6 but dx² + dy² ≥ 36 do not count). crop_base is the
+   farmer record's +0x11C: 17 cocoa, 21 mushrooms, 25 maggots.
+2. Fewer than **10**: cancel the farmer's current job (if any), **draw the crop type**
+   crop_base + `rand() % 4` (the only draw of this run), create the plant job (0x21) for that
+   type as the farmer's current job, schedule it **1 tick** later, and eject the farmer with the
+   plain eject (4.10: leave job, the plant job queued behind it and blocked). The operator job
+   ends (returns 0); the building stays active (8.5). 10 or more: return 99.
+
+**The plant job** (0x21) holds the farm, the crop type, a phase (0..4), a "planted" flag
+(cleared) and a recorded cell (none). Every run, in this order:
+
+1. Phase 4, or the farm or the farmer no longer alive: the job ends.
+2. If a child job (a walk) exists, it runs first. If it ends (returns 0) it is deleted; if it
+   returns a delay, that delay is this run's result and step 4 is skipped (step 3 still runs).
+3. **Crop creation.** In phase 3 while the planted flag is clear: if the farmer's current cell
+   differs from the recorded cell, set the planted flag and, if the recorded cell's flags miss
+   **0x3E** (unit, building, special object, nature object, water), create the crop of the stored
+   type on the recorded cell (planted argument: amount 0, stage 1, growth job 599, 7.5) and file a
+   **list-3 pickup request** for it in the farmer's town.
+4. **Phase step** (no child was running, or it just ended):
+   - **Phase 0** (the first run after the leave job, the farmer stands outside): choose the
+     cell, four draws in this order: coin `rand() % 2`, then offset `rand() % 3`: coin 0 gives
+     x = farm x + offset, coin 1 gives x = farm x − offset − 2; then a coin and an offset for y
+     from farm y the same way. Wrap. Then the **area search** (`00449840`, world-populate.md 2.3)
+     from (x, y) with size 1 × 1, radius 2 and mask **0x17F**: it tests the cell itself, then
+     ring 1 (from (x+1, y−1), 9 tests, the corner twice), then only the corner of ring 2
+     (x+2, y−2): at most 11 tests, the first cell that fits wins. The area test (`00447cd0`) of a
+     1 × 1 site is the cell's own flags plus slope 0x40 when (max − min) of the heights of its 8
+     neighbours is > 64. A cell fails on any of: 0x01 path flag (worn path or foundation ring,
+     4.5, 6.6), 0x02 unit, 0x04 building, 0x08 special object, 0x10 nature object, 0x20 water,
+     0x40 slope, **0x100 mountain** (height > 250, Gold add-on mode 290). No territory test.
+     - Found: a follow-path child (0x06) to that cell; phase 1; return 1.
+     - Nothing fits: the planted flag is set (no crop will be made), phase 2, return 1.
+   - **Phase 1** (the walk has ended, whether or not it reached the cell): record the farmer's
+     current cell; work animation (action 2, repeat 100); phase 2; return **50**.
+   - **Phase 2**: a go-to child (0x07) to the farm: walk back and enter (4.10); phase 3; return 1.
+   - **Phase 3** (the go-to has ended): phase 4, the job ends.
+
+Consequences:
+
+- **Draw order.** The type is drawn in the operator run; the four cell draws come later, in the
+  plant job's first run after the farmer has been put outside (at least 20 ticks after the eject,
+  4.10). Other jobs' draws fall in between.
+- **When nothing fits** the farmer still comes out (the eject has happened) and walks straight
+  back in: no crop, no work animation. Entering restarts the operator job with first run 100
+  (8.5), so the next attempt is about 120+ ticks later.
+- The crop is made on the cell where the farmer **actually stood when his walk ended**
+  (normally the chosen cell; a failed walk leaves him elsewhere), in the first run of the walk
+  back in which he is off that cell, and only if that cell is then free of units, buildings,
+  special and nature objects and water. A farmer who never leaves the recorded cell before he
+  enters makes no crop.
+- Re-entering the farm restarts the operator job (8.5).
 - A crop gives 1 raw material, ripe after 599 ticks. Porters bring it to a store. Conversion of
   raw material to food (2 per unit) happens in the town stock (`0046e820`), see economy.md.
+
+**Our build** (`src/engine/logistics.ts` `runOperator` farm branch, `runPlant`, `plantSiteFree`;
+test `test/farm-plant.test.ts`), as above since November 2026. Special objects (0x08) are not
+modelled. Before, the cell was drawn in the operator run before the type, only the drawn cell
+was tested (water, buildings, nature objects), on failure the farmer stayed inside and the
+operator retried in 99 ticks, the crop count used the max + min/2 metric, and the crop was made
+at the end of the 50 work ticks.
 
 ### 7.7 Wild animals (job 0x24, `004743b0`) (C)
 
@@ -3135,9 +3431,17 @@ Deliveries to a destination and the production output are **not clamped**. A loc
 exceed 10 (I: no clamp found). Production does not stop while its output waits for collection
 (no check found, I).
 
-The second request round (step 2) and the new order (step 3) both ask for inputs, so inputs may
-be over-ordered by up to one run. This is bounded only by porter availability (I, read from the
-order of operations).
+**Input requests do not count goods on the way (C, `00474b70`, `00476380`).** Every request
+round asks for exactly **need − local stock** units of each input (stock read at that moment;
+in step 2 after that input was consumed), one priority-2 request each. Requests already filed
+and porters already carrying the good are **not** subtracted (the training path, below, does
+count earlier orders; the goods path does not). The second request round (step 2) and the new
+order (step 3) both ask for inputs, so inputs are over-ordered whenever the pre-ordered goods
+have not arrived by the time the product is delivered: e.g. a mine whose 2 wood for the next run
+are still on the way at delivery orders 2 more. The surplus lands in the local stock and reduces
+the following request, so the excess stays within about one run's need, bounded by porter
+availability. *(Our build before November 2026 subtracted the requests in flight and never
+over-ordered.)*
 
 ### 8.3 Operator / visit job (0x22, `00478cb0`) (C)
 
@@ -3406,6 +3710,13 @@ version 11. Tests: `test/news-round.test.ts`.
 
   The training page shows queued slot i dark until i < units inside, i.e. until a porter (or
   any other pupil, 9.1) has entered for it (`docs/ui/side-panel.md` class 7).
+
+**The training job** (0x12) is created by the order (`0045f4c0`, Gold `00465760`): when the
+building has no job, the job is created and scheduled **1 tick** later, before the order itself
+is queued (if fewer than 5 are queued). It then runs every 30 ticks and ends when the queue is
+empty; the next order after that creates a new one, again with first run 1 tick later. So a first
+order whose pupil is inside and whose goods are present starts 1 tick after the order, not 30
+(C). *(Our build before November 2026 used 30 for the first run.)*
 
 **Running**: the training job runs every 30 ticks. It needs:
 
@@ -3696,6 +4007,19 @@ If either test fails, the command is dropped silently.
 **Nothing is paid**: no money and no goods are taken, from the founder or from any town. The
 founder keeps his type; he becomes the new town's mayor.
 
+**Renaming a town** (command 0x4B CmdSetTownName, `00452690`, C): the payload is a
+zero-terminated string (the message has room for 31 characters; the dialog allows 12,
+`ui/side-panel.md` 5.2 "Rename dialog"). The simulation replaces the name string of the sender's **current
+town** (nation +0x258; the old string is freed) with it, with no other test, and sends the
+NewTown message (0x1C) with the new name to every connection, so every town list shows it. The
+name index (the used-name set, above) is not touched: a renamed town keeps its index until it is
+destroyed, and new towns still take the lowest free index. The name is part of the town's saved
+state.
+
+*Our build:* the command carries the town (the client's current town) and is accepted only for
+a living own town; the name is cut at the first zero character and at 31 characters
+(`Town.name`, saved and hashed; absent = the default name from the index).
+
 ### 11.3 The found-town job (0x0E) (C, constructor `00479280`, run `00479410`)
 
 Fields:
@@ -3838,9 +4162,9 @@ Consequences:
 
 - A free-play human whose first founder is interrupted, killed or sent to an unreachable spot
   loses the founder and the game.
-- **Site demolished or destroyed.** The site can be demolished with `ABREISSEN` (`00451ec0`
-  allows it because the town has a living town hall; I that `00451ec0` is the `ABREISSEN`
-  command), or killed by enemies (it has only 1000
+- **Site demolished or destroyed.** The site can be demolished with `ABREISSEN` (command 0x21
+  `00451ec0`, see "Demolish" below: it allows it because the site itself is the town's living
+  first town hall), or killed by enemies (it has only 1000
   HP). The same town destruction follows. The founder, still walking, is relocated (or dies) and
   his job is cancelled.
 - **Quirk, cascade (C by reading).** Jobs are deleted lazily (1.1), and the destructor uses the
@@ -3868,6 +4192,16 @@ Consequences:
   very spot of an earlier failed one; a failed one is never reused. Destroyed towns leave the
   nation's town list once freed (`combat.md` 10.4 "Lifetime"), so any number of failed
   foundings leaves no lasting trace in the 10-town limit or the start-goods count.
+
+**Demolish** (`ABREISSEN`, command 0x21, `00451ec0`, C): acts on the first object of the
+sender's selection and calls its die method (`combat.md` 10.3) only when that object is **alive**
+(+0x34), its town has at least one town hall in its town-hall list (+0x29C) and that list's
+**first** town hall is alive. Otherwise nothing happens. Nearly always true; it refuses only
+for a building whose town is being destroyed (its hall already dead).
+
+A free-play or network human whose founder dies **before** he ever founded a town is not
+defeated: the nation has never lost a town, so it is not dead (`mdb.md` "Goals"); the game goes
+on with nothing left.
 
 ### 11.7 Computer players
 
@@ -3900,11 +4234,9 @@ Consequences:
    combat (0x08/0x09/0x1B/0x1C/0x27/0x28), crime (0x17/0x18/0x19), trade (0x20),
    healing (0x29), errands (0x38) and 0x25. Founding (0x0E) is now section 11, the news round
    (0x1A) section 8.6.
-5. The path planner (`0047fe70` / run `004706e0`; `0047b030` is only the goal-cell chooser,
-   4.8): it searches from both ends, 100 expansions per run, and gives up after 2000. The mode
-   argument and the cell costs are now decoded (4.1 "Two planning modes", "Planner costs"). The
-   exact expansion order and tie-breaks were not; our A* only has to be deterministic, not
-   identical.
+5. ~~The path planner's expansion order and tie-breaks.~~ Resolved November 2026: fully decoded
+   and reproduced (4.1.1). Only its latency in ticks on real hardware is open (M16; our build
+   finishes a plan at the end of the tick that requested it).
 6. The over-ordering of production inputs (8.2) and unclamped local stocks: confirm in game.
 7. ~~What the client sends to trigger idle fidgets.~~ Resolved: command 0x2A from the display's
    idle timer (`00436260`). It fires every 5..30 s (`rand()`), for on-screen units that are

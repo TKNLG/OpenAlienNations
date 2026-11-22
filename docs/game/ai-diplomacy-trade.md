@@ -1015,8 +1015,8 @@ Notes:
   8.4): the ship still fetches it later. The walk is one ordinary follow-path job to that cell
   (`units-and-jobs.md` 4.1, with its own re-plans), however far away home is; it is not a
   player order, so a member on its way home still answers the help rule (`combat.md` 7.2) and
-  resumes the walk afterwards (7.4). *Our build: the walk starts at once (the draw is made, the
-  delay not applied); until October 2026 it was a single leg of at most 32 cells per axis toward
+  resumes the walk afterwards (7.4). *Our build: as described, the drawn delay applied (since
+  November 2026; before, the walk started at once); until October 2026 it was a single leg of at most 32 cells per axis toward
   the town hall, after which the unit stood (no job re-issued the next leg), so members of an
   army that ended far from home (a ceasefire, a retreat) were left standing near the enemy town.*
 
@@ -1205,18 +1205,37 @@ An offer is "war", "ceasefire" or "peace" (state 1, 2 or 3) sent to one race:
    (3.8).
 5. If he dies or cannot enter, nothing changes (handbook: a third nation may capture him; there is
    no separate capture rule, I).
-6. "Diplomat zurückbeordern" (T254) recalls him (`00478bd0`): the errand's current child is
-   replaced by a walk home (go-to his embassy); the errand job itself goes on and ends when he is
-   inside. The recall does not touch the errand's state, so a cross-water errand (state 1, step 2)
-   is still decided; in practice it is decided on the first run anyway, before a recall is
-   possible (he is still inside his embassy until then).
+6. "Diplomat zurückbeordern" (T254, command 0x60 `00452d40`, C at instruction level) acts on the
+   selected embassy's stored diplomat (+0xA8) and only when his **current** job, or the job
+   queued behind it (+0x20, e.g. behind a leave job), is an errand 0x38. Without an errand
+   (none sent, already ended, or one that found no target and left him standing outside) nothing
+   happens. Otherwise, in this order:
+   1. the errand is aborted (`00478bd0`): if it has a child (the walk to the foreign embassy, or
+      the walk home), the child is deleted and replaced by a go-to into the home embassy; without
+      a child nothing changes;
+   2. the diplomat's **current job gets the cancel flag** and is dropped (unit +0x30 = 0). When
+      it is the errand itself, the scheduler deletes it at its next slot; when it is a leave job
+      with the errand queued behind it, that leave job is deleted while no longer current, which
+      cancels the errand queued behind it (`units-and-jobs.md` 1.2);
+   3. a new go-to job into the home embassy (`0047ac60`) becomes his current job, first run after
+      1 tick; if he is inside a building (his own embassy right after an offer, or the foreign
+      embassy), its first run is held 5 ticks and that building ejects him (leave job in front).
+
+   The errand's destructor (`00478880`) then finds a child, so the embassy loses its stored
+   operator and is **deactivated** (`0045ff30`, 3.3 closure: if it was the nation's last active
+   embassy, every relation that is not 0 drops to 0). When he walks back in, the operator entry
+   activates the embassy again (`0045fa40`, 3.3 contact): mentor#(68 + race) to every other
+   nation and **war** with every nation at 0 that owns an active embassy. So with a single
+   embassy a recall turns peace or ceasefire into war, even for a diplomat already walking home
+   after a won peace. An errand aborted while it has no child (the no-target case) keeps the
+   embassy active. *(The old reading, "the errand goes on and only walks him home", was wrong.)*
 7. **Link to the embassy** (C, `units-and-jobs.md` 8.5): during the errand he stays the embassy's
    stored operator and the embassy stays active. Back inside, the entry restarts the embassy's
    operator job (first run after 100 ticks). If the errand is destroyed under way (it has a walk
    as its child) or he dies, the embassy loses him and is **deactivated** (3.3 closure: relations
    reset when it was the player's last active embassy); no worker request. This happens on a
-   player order or move given to the diplomat while he is out, on go home, and on a **second
-   offer** sent while he is still out: step 1's recall gives the old errand a walk home as its
+   player order or move given to the diplomat while he is out, on go home, on the **recall**
+   (step 6), and on a **second offer** sent while he is still out: step 1's recall gives the old errand a walk home as its
    child and then cancels it, so the embassy closes before the new errand starts. The new errand
    still carries the embassy; when he walks back into it, it is activated anew (8.1, with the
    contact rule of 3.3).
@@ -1236,8 +1255,10 @@ the messages, I for "selectable".)
 Each player holds, per other race, "accept peace" (player +0x261 + race) and "accept ceasefire"
 (player +0x264 + race). Both start at 1 for everybody (`0045cdf0`).
 
-- **Human player**: the two check boxes of the diplomacy panel (T173) toggle them (command
-  `00452c90`). With the defaults a human accepts every peace and ceasefire offer.
+- **Human player**: the two check boxes of the diplomacy panel (T173) toggle them (command 0x5A
+  `00452c90` with its offer byte 0: the flag is **inverted** in the simulation, the command
+  carries no value; C). Two clicks inside one lockstep delay therefore cancel out. With the
+  defaults a human accepts every peace and ceasefire offer.
 - **Computer player**: rewritten every think (150 ticks) by `004687a0`, for each other living
   player i, with S = own strength, S_i = i's strength and the profile's weights (1.2):
 
@@ -1591,7 +1612,9 @@ town area, walks the founder to within 8..15 cells of it and founds the town the
    click test, the building's maximum corner is the found position minus one.)
 3. Mentor indices 82..87 for the receiving side of refused offers: no text exists; whether the
    original shows anything.
-4. Diplomat recall (`00478bd0`) details and whether a recalled diplomat can be re-sent at once.
+4. ~~Diplomat recall (`00478bd0`) details and whether a recalled diplomat can be re-sent at once.~~
+   Settled: 3.4 step 6. The recall deactivates the embassy, so no offer can be sent until he is
+   back inside and it is active again.
 5. Whether "the merchant is attacked" ends the route through the flee job (4.5).
 6. The trade route panel's good buttons (4.5).
 7. The economy job's unused list at +0x6C; its iron flag +0x2C is always 1 and was not seen read

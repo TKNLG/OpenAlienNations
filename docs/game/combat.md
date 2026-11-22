@@ -1522,16 +1522,34 @@ already on their way out keep their leave job.
    Message (0x4C,7). Town alive (+0x34) = 0. The town stays in the nation's **town list**
    (+0x234, count +0x238) until its object is freed (see "Lifetime" below).
 2. Find the **nearest other town** of the same nation that still has a town hall.
-3. Every unit of the town has its job cancelled, then:
-   - if another town exists: it moves to that town and is put on its **homeless list**. The
-     receiving town's small and large houses then take in homeless up to their capacity;
-   - if not: **it dies**.
+3. Every unit of the town has its job cancelled (cancel flag), then:
+   - if another town exists: it joins that town (`00464350`: population and needs of both
+     towns) and is appended to that town's **homeless list** (+0x4E0);
+   - if not: **it dies** (a unit already dead is just dropped from the list).
+
+   **Rehousing at once** (C, `00459400`, `0045964d`..`00459797`): when another town was
+   found, after all units have moved, that town's **small houses** (its per-type list of type 37,
+   in list order) and then its **large houses** (type 38) take homeless immediately. For each
+   house that is alive: while the receiving town's homeless list is not empty and the house's
+   occupancy (+0xB4) is below its record capacity (+0xB4), the first homeless is taken
+   (`00459a00`, dead entries dropped), added to the house's resident list and made its home
+   (`00464e60`), occupancy + 1. The unit does not walk anywhere; it only gets the house as its
+   home. The per-type lists hold construction sites too and the test is only "alive" and
+   "occupancy below capacity", so a **house site can take residents** here (quirk, C). The town
+   hall and other residences are not used. Homeless units left over wait for the normal house
+   job (`economy.md` 3.3).
 4. Every remaining building of the town dies (phase 1 → collapse → phase 2, with no mentor line
    and no rubble pickup, because the town is dead).
-5. If the nation has no towns left, it is **defeated** (`0045d2a0`):
-   - every other nation's advisor gets mentor#(23 + race) ("the X were defeated");
-   - its jobs are cancelled and the nation is marked dead;
-   - a human nation gets its game-over handling (`0044fc20`, U).
+5. If the nation has no **living** town left (the size of its used-name set, +0x254, is 0), it is
+   **defeated** (`0045d2a0`):
+   - a human nation's diplomacy/town panel is refreshed (`0044fc20` = SendDialogData, a display
+     message only);
+   - every other nation's advisor gets mentor#(23 + race) ("the X were defeated"), queued;
+   - its computer general (+0x228) is cancelled and cleared, the nation's **alive byte (+0x0C) is
+     cleared** (this is the only place it is cleared: "dead" in `mdb.md` "Goals"), and its
+     finance job (+0x220) and panel job (+0x21C) are cancelled;
+   - its **goal job is not cancelled**: a human nation is told "lost" by that job at its next
+     run, up to 50 ticks later (`mdb.md` "Goals"). Nothing else ends the game.
 6. If the destroyed town was the nation's current town, the first entry of the town list takes
    over (message 0x41). *(Quirk, C: the list still holds destroyed towns that are not freed yet,
    the destroyed town itself included, so this can again be a dead town.)*
@@ -1569,6 +1587,12 @@ idle stroll, research, the AI town jobs) is left in the scheduler and no unit or
 town as its town. A deviation of less than one tick. Saves before snapshot version 15 kept every
 destroyed town in the list (the 10-town limit of the training page then blocked founders for
 good after ten failed foundings); they are cleaned up on load.
+
+*Our build, defeat* (`combat.ts destroyTown`): the defeat sets `Player.defeated` (the alive byte)
+and says the mentor lines; the outcome is set by the goal job (`economy.ts runGoals`), as in the
+original. The units of the destroyed town are processed in entity (creation) order, not in the
+original's unit-type list order (the homeless list order can differ). The finance job is
+cancelled; the computer general's jobs stop on `Player.defeated` (`ai-diplomacy-trade.md` 0).
 
 ---
 

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { World, SUB, type Entity } from '../src/engine/world.ts';
 import { WS, WalkResult, MAX_PLANS } from '../src/engine/motion.ts';
+import { Planner } from '../src/engine/path.ts';
 import { Good } from '../src/engine/economy.ts';
 import type { Terrain } from '../src/world/terrain.ts';
 import type { MapObject } from '../src/formats/mission.ts';
@@ -30,7 +31,9 @@ test('a search that finds nothing does not fail the walk: it is retried until th
   const w = new World(corridor(), [porter(5, 10)]);
   const u = w.get(1)!;
   assert.equal(w.follow(u, 30, 30), true, 'the walk is set up');
-  assert.ok(u.path && u.path.length === 0 && u.walkState === WS.ReplanFree, 'no path yet, a plan is due');
+  assert.ok(u.path && u.path.length === 0 && u.walkState === WS.Planning, 'no path yet: the plan is made at the end of the tick');
+  w.step();
+  assert.ok(u.path && u.path.length === 0 && u.walkState === WS.ReplanFree, 'the plan found nothing: a mode-1 plan is due');
   let t = 0;
   while (u.path && t < 2000) { w.step(); t++; }
   assert.equal(u.walkResult, WalkResult.Failed);
@@ -105,7 +108,10 @@ test('two porters meet head-on in a one-cell corridor between a store and a site
   const size = w.size, m = size - 1, idx = (x: number, y: number) => ((y & m) << w.bits) | (x & m);
   const [hx, hy] = w.goalCell(...w.logistics.entrance(hall));
   const [sx, sy] = w.goalCell(...w.logistics.entrance(site));
-  const path = w.findPathOn(w.blocked, hx, hy, sx, sy)!;
+  const path = new Planner(w.bits).plan({
+    sx: hx, sy: hy, gx: sx, gy: sy, steps: [5, 6, 7, 8], shift: 0, mode: 1, allUnits: false,
+    blocked: w.blocked, pathFlag: w.pathFlag, height: w.terrain.height, unitAt: () => false,
+  })!;
   assert.ok(path && path.length >= 8, `a way of some length (${path?.length})`);
   // water round the way: a corridor one cell wide (cells of buildings, nature and units stay); a
   // diagonal step gets an orthogonal cell beside it, since no step cuts a corner next to water

@@ -121,8 +121,8 @@ Build menu: harbour and shipyard come from `menuState` like every building. With
 | file | content |
 |---|---|
 | `naval.ts` (new) | `Naval`: sea bodies, ship walking and target chooser, ship placement/launch, boarding (job 0x07), leave ship (0x0D), sail to coast (0x3B), fishing (0x3A), docking, wait (0x3E), naval planner (0x3D) with snapshot/digest; `GoldOptions` |
-| `world.ts` | `addon`, `gold`, `island`, `shipBlocked`, `mountain`, `typeWidth`, `islandAt`, `isShip`, `findPathOn`; cargo creation; island test and target chooser for land walks; ship move orders; `unload` command; passengers die with their ship; snapshot / restore / hash |
-| `path.ts` | `PathSearcher`: the same A* as `findPath` (identical results, checked on 300 queries) with reusable typed arrays; used for add-on walks |
+| `world.ts` | `addon`, `gold`, `island`, `shipBlocked`, `mountain`, `typeWidth`, `islandAt`, `isShip`, `plan`; cargo creation; island test and target chooser for land walks; ship move orders; `unload` command; passengers die with their ship; snapshot / restore / hash |
+| `path.ts` | `Planner`: the original planner (`units-and-jobs.md` 4.1.1), used by land units, animals and ships alike (ships with the ship grid, their step times and no path cells on water) |
 | `logistics.ts` | shore placement, top-up, builder stays put at 62/63, lenient arrival at buildings whose door is inside the footprint, ship launch, fishing/boarding orders, class-0 respawn, mountain limit, `walkToCell`, `deliver`, `doorInside` |
 | `combat.ts` | ships' firing-position search on the sea, fishing boat may act on fish, no healing of ships, no rubble of 62/63 |
 | `economy.ts` | goals 17..20; storage capacity by flag 0x10 in add-on games |
@@ -142,10 +142,21 @@ nations computer-controlled 0.12 ms/tick; InfiniteAO 256 map, three computer nat
   is replaced by the nearest free land cell of their island within 6 rings, and the walk fails at
   once when there is none (otherwise melee units retaliating against ships ran 2000-node searches
   every tick). Trees and other goals keep the base search.
-- **Sea bodies.** Open-sea cells are labelled once (4-connected, static terrain); a walk to
-  another body fails at once. Buildings and fish are dynamic and only enter the path grid.
-- **Search budget.** Ship walks may expand 30000 nodes (land walks keep 6000 / 2000); the
-  original re-plans a follow path up to 15 times instead.
+- **Sea bodies.** Open-sea cells are labelled once (static terrain), **8-connected**: ships cut
+  diagonal corners like units (the planner and the step test only the destination cell,
+  `units-and-jobs.md` 4.1; Gold `0047af50` / `0047b210`), so two open-sea cells that meet only at
+  a corner (both orthogonal neighbours coastal water or land) belong to one body and the strait
+  is passable (fidelity audit A7; until November 2026 the labelling was 4-connected and a walk
+  across such a strait failed at once). A walk to another body fails at once (a shortcut: the
+  planner would fail the same way). Buildings and fish are dynamic and only enter the path grid.
+- **Search.** Ships plan with the original planner (`units-and-jobs.md` 4.1.1: two searches,
+  2000-iteration cap, never a partial way; Gold uses the same code with the ship's masks and step
+  times, which are equal in all slope classes). So a sea route that needs more than 2000
+  iterations fails, as in the original (until November 2026 ships could expand 30000 nodes of a
+  one-way A*). Ship walks still decide on one search: a plan that finds nothing fails the walk at once
+  (also a re-plan after a blocked step), where the original's follow path would plan again in
+  mode 1 up to 15 times, which gives the same answer for a ship that has not moved, only later.
+  Ships do not block each other in our engine, so no unit cells enter their plans.
 - **Entering without a distance test.** The original lets buildings be entered from wherever a
   unit stopped. Here a ship docks, and a land unit enters a harbour or shipyard (door 0,0 inside
   the footprint), from up to 6 cells around the footprint; other buildings keep the base rule.

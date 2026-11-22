@@ -798,13 +798,13 @@ function respond(ai: Ai, t: Town, s: AiTown): void {
   if (k < 0) {
     s.underAttack = 0;
     // with chance 1/10 defenders outside the town's area without a job walk back to the centre
-    // +-20 cells, first run after 5 + rand() mod 10 (three draws each; ours walks at once)
+    // +-20 cells (a follow-path walk), first run after 5 + rand() mod 10 (three draws each)
     if (ai.rand() % 10 === 0) {
       for (const d of defenders) {
         if (!d.alive || d.inside >= 0 || d.job || ai.inTerritory(d, t)) continue;
         const x = t.x + (ai.rand() % 41) - 20, y = t.y + (ai.rand() % 41) - 20;
-        ai.rand();
-        ai.walkToward(d, x, y);
+        const delay = 5 + (ai.rand() % 10);
+        ai.walkToward(d, x, y, delay);
       }
     }
     return;

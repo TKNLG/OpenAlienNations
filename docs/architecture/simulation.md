@@ -52,16 +52,22 @@ produce bit-identical state everywhere:
 
 ## Movement
 
-- 8-neighbour A* on the wrapping grid. Straight step cost 10, diagonal 14. Diagonal steps may
-  cut corners: only the destination cell is tested, as in the original's planner and step
-  (`units-and-jobs.md` 4.1 "Diagonal steps cut corners"; until October 2026 ours forbade a
-  diagonal past a blocked orthogonal cell, which left cells next to stones and trees in dense
-  nature unreachable and gatherers walking on the spot for ever). Ties are broken by insertion
-  counter, so results are deterministic.
+- Path planning is the original's planner, reproduced exactly (`units-and-jobs.md` 4.1.1,
+  `src/engine/path.ts` `Planner`): a forward and a backward search at once on the wrapping grid,
+  costs from the slope class and the path flag (path cells cost half, animals avoid them),
+  priority = moves + 4 × (step cost + distance to the far end), the meeting boost, the 8192-bucket
+  duplicate check with its quirk, a cap of 2000 iterations and never a partial path. Diagonal
+  steps may cut corners: only the destination cell is tested, as in the original's planner and
+  step (`units-and-jobs.md` 4.1 "Diagonal steps cut corners"). Until November 2026 this was a
+  one-way 10/14 A* without terrain costs that returned partial ways.
+- Plans of follow-path walks are computed after all jobs and steps of the tick that requested
+  them (the chosen lockstep reading of the original's between-ticks planner, 4.1.1 "Our
+  build"); they are never pending in a snapshot.
 - Walking follows the original's follow-path job (`units-and-jobs.md` 4.1), run by
   `src/engine/motion.ts` from `World.step` for every entity whose `moveAt` tick has come:
-  - a walk (`World.walk` / `setPath`) plans at once; its first step comes 3 ticks later (the
-    planning delay), and never before the previous step's duration is over;
+  - a walk (`World.follow`) plans in the tick it starts (at the end of that tick); its first
+    step comes 3 ticks later (the planning delay), and never before the previous step's
+    duration is over (a player's move order starts its walk 1 tick after the order, 3.2);
   - before each step one turn call (4.6): 45° is free, every further 45° costs
     max(1, step_time[0] div 4) ticks (1 for every base-game unit);
   - a **step moves the position to the destination cell at once** (positions are always cell
@@ -70,9 +76,10 @@ produce bit-identical state everywhere:
   - occupancy (4.7): a step never enters a cell with a building, nature object, water or another
     unit. An idle blocker gets a step-aside job (0x0F, a real scheduler job; chains of pushes), the
     walker polls every 5 ticks and then squeezes into the freed cell; a moving blocker is waited
-    for (its step delay + 1); a busy or stuck one makes the walker re-plan (that one search treats
-    the blocker's cell as blocked, our addition). Each plan raises a counter: the walk ends as
-    arrived when the goal is no farther than the counter (arrival tolerance), and fails after 15;
+    for (its step delay + 1); a busy or stuck one makes the walker re-plan in mode 0 (units near
+    the walker are obstacles, 4.1). Each plan raises a counter: the walk ends as
+    arrived when the goal is no farther than the counter (arrival tolerance), and fails after 15
+    plans (the limit is tested before the tolerance, 4.1);
   - the unit-per-cell grid is derived state: rebuilt from the entities at the start of every
     tick (the lowest id wins a shared cell) and kept current by the steps of that tick, so it is
     neither saved nor hashed;

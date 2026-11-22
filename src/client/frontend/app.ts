@@ -407,6 +407,26 @@ export class FrontEndApp {
     this.music.playGame();
   }
 
+  /**
+   * The town-hall page's rename dialog (side-panel.md 5.2 "Rename dialog"): a `MESSAGEBOX` over
+   * the running game with T180, an edit of at most 12 characters holding the current name, and
+   * OK across the box. No cancel: OK and Enter both close it, an empty field keeps the old name.
+   */
+  renameDialog(current: string, done: (name: string) => void): void {
+    if (!this.inGame || this.fe.visible) return;
+    const confirm = () => { this.fe.hide(); done(edit.value || current); };
+    const edit: TextEdit = new TextEdit(234, 290, this.fe, current.slice(0, 12), 12, C.brown, confirm);
+    this.fe.show({
+      bg: null,
+      widgets: [
+        new Image('MESSAGEBOX', 200, 190, this.fe),
+        new Label(R(220, 200, 580, 350), this.s(180), 'dv10pt', C.brown, 'C', true),
+        edit,
+        new TextButton(R(200, 360, 600, 390), this.s(181), confirm, 'dv10pt'),
+      ],
+    });
+  }
+
   optionsMenu(): void {
     const g = this.host!;
     const b = (r: Rect, id: number, f: () => void) => this.button(r, this.s(id), f, 'dv18pt');

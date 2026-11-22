@@ -111,7 +111,7 @@ from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket)
 | rules `dv.odb`, research `DV.idb`, weapons `dv.wdb` | fully decoded |
 | projection | isometric heightfield, 64x44 px cells; documented |
 | ground blending, shoreline tiles | **done** (bilinear corner blending, 14 shoreline tiles, animated water; corner/texture mapping, left-right quad split, shoreline table and 1 s water frames verified against both exes, terrain-drawing.md; the blend-cache quirk is not reproduced) |
-| simulation core | deterministic ticks, commands, A* on the wrapping map, step timing from dv.odb, footprints, group moves, snapshots |
+| simulation core | deterministic ticks, commands, the original path planner on the wrapping map, step timing from dv.odb, footprints, group moves, snapshots |
 | multiplayer | lobby + lockstep relay over WebSocket (zero-dependency server), desync detection; tested with 2 real clients |
 | savegames | IndexedDB + export/import (.ansave, gzip) |
 | economy | nations, towns, rounds (tax, upkeep, research), food and luxury consumption, needs, happiness, births, criminals, decay, storage, mission goals (docs/game/economy.md) |

@@ -70,7 +70,7 @@ vtable slot 1 (`<Class>::Work`); slots 0, 2, 3 are the destructor, `Save` and `L
 | 0x21 | `FarmerJob` | plant | `0047ead0` | `004898f0` |
 | 0x22 | `DVDistributionJob` | operator | `00478cb0` | `00482960` |
 | 0x24 | `DVAnimalJob` | animal | `004743b0` | `0047de70` |
-| 0x25 | `DVPullDownJob` | ? | `0047bd60` | `00486af0` |
+| 0x25 | `DVPullDownJob` | building collapse | `0047bd60` | `00486af0` |
 | 0x26 | `DVEscapeJob` | flee | `0047da50` | `00488870` |
 | 0x27 | `DVPatrolJob` | guard | `00480a10` | `0048bce0` |
 | 0x28 | `DVScoutJob` | group move (wrong: scout job) | `0047c970` | `00487700` |

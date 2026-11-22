@@ -252,8 +252,11 @@ function killTimeline(mdb: string) {
 
 test('hunter after the kill (Amazon bow): attack ends at S+15, first step at K+5, strike never cut', { skip }, () => {
   const r = killTimeline('Amazons.mdb');
-  // impact 11..15 ticks after the strike: the 5-tick polls give K = S+15
-  assert.equal(r.K - r.S, 15, `K - S = ${r.K - r.S} (impact at S+${r.I - r.S})`);
+  // impact 11..15 ticks after the strike (the flight time depends on where the approach walk
+  // ended): the 5-tick polls give K = S+15, or S+20 when the impact falls on the S+15 poll itself
+  // and the poll runs first in that tick
+  assert.ok(r.I - r.S >= 11 && r.I - r.S <= 15, `impact at S+${r.I - r.S}`);
+  assert.ok(r.K - r.S === 15 || (r.K - r.S === 20 && r.I - r.S === 15), `K - S = ${r.K - r.S} (impact at S+${r.I - r.S})`);
 });
 
 test('hunter after the kill (Pimmon spear): attack ends at S+10, first step at K+5', { skip }, () => {

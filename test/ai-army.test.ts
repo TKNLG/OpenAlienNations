@@ -113,7 +113,7 @@ test('an idle army member far from the target point gets its attack job at the a
   assert.equal(far.length, 2, 'two free cells far from the target and outside its territory');
   const [idle, walking] = far.map(([x, y]) => w.spawnUnit(ra, HUNTER, x, y, -1));
   const [wx, wy] = cellOf(walking);
-  assert.ok(w.walk(walking, wx + 3, wy, 2000) && walking.path, 'the second member walks');
+  assert.ok(w.walk(walking, wx + 3, wy) && walking.path, 'the second member walks');
   for (const u of [idle, walking]) u.group = Grp.Army;
   const job = w.sched.create(AiJob.Army, ra, 1, [tt.id, tt.x, tt.y, 1]);
   const ps = player(ra, 0);

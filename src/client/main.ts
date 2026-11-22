@@ -47,7 +47,7 @@ import { orderIntent, INTENT_CURSOR, isShip } from './addon-ui.ts';
 import { Slot, cursorCss, selectionHasFighters, worldCursor, loadCursors, EXE_CANDIDATES } from './cursors.ts';
 import type { Command as WorldCommand } from '../engine/world.ts';
 import { UiImages, loadFonts, type BitmapFont, type FontName } from './ui-assets.ts';
-import { startFrontEnd, openGameMenu, FREEPLAY_CAMPAIGN, applyFreePlay } from './frontend/index.ts';
+import { startFrontEnd, openGameMenu, openRenameDialog, FREEPLAY_CAMPAIGN, applyFreePlay } from './frontend/index.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (msg: string) => { $('status').textContent = msg; };
@@ -259,7 +259,9 @@ class Game implements HudHost {
     const extras = populated ? { lists: populated.lists, camera: [0, 0] as [number, number], orders: [] } : file ? file.extras : await this.data.mapExtras(m);
     const world = snapshot ? World.restore(terrain, snapshot, this.data.rules, this.data.weapons)
       : new World(terrain, objs, this.data.rules, { races, costs: this.data.researchCosts,
-          prerequisites: this.data.inventions.map(l => l.map(i => i.prerequisites)), goals: m.goals, weapons: this.data.weapons, orders: extras?.orders ?? [], lists: extras?.lists });
+          prerequisites: this.data.inventions.map(l => l.map(i => i.prerequisites)), goals: m.goals, weapons: this.data.weapons, orders: extras?.orders ?? [], lists: extras?.lists,
+          // a lockstep game is a network game: goals ignored, the last nation alive wins (mdb.md "Goals")
+          network: !!humans });
     // the world may have changed the ground (foundations of map buildings, saved edits): draw it now
     this.terrain = terrain;
     this.cam = new Camera(terrain.size);
@@ -544,6 +546,15 @@ class Game implements HudHost {
   openMenu(): void { this.onMenu(); }
   /** set by the front end: opens the in-game options menu */
   onMenu: () => void = () => {};
+  /** set by the front end: the rename dialog (side-panel.md 5.2) with the current name */
+  onRename: (current: string, done: (name: string) => void) => void = () => {};
+  /** `RENAME` on the town-hall page: rename the player's current town (command 0x4B,
+   *  units-and-jobs.md 11.2 "Renaming a town") */
+  renameTown(): void {
+    const t = this.activeTown();
+    if (!t) return;
+    this.onRename(this.hud.townName(t), name => this.command({ type: 'rename', player: this.player, town: t.id, name }));
+  }
   get playerTowns() { return this.world?.economy.towns.filter(t => t.race === this.player && t.alive) ?? []; }
 
   /** place the building being placed at a screen point; true if the command was sent */
@@ -1115,6 +1126,7 @@ async function main(): Promise<void> {
       const g = new Game($('view'), data);
       g.hidden = true;
       g.onMenu = openGameMenu;
+      g.onRename = openRenameDialog;
       win.anGame = g;
       return g;
     });
@@ -1126,6 +1138,7 @@ async function main(): Promise<void> {
   await data.load(status);
   const game = new Game($('view'), data);
   game.onMenu = openGameMenu;
+  game.onRename = openRenameDialog;
 
   const campSel = $<HTMLSelectElement>('campaign'), missSel = $<HTMLSelectElement>('mission');
   for (const c of ALL_CAMPAIGNS) campSel.add(new Option(c.label, c.id));

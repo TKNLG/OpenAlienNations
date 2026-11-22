@@ -31,13 +31,17 @@ Code: `src/net/protocol.ts` (messages), `src/server/lobby.ts` (rooms, relay),
    `{ race, kind: 'human', slot, name }`, `{ race, kind: 'computer' }` or `{ race, kind: 'empty' }`.
 6. **World:** every client builds the same record from the start message alone (`mpMission`):
    record 0 of `Infinite.mdb` (or `InfiniteAO.mdb` when `setup.addon`), the host's world
-   parameters (front-end.md 6.2), no goals (the last survivor wins), each race block present
+   parameters (front-end.md 6.2), no goals (the last survivor wins: mdb.md "Goals", network game), each race block present
    unless its seat is empty, the computer flag set exactly for computer seats. `Game.startLockstep`
    loads it with the human races as `humans`; the populator gives every human a lone founder
    (network game, world-populate.md 9.4) and every computer player the single-player start (a
    finished town hall with builder and porters). Town-hall footprints are taken per race, never
    from the local player's race, so the populated map does not depend on which race a client
    plays (main.ts `hallOf(race)` for multiplayer; single player keeps its old behaviour).
+   Every lockstep game is a **network game** for the simulation (`WorldSetup.network`, kept in
+   the economy snapshot): the goal job ignores mission goals and sends "won" to a nation once
+   every other nation is dead (mdb.md "Goals"), also when the game was started from a campaign
+   record (`startMultiplayer` with `setup.mission`, whose record keeps its goals).
 7. **Computer players** run inside every client's World (`WorldSetup.ai`, engine/ai.ts) from the
    world's own random stream; they need no slot and send no commands, so they are part of the
    deterministic state like everything else.

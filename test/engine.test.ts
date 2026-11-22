@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { World, SUB } from '../src/engine/world.ts';
-import { findPath } from '../src/engine/path.ts';
+import { Planner, type PlanRequest } from '../src/engine/path.ts';
 import type { Terrain } from '../src/world/terrain.ts';
 import type { MapObject } from '../src/formats/mission.ts';
 
@@ -14,6 +14,16 @@ function flatTerrain(bits: number): Terrain {
 
 // owner = race (group); settlement id 1
 const unit = (x: number, y: number, race = 0): MapObject => ({ cls: 0, group: race, type: 9, owner: 1, x, y, z: 0 });
+
+/** a plan on flat ground for a porter (step times 5/6/7/8), units ignored */
+function findPath(blocked: Uint8Array, bits: number, sx: number, sy: number, gx: number, gy: number): [number, number][] | null {
+  const n = 1 << bits;
+  const r: PlanRequest = {
+    sx, sy, gx, gy, steps: [5, 6, 7, 8], shift: 0, mode: 1, allUnits: false, blocked,
+    pathFlag: new Uint8Array(n * n), height: new Uint16Array(n * n), unitAt: () => false,
+  };
+  return new Planner(bits).plan(r);
+}
 
 test('path goes around a wall', { skip: false }, () => {
   const bits = 5, n = 32;

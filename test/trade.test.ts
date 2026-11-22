@@ -105,21 +105,55 @@ test('diplomat carries a peace offer; refusal; war is always accepted', { skip }
   stepUntil(w, () => dip.relation(PIMMONS, AMAZONS) === Rel.War, 6000);
   assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 56 + AMAZONS));
 
-  // recall: the errand stops and he walks home without deciding
+  // recall (3.4 step 6): the errand is cancelled, so the embassy loses him and is deactivated; it
+  // is the Pimmons' last embassy, so every relation drops to 0; walking back in activates it anew
+  // and first contact means war
   stepUntil(w, home, 6000);
+  const recall = () => dip.apply({ type: 'diplomacy', player: PIMMONS, action: 'recall', embassy: pe.id });
+  recall();
+  w.step();
+  assert.equal(diplomat.job, 0, 'no errand: a recall does nothing');
+  assert.equal(pe.active, true);
+  dip.setRelation(PIMMONS, AMAZONS, Rel.Peace);
   offer(Rel.Peace);
   for (let i = 0; i < 30; i++) w.step();
-  dip.apply({ type: 'diplomacy', player: PIMMONS, action: 'recall', embassy: pe.id });
-  assert.equal(dip.errand(PIMMONS)?.decided, true, 'no longer pending');
+  assert.equal(diplomat.inside, -1, 'out on the errand');
+  w.events.length = 0;
+  recall();
+  assert.equal(dip.errand(PIMMONS), null, 'the errand is gone');
+  assert.equal(pe.active, false, 'the embassy lost its diplomat');
+  assert.equal(pe.operatorId, -1);
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.None, 'last embassy closed: relations reset');
+  assert.ok(w.events.some(e => e.race === PIMMONS && e.mentor === 11), 'mentor#11 "Betrieb eingestellt"');
+  stepUntil(w, () => diplomat.inside === pe.id, 3000);
+  assert.equal(pe.active, true, 'back inside: active again');
+  assert.equal(pe.operatorId, diplomat.id);
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.War, 'first contact: war');
   stepUntil(w, home, 3000);
+
+  // a recall while he is still inside his embassy right after the offer: the same
+  dip.setRelation(PIMMONS, AMAZONS, Rel.Peace);
+  offer(Rel.Peace);
+  w.step(); w.step();
+  assert.equal(diplomat.inside, pe.id);
+  recall();
+  assert.equal(pe.active, false);
+  assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.None);
+  stepUntil(w, () => pe.active, 3000);
   assert.equal(dip.relation(PIMMONS, AMAZONS), Rel.War);
+  stepUntil(w, home, 3000);
 
   // commands of other players or on foreign embassies are ignored
   dip.apply({ type: 'diplomacy', player: AMAZONS, action: 'offer', embassy: pe.id, race: PIMMONS, state: Rel.Peace });
   w.step();
   assert.equal(diplomat.job, 0);
+  // the check boxes toggle (command 0x5A, 3.5): the value sent is not used
   dip.apply({ type: 'diplomacy', player: PIMMONS, action: 'accept', race: AMAZONS, kind: 'peace', value: false });
   assert.equal(dip.acceptPeace[PIMMONS][AMAZONS], 0);
+  dip.apply({ type: 'diplomacy', player: PIMMONS, action: 'accept', race: AMAZONS, kind: 'peace', value: false });
+  assert.equal(dip.acceptPeace[PIMMONS][AMAZONS], 1, 'a second click turns it back on');
+  dip.apply({ type: 'diplomacy', player: PIMMONS, action: 'accept', race: AMAZONS, kind: 'ceasefire', value: true });
+  assert.equal(dip.acceptCeasefire[PIMMONS][AMAZONS], 0);
 });
 
 test('market settings: initial values, commands, ranges', { skip }, () => {

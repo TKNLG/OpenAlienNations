@@ -197,7 +197,7 @@ export class Naval {
    * the nearest usable cell of the same sea body (the go-to target chooser); a cell of another sea
    * body fails at once instead of a search over the whole sea.
    */
-  walkShip(e: Entity, x: number, y: number, maxNodes = 30000): boolean {
+  walkShip(e: Entity, x: number, y: number): boolean {
     const w = this.w;
     const [cx, cy] = this.cellOf(e);
     let gx = this.m(x), gy = this.m(y);
@@ -209,10 +209,11 @@ export class Naval {
       [gx, gy] = c;
     }
     this.goal = [gx, gy];
-    if (cx === gx && cy === gy) { w.setPath(e, null, gx, gy, maxNodes); return true; }
-    const path = findShipPath(w, cx, cy, gx, gy, maxNodes);
+    if (cx === gx && cy === gy) { w.setPath(e, null, gx, gy); return true; }
+    // the original planner with the ship grid and the ship's step times (units-and-jobs.md 4.1.1)
+    const path = w.plan(e, cx, cy, gx, gy);
     if (!path) return false;
-    w.setPath(e, path, gx, gy, maxNodes);
+    w.setPath(e, path, gx, gy);
     if (e.path && e.action !== ACT_WALK) { e.action = ACT_WALK as Entity['action']; e.actionTick = w.tick; }
     return true;
   }
@@ -882,7 +883,11 @@ export class Naval {
 
 // ---------------------------------------------------------------- geometry helpers
 
-/** 4-connected bodies of open sea on the torus (static terrain; buildings and fish ignored) */
+/**
+ * 8-connected bodies of open sea on the torus (static terrain; buildings and fish ignored): ships
+ * cut diagonal corners like units, so two open-sea cells meeting only at a corner are one body
+ * (integration-addon-gameplay.md 7 "Sea bodies", fidelity audit A7)
+ */
 function labelSea(w: World): Int32Array {
   const n = w.size, bits = w.bits, mask = n - 1;
   const ao = (w.terrain as { aoCls?: Uint8Array }).aoCls;
@@ -898,7 +903,9 @@ function labelSea(w: World): Int32Array {
     while (stack.length) {
       const c = stack.pop()!;
       const x = c & mask, y = c >> bits;
-      for (const j of [(y << bits) | ((x + 1) & mask), (y << bits) | ((x - 1) & mask), (((y + 1) & mask) << bits) | x, (((y - 1) & mask) << bits) | x]) {
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const j = (((y + dy) & mask) << bits) | ((x + dx) & mask);
         if (!comp[j] && sea(j)) { comp[j] = label; stack.push(j); }
       }
     }
@@ -906,7 +913,3 @@ function labelSea(w: World): Int32Array {
   return comp;
 }
 
-/** A* with the ship grid (same search as path.ts findPath, typed-array bookkeeping) */
-function findShipPath(w: World, sx: number, sy: number, tx: number, ty: number, maxNodes: number): [number, number][] | null {
-  return w.findPathOn(w.shipBlocked, sx, sy, tx, ty, maxNodes);
-}

@@ -432,7 +432,7 @@ function buildingInfo(pc: PageCtx, b: Entity): void {
     const op = pc.hud.portrait(race, r.operator);
     button(pc, op, 130, 190, { id: 'b:op', tip: pc.world.rules.get(((race << 16) | r.operator) >>> 0)?.name ?? '', w: 45, h: 45, disabled: !present });
   }
-  if (type === 40) button(pc, 'RENAME', 100, 135, { id: 'b:rename', tip: pc.hud.str(180), disabled: true });
+  if (type === 40) button(pc, 'RENAME', 100, 135, { id: 'b:rename', tip: pc.hud.str(180), onClick: () => pc.host.renameTown?.() });
   const cap = type === 37 || type === 38 ? r.residents : type === 52 || type === 53 ? r.garrison : 0;
   if (cap > 0) {
     const occ = type === 37 || type === 38 ? b.occupancy : pc.world.logistics.occupants(b).length;   // a unit sent out leaves the list at once (4.11)

@@ -128,7 +128,7 @@ walks a bend of 45° turns without stopping. A sharper bend costs 1 to 3 ticks o
 ### 1.6 Our build (deviation, fixed in the engine)
 
 *Fixed:* `path.ts` now numbers facings as in 1.1 (`DIR_STEP`, `dirToward` with the 1 : 2
-sectors, `turnOnce` / `turnStep` with the 180° rule); the A* neighbour order is unchanged. The
+sectors, `turnOnce` / `turnStep` with the 180° rule); the planner's neighbour order is its own (units-and-jobs.md 4.1.1). The
 client's projectile direction (`effects.ts`) uses `dirToward` too. The text below describes the
 state before the fix.
 
@@ -142,7 +142,7 @@ differences:
 - `dirTo` uses only the signs of the delta, not the 1 : 2 sectors of 1.2;
 - the strike turn in `combat.ts` always counts up for 180° (1.3 says which way to count).
 
-The leave-building facing (3 or 5) and the A* neighbour order do not depend on this table.
+The leave-building facing (3 or 5) and the planner's neighbour order do not depend on this table.
 They need no change, apart from the facing value the step sets.
 
 ---

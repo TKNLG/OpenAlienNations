@@ -133,7 +133,7 @@ hears them only if it is human.
 | 11 | … hat seinen Betrieb eingestellt. | an **active** building is deactivated (operator lost or sent out, `DEAKTIVIEREN`) while the building is **alive**. Not during destruction: phase 1 clears "alive" before it deactivates | Q | 0 | | `0045ff30` |
 | 12 | Dem Gebäude fehlt ein Betreiber! | **client only**, from the finished-building info page (class 1): the page is built for an own building with upkeep that is **not active**, and the page has not said it yet. Exact rule in 1.1.5. Played directly, not through the filter | no | 0 | | `004187e0` → `004109f0` |
 | 13 | Ausbildung abgeschlossen. | a training finishes | Q | 0 | | `00475ff0` |
-| 14 | Du hast keine freien Träger! | the dispatcher finds no free porter (the town has none, or all are busy) | Q | 2 D | | `0046fa10` (2 places) |
+| 14 | Du hast keine freien Träger! | the dispatcher finds no free porter **and** either the town has no porter at all (town +0x128 = 0) or the "no porter busy" flag is set, i.e. no porter has a current job other than a harvest (0x16). So it is **not** said while every porter is busy carrying or working, only when porters stand idle without being free (inside buildings, in the computer porter gang) or harvest. Two places (C): (a) a porter **worker request** (a training building's pupil request) finds no free porter: flag from `0045b2f0` (group 0; free porters do not clear it, but then one would have been found); (b) a **transport** request finds the free-porter list empty: flag from `0045aed0`, computed once at the start of the transport part (group 50 for computer nations, 0 otherwise): set when no porter is free and none has a job other than a harvest. Human nation only (the advisor) | Q | 2 D | | `0046fa10` (2 places) |
 | 15 | Forschung abgeschlossen. | a human town's research project completes | Q | 0 | | `0046f490` |
 | 16 | Du investierst nichts in Forschung! | the research command is executed while the town's research share is 0 or its stored research spending is below 1 | no | 0 | | `00450910` |
 | 17 | Deine Lager sind voll! | two places, both before any goods are added (exact rule in 1.1.6): (a) the **may-enter test** at a unit's first request at a door, for a unit carrying goods on a transport job when the building has no room for **that one good**: a store (town hall, warehouse, market, harbour) when the **town's** stock of the good is at or above the town capacity, any other completed building when its local stock of the good is at or above its record +0x120 (10 for the producers). Entry is still allowed. (b) a porter putting a leftover load down at the **source** of a transport finds no room; that unit is lost. Never said after a delivery, so a partial or converted delivery (crops turned into food) never says it | Q | 2 D | | `00460a10`, `0047c400` |
@@ -820,13 +820,29 @@ The extra elements:
 | `REPAIR` | (40,135) | command "repair"; T4 "Restaurieren"; disabled at full HP or when no repair is possible |
 | operator | caption in (130,172)-(180,185) centred: T9 "Benötigt" (missing) or T174 "Anwesend" (present); operator portrait at (130,190), tooltip = operator unit name. "Present" (`00455e90`, message byte +0x15): 1 while the building has a **stored operator** (+0xA8), inside or away on the building's own duty (`units-and-jobs.md` 8.5: an officer hunting, a farmer planting, a diplomat on an errand, a news seller on his round), and also a news seller **killed** on his round, who stays the stand's stored operator (8.6 "Death"); without one, the number of residents (+0xB4, houses) or of occupants (+0x5C), so any occupant counts (C) | buildings with an operator (+0xD8 != -1) |
 | `DEAKTIVIEREN` | (70,135) | stop operation (sends the operator out); T311 "Betrieb einstellen", for the embassy T312 "Diplomatische Beziehungen abbrechen". Disabled if no operator is present, and always for the town hall |
-| `RENAME` | (100,135) | town hall only: opens the rename dialog; T180 "Wähle einen neuen Stadtnamen!" |
+| `RENAME` | (100,135) | town hall only: opens the rename dialog (below); tooltip T180 "Wähle einen neuen Stadtnamen!" |
 | occupancy | T129 "Belegt" in (130,172)-(180,185); portrait of a porter (houses 37/38) or archer (outposts 52/53) at (130,190); `occupied/capacity` in (115,190)-(130,235) | houses and outposts (capacity = +0xB4 or +0xDC) |
 | separator | (-3,163) | |
 
 Advisor line 12 "Dem Gebäude fehlt ein Betreiber!": when this page is opened (or switched to
 another building) for an own building with upkeep that is not active (display +0x1FD = 0), the
 client says line 12 directly, unqueued, once per page opening (section 1.1.5).
+
+**Rename dialog** (C, `00417050` showCityNameDialog; confirm `00416e00`, Enter `00416fd0`). The
+`RENAME` button opens a modal 800 x 600 dialog over the screen:
+
+| element | box-relative | absolute | details |
+|---|---|---|---|
+| `MESSAGEBOX` | box at (200,190) | (200,190) | as the OK box (`front-end.md` 1.7) |
+| text T180 "Wähle einen neuen Stadtnamen!" | (0,0)-(400,160) | (200,190)-(600,350) | font `dv10pt` (the OK box's button font, not the message font), brown, centred |
+| `INPUT1` plate | (34,100) | (234,290) | |
+| edit field | plate (33,21)-(299,40) | (267,311)-(533,330) | `dv7pts2`, brown, centred, **max 12 characters**, pre-filled with the name of the player's **current town** |
+| `#181 "OK"` | (0,170)-(400,200) | (200,360)-(600,390) | `dv10pt`, brown / red; the whole width of the box |
+
+There is no cancel button. OK and Enter do the same: an empty field is replaced by the current
+town's name, the dialog closes and command 0x4B (`units-and-jobs.md` 11.2 "Renaming a town")
+is sent with the text; it renames the **current town** (the town list's selected row), not
+necessarily the town whose hall is shown.
 
 #### Class 15: construction site (`0041ffb0`)
 

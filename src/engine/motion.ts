@@ -20,11 +20,12 @@ export const isMotionJob = (kind: number) => kind === MJ.StepAside || kind === M
 
 /**
  * entity.walkState: normal path following; waiting to squeeze past a pushed unit (the step-aside
- * child of 4.7 case 2); a mode-0 re-plan due (avoid nearby units; only old saves and the
- * "planner still running" test of 4.7 case 3 see it, since our planner is synchronous); a mode-1
- * plan due (units ignored): the last search found nothing, so the next run plans again (4.1)
+ * child of 4.7 case 2); a mode-0 re-plan due (only old saves); a mode-1 plan due (units ignored:
+ * the last search found nothing, or the walk's first run is still to come), planned at the next
+ * run (4.1); the planner is running (a plan requested in this tick, made at its end, 4.1.1; never
+ * seen between ticks)
  */
-export const WS = { Normal: 0, Squeeze: 1, Replan: 2, ReplanFree: 3 } as const;
+export const WS = { Normal: 0, Squeeze: 1, Replan: 2, ReplanFree: 3, Planning: 4 } as const;
 /** entity.walkResult: how the last walk ended */
 export const WalkResult = { Running: 0, Arrived: 1, Near: 2, Failed: 3 } as const;
 
@@ -34,10 +35,6 @@ const KIND_UNIT = 0;
 const ACT_WALK = 0, ACT_IDLE = 3, ACT_CARRY = 4;
 const SUBCELL = 256;
 const DEFAULT_STEP: readonly number[] = [5, 6, 7, 8];
-/** mode-0 plans keep out the units with 2 max(|dx|,|dy|) + min(|dx|,|dy|) < 32 around the walker (4.1) */
-const NEAR_UNITS = 32;
-/** cells the goal-side flood may visit before the search proper runs (see `closedAround`) */
-const POCKET = 1500;
 /** step-aside candidates in the original's order (4.7 step 5) */
 const ASIDE: readonly [number, number][] = [[-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1]];
 /** step-aside job data: requester, pushed unit, pushes, start x, start y, forbidden cells... */
@@ -55,15 +52,16 @@ export class Motion {
    */
   private unitAt: Int32Array;
   private marked: number[] = [];
-  /** goal-side flood buffers (closedAround): visit stamps per cell and the queue */
-  private floodSeen: Uint32Array;
-  private floodStamp = 0;
-  private floodQueue = new Int32Array(POCKET + 8);
+  /**
+   * Plans requested in this tick (entity id -> the start cell and mode at the request), made after
+   * all jobs and steps of the tick (`flushPlans`, units-and-jobs.md 4.1.1 "Our build"). Empty
+   * between ticks, so never saved.
+   */
+  private pending = new Map<number, { sx: number; sy: number; mode: number }>();
 
   constructor(w: World) {
     this.w = w;
     this.unitAt = new Int32Array(w.size * w.size);
-    this.floodSeen = new Uint32Array(w.size * w.size);
   }
 
   // ---------------------------------------------------------------- geometry
@@ -132,13 +130,14 @@ export class Motion {
   /**
    * Delay of a step from (cx, cy) to the neighbour (nx, ny): step_time of the height class, 1.5x
    * on a diagonal; path following adds 1, or takes 1 off onto a path cell or when charging (4.1).
-   * 0 = the slope is impassable for this object.
+   * The class is |floor((from - to) / 16)| capped at 3, so a rise of 1..16 is class 1 but a drop
+   * needs 16 (odb.md 2.3). 0 = the slope is impassable for this object.
    */
   stepDelay(e: Entity, cx: number, cy: number, nx: number, ny: number, follow: boolean): number {
     const steps = this.w.rules.get(e.oid)?.stepTime ?? DEFAULT_STEP;
     const h = this.w.terrain.height;
-    const dh = Math.abs(h[this.idx(nx, ny)] - h[this.idx(cx, cy)]);
-    const straight = steps[Math.min(3, Math.floor(dh / 16))];
+    const cls = Math.min(3, Math.abs((h[this.idx(cx, cy)] - h[this.idx(nx, ny)]) >> 4));
+    const straight = steps[cls];
     if (!straight) return 0;
     const diag = this.wrap(nx - cx) !== 0 && this.wrap(ny - cy) !== 0;
     const base = diag ? diagonalTicks(straight) : straight;
@@ -170,6 +169,13 @@ export class Motion {
     const path = e.path!;
     const [cx, cy] = this.cellOf(e);
     if (cx === e.goalX && cy === e.goalY) { this.done(e, WalkResult.Arrived); return; }
+    if (e.walkState === WS.Planning) {
+      // the planner is still running: poll every 2 ticks (only reached by a walk restored from a
+      // state saved within a tick, whose request is lost: it is made again, units ignored)
+      if (!this.pending.has(e.id)) this.request(e, 1);
+      e.moveAt = w.tick + 2;
+      return;
+    }
     if (e.walkState === WS.Replan) { this.replan(e, 0); return; }
     if (e.walkState === WS.ReplanFree) { this.replan(e, 1); return; }
     while (path.length && (path[0][0] & (w.size - 1)) === cx && (path[0][1] & (w.size - 1)) === cy) path.shift();
@@ -197,36 +203,46 @@ export class Motion {
   }
 
   /**
-   * Start a follow-path walk (4.1) to (gx, gy): the first plan (mode 1, units ignored unless the
-   * walk's mask includes them) counts as plan 1, and the first step comes 3 ticks later, never
-   * before the last step is over. A search that finds nothing does not fail the walk: the next
-   * run plans again. On the goal already: the walk is over at once (path null, arrived).
-   * `mask` 1: every plan of this walk keeps out all units (the flee's outward walk, mask 0x3E,
-   * combat.md 7.3).
+   * Start a follow-path walk (4.1) to (gx, gy). `delay` 0: the first plan (mode 1, units ignored
+   * unless the walk's mask includes them) is requested now and counts as plan 1, and the first
+   * step comes 3 ticks later, never before the last step is over. `delay` > 0: the walk job's first
+   * run, which makes that plan, comes `delay` ticks later (plan counter 0 until then). A search
+   * that finds nothing does not fail the walk: the next run plans again. On the goal already: the
+   * walk is over at once (path null, arrived). `mask` 1: every plan of this walk keeps out all
+   * units (the flee's outward walk, mask 0x3E, combat.md 7.3).
    */
-  start(e: Entity, gx: number, gy: number, nodes: number, mask: number): void {
+  start(e: Entity, gx: number, gy: number, mask: number, delay = 0): void {
     const w = this.w, m = w.size - 1;
     const [cx, cy] = this.cellOf(e);
+    this.cancelPlan(e);
     e.goalX = gx & m; e.goalY = gy & m;
-    e.walkNodes = nodes;
     e.walkMask = mask;
     e.walkState = WS.Normal;
     e.squeeze = 0; e.pushes = 0;
-    e.moveAt = Math.max(e.stepStart + e.stepTicks, w.tick + 3);
-    if (cx === e.goalX && cy === e.goalY) { e.path = null; e.plans = 1; e.walkResult = WalkResult.Arrived; return; }
-    e.plans = 1;
+    if (cx === e.goalX && cy === e.goalY) {
+      e.moveAt = Math.max(e.stepStart + e.stepTicks, w.tick + 3);
+      e.path = null; e.plans = 1; e.walkResult = WalkResult.Arrived;
+      return;
+    }
     e.walkResult = WalkResult.Running;
-    const path = this.search(e, cx, cy, 1);
-    if (path && path.length) e.path = path;
-    else { e.path = []; e.walkState = WS.ReplanFree; }
+    e.path = [];
+    if (delay > 0) {
+      e.plans = 0;
+      e.walkState = WS.ReplanFree;
+      e.moveAt = Math.max(e.stepStart + e.stepTicks, w.tick + delay);
+      return;
+    }
+    e.plans = 1;
+    e.moveAt = Math.max(e.stepStart + e.stepTicks, w.tick + 3);
+    this.request(e, 1);
   }
 
   /**
-   * Plan (`0047fc00`): the arrival tolerance ends the walk when the goal is no farther than the
-   * number of plans so far; after 15 plans the walk fails. Mode 0 (after a blocked step) keeps out
-   * the units near the walker, mode 1 (after a failed search) ignores units. A search that finds
-   * nothing leaves the walk waiting for a mode-1 plan at its next run. Each plan costs 3 + the
-   * old plan count ticks. Ships and animals keep failing at once when nothing is found.
+   * Plan (`0047fc00`): after 15 plans the walk fails; this limit is tested first (M13). Then the
+   * arrival tolerance ends the walk when the goal is no farther than the number of plans so far.
+   * Otherwise a plan is requested: mode 0 (after a blocked step) keeps out the units near the
+   * walker, mode 1 (after a failed search) ignores units. Each plan costs 3 + the old plan count
+   * ticks; the plan itself is made at the end of this tick (`flushPlans`).
    */
   replan(e: Entity, mode: number): void {
     const w = this.w;
@@ -235,85 +251,65 @@ export class Motion {
     const [cx, cy] = this.cellOf(e);
     const d = w.logistics.dist(cx, cy, e.goalX, e.goalY);
     if (d === 0) { this.done(e, WalkResult.Arrived); return; }
-    if (d <= e.plans) { this.done(e, WalkResult.Near); return; }
     if (e.plans >= MAX_PLANS) { this.done(e, WalkResult.Failed); return; }
+    if (d <= e.plans) { this.done(e, WalkResult.Near); return; }
     const old = e.plans++;
-    const ship = w.isShip(e);
-    const path = ship ? w.findPathOn(w.shipBlocked, cx, cy, e.goalX, e.goalY, e.walkNodes) : this.search(e, cx, cy, mode);
     e.moveAt = w.tick + 3 + old;
+    this.request(e, mode);
+  }
+
+  /** the planner starts: from the walker's cell now, made at the end of the tick (4.1.1) */
+  private request(e: Entity, mode: number): void {
+    const [cx, cy] = this.cellOf(e);
+    e.path = [];
+    e.walkState = WS.Planning;
+    this.pending.set(e.id, { sx: cx, sy: cy, mode });
+  }
+
+  /** a walk that is dropped or replaced takes its running plan with it */
+  cancelPlan(e: Entity): void {
+    if (this.pending.size && this.pending.delete(e.id) && e.walkState === WS.Planning) e.walkState = WS.Normal;
+  }
+
+  /** make a running plan of e's walk now (its walk is put aside before the end of the tick) */
+  finishPlan(e: Entity): void {
+    const r = this.pending.get(e.id);
+    if (!r) return;
+    this.pending.delete(e.id);
+    if (e.walkState === WS.Planning) this.settle(e, r.sx, r.sy, r.mode);
+  }
+
+  /**
+   * End of tick: every plan requested in this tick is made, in request order (they only read the
+   * map, so the order does not matter), against the state after all jobs and steps of the tick.
+   */
+  flushPlans(): void {
+    if (!this.pending.size) return;
+    const list = [...this.pending];
+    this.pending.clear();
+    for (const [id, r] of list) {
+      const e = this.w.get(id);
+      if (e && e.walkState === WS.Planning) this.settle(e, r.sx, r.sy, r.mode);
+    }
+  }
+
+  /**
+   * The planner's result for e's walk (4.1.1): a path, or nothing, which leaves the walk waiting
+   * for a mode-1 plan at its next run. Ships and animals fail their walk at once instead (they
+   * keep the one-search walks of `World.walk`). Units are kept out by the planning mode: mode 0
+   * those with D < 32 from the start, the walk mask 1 all of them; start and goal are never
+   * blocked (a walk onto a tree or a footprint cell is then stopped next to it by the arrival
+   * tolerance).
+   */
+  private settle(e: Entity, sx: number, sy: number, mode: number): void {
+    const w = this.w;
+    const unit = e.kind === KIND_UNIT && !w.isShip(e);
+    const path = w.plan(e, sx, sy, e.goalX, e.goalY, mode, unit && e.walkMask === 1);
+    e.walkState = WS.Normal;
     if (path && path.length) { e.path = path; return; }
-    if (ship || e.kind !== KIND_UNIT) { this.done(e, WalkResult.Failed); return; }
+    if (!unit) { this.done(e, WalkResult.Failed); return; }
     e.path = [];
     e.walkState = WS.ReplanFree;
-  }
-
-  /**
-   * One path search from (cx, cy) to the walk's goal on the land grid. Units are kept out by the
-   * planning mode (4.1): mode 0 those within 2 max + min < 32 of the walker, the walk mask 1 all
-   * of them. The start and goal cells are never blocked, whatever stands on them (a walk onto a
-   * tree or a footprint cell is then stopped next to it by the arrival tolerance). Null when the
-   * goal cannot be reached: our A* returns a partial way toward the nearest cell it reached, but
-   * the original's planner has no partial result.
-   */
-  private search(e: Entity, cx: number, cy: number, mode: number): [number, number][] | null {
-    const w = this.w, grid = w.blocked;
-    const si = this.idx(cx, cy), gi = this.idx(e.goalX, e.goalY);
-    const set: number[] = [];
-    const block = (i: number) => {
-      if (i === si || i === gi || grid[i] !== 0 || !this.unitOn(i, e)) return;
-      grid[i] = 1; set.push(i);
-    };
-    if (e.kind === KIND_UNIT && !w.isShip(e)) {
-      if (e.walkMask) for (const i of this.marked) block(i);
-      else if (mode === 0) {
-        for (let dy = -15; dy <= 15; dy++) for (let dx = -15; dx <= 15; dx++) {
-          const ax = Math.abs(dx), ay = Math.abs(dy);
-          if (2 * Math.max(ax, ay) + Math.min(ax, ay) < NEAR_UNITS) block(this.idx(cx + dx, cy + dy));
-        }
-      }
-    }
-    const sOld = grid[si], gOld = grid[gi];
-    grid[si] = 0; grid[gi] = 0;
-    let path: [number, number][] | null;
-    try {
-      path = this.closedAround(gi, si) ? null : w.findPathOn(grid, cx, cy, e.goalX, e.goalY, e.walkNodes);
-    } finally {
-      grid[si] = sOld; grid[gi] = gOld;
-      for (const i of set) grid[i] = 0;
-    }
-    if (path && path.length) {
-      const [lx, ly] = path[path.length - 1];
-      if (this.idx(lx, ly) !== gi) return null;
-    }
-    return path;
-  }
-
-  /**
-   * Is the goal in a closed pocket of the grid (fewer than POCKET cells) that does not hold the
-   * start? Then no search can reach it, and it fails at once (the original's planner also searches
-   * from the goal's end, 4.1). Only a shortcut: the A* would fail the same way, after its whole
-   * node budget. Steps as in the A*: 8 neighbours, only the destination tested (diagonals cut
-   * corners, units-and-jobs.md 4.1).
-   */
-  private closedAround(gi: number, si: number): boolean {
-    const grid = this.w.blocked, seen = this.floodSeen, q = this.floodQueue;
-    const bits = this.w.bits, m = this.w.size - 1;
-    if (++this.floodStamp === 0xffffffff) { this.floodStamp = 1; seen.fill(0); }
-    const st = this.floodStamp;
-    let head = 0, tail = 0;
-    q[tail++] = gi; seen[gi] = st;
-    while (head < tail) {
-      const c = q[head++];
-      const x = c & m, y = c >> bits;
-      for (const [dx, dy] of ASIDE) {
-        const n = (((y + dy) & m) << bits) | ((x + dx) & m);
-        if (seen[n] === st || grid[n]) continue;
-        if (n === si) return false;
-        if (tail >= POCKET) return false;
-        seen[n] = st; q[tail++] = n;
-      }
-    }
-    return true;
   }
 
   /**
@@ -326,7 +322,8 @@ export class Motion {
     const w = this.w;
     if (this.isIdle(b)) { this.startSqueeze(e, b, i); return; }
     if (b.path && b.walkState !== WS.Squeeze) {
-      if (b.walkState === WS.Replan) { e.moveAt = w.tick + 3; return; }
+      // the other unit's planner is still running: wait 3 ticks
+      if (b.walkState === WS.Planning || b.walkState === WS.Replan) { e.moveAt = w.tick + 3; return; }
       if (b.walkState === WS.Normal && b.path.length && this.canStep(b)) {
         const [bx, by] = this.cellOf(b), [nx, ny] = b.path[0];
         e.moveAt = w.tick + this.stepDelay(b, bx, by, nx, ny, false) + 1;

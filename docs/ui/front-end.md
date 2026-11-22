@@ -457,8 +457,9 @@ play the outro of the player's race instead of a briefing: `outro-am.avi` (Amazo
 (0,60), 640 x 420, cursor hidden, like the intro; afterwards (or if the file is missing) the game
 switches to 800 x 600 and opens the main menu. The tutorials just return to the main menu.
 
-In multiplayer the last surviving player wins; the manual warns that the host clicking OK ends the
-session for the others.
+In multiplayer the last surviving player wins (mission goals are not read in a network game;
+mdb.md "Goals" has the exact rule and what "dead" means); the manual warns that the host clicking
+OK ends the session for the others.
 
 ### 3.13 Multiplayer setup (C)
 

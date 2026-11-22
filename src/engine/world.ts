@@ -5,7 +5,7 @@ import type { Terrain } from '../world/terrain.ts';
 import { CLASS_WATER, CLASS_PATH } from '../world/terrain.ts';
 import type { MapObject } from '../formats/mission.ts';
 import { objectId } from '../formats/mission.ts';
-import { dirToward, PathSearcher } from './path.ts';
+import { dirToward, Planner } from './path.ts';
 import type { ObjectRule } from '../formats/odb.ts';
 import type { Goal } from '../formats/mission.ts';
 import { MsRand } from '../world/rand.ts';
@@ -90,6 +90,9 @@ export interface Entity {
   suspended: number[];   // jobs waiting behind the current one (resumed when it ends)
   charging: boolean;     // top-level attack walk: step time - 1
   ordered: boolean;      // current activity was ordered by the player
+  /** units: the object a player-ordered go-to without a job walks to (our form of the go-to job
+   *  0x07 on a unit or nature object), for the repeated-order test (units-and-jobs.md 3.2); 0 none */
+  goTarget: number;
   collapseStage: number; // buildings: collapse animation stage
   alive: boolean;       // animals: false once hunted (a carcass)
   homeX: number; homeY: number;   // animals: home cell
@@ -119,9 +122,8 @@ export interface Entity {
   stepTicks: number;
   /** tick the movement logic runs next (turn delays, step delays, waits) */
   moveAt: number;
-  /** current walk: goal cell, search budget, plans so far (arrival tolerance, 15 = fail) */
+  /** current walk: goal cell, plans so far (arrival tolerance, 15 = fail) */
   goalX: number; goalY: number;
-  walkNodes: number;
   plans: number;
   /** motion.ts WS: 0 normal, 1 waiting to squeeze past a pushed unit, 2 mode-0 re-plan due, 3 mode-1 plan due (last search failed) */
   walkState: number;
@@ -145,7 +147,7 @@ export interface WalkSave {
   job: number;
   path: [number, number][] | null;
   goalX: number; goalY: number;
-  walkNodes: number; plans: number; walkState: number; squeeze: number; pushes: number;
+  plans: number; walkState: number; squeeze: number; pushes: number;
   walkResult: number; walkMask: number;
 }
 
@@ -164,6 +166,8 @@ export type Command =
   | { type: 'move'; player: number; ids: number[]; x: number; y: number }
   | { type: 'sliders'; player: number; town: number; motivation: number; research: number }
   | { type: 'research'; player: number; town: number; invention: number }
+  /** rename a town (command 0x4B, units-and-jobs.md 11.2 "Renaming a town"): the client's current town */
+  | { type: 'rename'; player: number; town: number; name: string }
   | { type: 'order'; player: number; ids: number[]; target: number }
   | { type: 'build'; player: number; town: number; building: number; x: number; y: number }
   | { type: 'unit'; player: number; ids: number[]; action: 'home' | 'drop'; town?: number }
@@ -202,6 +206,9 @@ export interface WorldSetup {
   prerequisites?: number[][][];
   /** false: no computer players run (tests that need a quiet world) */
   ai?: boolean;
+  /** a network (lockstep) game: mission goals are ignored, the last nation alive wins (mdb.md
+   *  "Goals"); kept in the economy snapshot */
+  network?: boolean;
   /** add-on ("AO") mission (docs/game/addon.md); default: the terrain is an add-on terrain */
   addon?: boolean;
   /** Gold executable behaviour and add-on fidelity switches; defaults by mode (naval.ts goldDefaults) */
@@ -227,8 +234,12 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  conversion ring (economy.md 7); 13: the player's delivery order is an ordinary transport for
  *  its site, lost site needs re-filed once (units-and-jobs.md 5.8 item 10); 14: the naval
  *  planner's ship counters bound boarding (addon.md 8.4); 15: a destroyed town leaves its nation's
- *  town list once nothing refers to it (combat.md 10.4 "Lifetime"); older saves are migrated on restore */
-export const SNAPSHOT_VERSION = 15;
+ *  town list once nothing refers to it (combat.md 10.4 "Lifetime"); 16: the plant job's new layout
+ *  (cell drawn in its first run, crop made on stepping off, units-and-jobs.md 7.6); older saves are
+ *  migrated on restore; 17: a town's given name (rename command), the network-game flag
+ *  (economy snapshot), the target of a player-ordered go-to walk (`goTarget`, repeated-order test,
+ *  units-and-jobs.md 3.2) */
+export const SNAPSHOT_VERSION = 18;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -328,7 +339,7 @@ export class World {
   readonly motion: Motion;
   /** town territory and border stones (economy.md 11) */
   readonly territory: Territory;
-  private searcher: PathSearcher | null = null;
+  private planner: Planner | null = null;
 
   constructor(terrain: Terrain, objects: MapObject[], rules: Map<number, ObjectRule> = new Map(), setup?: WorldSetup) {
     this.rules = rules;
@@ -364,6 +375,7 @@ export class World {
     if (setup?.weapons) this.weapons = setup.weapons;
     if (setup?.lists) this.lists = setup.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (setup) this.economy.setupPlayers(setup.races, setup.costs, setup.goals);
+    if (setup?.network) this.economy.network = true;
     if (objects.length) this.loadMap(objects, setup);
     // the relation table is rebuilt from the race blocks after the map objects exist; this also
     // undoes the "first contact = war" of embassies activated while loading (mdb.md "Relations")
@@ -587,29 +599,40 @@ export class World {
     return ao ? ao[i] === AO_CLASS_SEA : this.terrain.cls[i] === CLASS_WATER;
   }
 
-  /** A* on a grid of this world's size (path.ts findPath, reusable buffers) */
-  findPathOn(grid: Uint8Array, sx: number, sy: number, tx: number, ty: number, maxNodes = 40000): [number, number][] | null {
-    this.searcher ??= new PathSearcher(this.bits);
-    return this.searcher.find(grid, sx, sy, tx, ty, maxNodes);
+  /**
+   * One plan of the original planner (path.ts `Planner`, units-and-jobs.md 4.1.1) for e from
+   * (sx, sy) to (gx, gy), computed at once: e's step times, path shift 2 for animals (class 7),
+   * the ship grid for ships. `mode` 1 ignores units, 0 keeps out the units with D < 32 from the
+   * start; `allUnits` keeps out every unit (planning mask 0x3E). Ships are not in the unit grid.
+   * The cells after the start up to the goal, [] on the goal, null when the plan fails.
+   */
+  plan(e: Entity, sx: number, sy: number, gx: number, gy: number, mode = 1, allUnits = false): [number, number][] | null {
+    this.planner ??= new Planner(this.bits);
+    const r = this.rules.get(e.oid), ship = this.isShip(e);
+    return this.planner.plan({
+      sx, sy, gx, gy, steps: r?.stepTime ?? DEFAULT_STEP_TIME, shift: r?.cls === 7 ? 2 : 0, mode, allUnits: allUnits && !ship,
+      blocked: ship ? this.shipBlocked : this.blocked, pathFlag: this.pathFlag, height: this.terrain.height,
+      unitAt: ship ? () => false : (i: number) => this.motion.unitOn(i, e) !== null,
+    });
   }
 
   /**
-   * Plan a walk to a cell with one search; false when that search finds nothing (and the old walk
-   * is kept). Used where one search decides (the attack's firing position, animals, the computer
-   * players' legs); the jobs that walk with the original's follow-path job use `follow`.
+   * Plan a walk to a cell with one plan made at once (units ignored); false when it fails (and the
+   * old walk is kept). Used where one search decides (the attack's stored plan, animals, patrols,
+   * ships, a few computer-player walks); the jobs that walk with the original's follow-path job use
+   * `follow`.
    */
-  walk(e: Entity, x: number, y: number, maxNodes = 6000): boolean {
+  walk(e: Entity, x: number, y: number): boolean {
     if (this.addon && e.kind === Kind.Unit) {
-      // ships cross whole seas: a larger search budget for ordinary walks (searches are cheap on the ship grid)
-      if (this.isShip(e)) return this.naval.walkShip(e, x, y, maxNodes >= 6000 ? 30000 : maxNodes);
-      return this.walkLand(e, x, y, maxNodes);
+      if (this.isShip(e)) return this.naval.walkShip(e, x, y);
+      return this.walkLand(e, x, y);
     }
     const [cx, cy] = [Math.floor(e.x / SUB), Math.floor(e.y / SUB)];
     const m = this.size - 1;
-    if (cx === (x & m) && cy === (y & m)) { this.setPath(e, null, x, y, maxNodes); return true; }
-    const path = this.findPathOn(this.blocked, cx, cy, x, y, maxNodes);
+    if (cx === (x & m) && cy === (y & m)) { this.setPath(e, null, x, y); return true; }
+    const path = this.plan(e, cx, cy, x & m, y & m);
     if (!path) return false;
-    this.setPath(e, path, x, y, maxNodes);
+    this.setPath(e, path, x, y);
     return true;
   }
 
@@ -618,7 +641,7 @@ export class World {
    * the add-on land goal rules applied (the attack's stored plan, combat.md 3.3.1). Cells after the
    * start; [] on the goal; null: no way.
    */
-  planPath(e: Entity, sx: number, sy: number, x: number, y: number, maxNodes: number): [number, number][] | null {
+  planPath(e: Entity, sx: number, sy: number, x: number, y: number): [number, number][] | null {
     const m = this.size - 1;
     let gx = x & m, gy = y & m;
     if (this.addon && e.kind === Kind.Unit) {
@@ -627,25 +650,27 @@ export class World {
       [gx, gy] = g;
     }
     if ((sx & m) === gx && (sy & m) === gy) return [];
-    return this.findPathOn(this.blocked, sx & m, sy & m, gx, gy, maxNodes);
+    return this.plan(e, sx & m, sy & m, gx, gy);
   }
 
   /**
    * The follow-path job (0x06, units-and-jobs.md 4.1) to a cell: a search that finds nothing does
    * not fail the walk; it is planned again (units ignored) at its next run, until the arrival
    * tolerance or the 15-plan limit ends it. `mask` 1: every plan keeps out all units (combat.md
-   * 7.3). False only where the original's walk fails at once: add-on land walks toward another
-   * island or with no land cell near the target (addon.md 2.5); ships keep their one search.
+   * 7.3). `delay` > 0: the walk job's first run (which makes the first plan) comes that many ticks
+   * later (the move order 1, a computer army 2, ...); 0: it plans in this tick. False only where
+   * the original's walk fails at once: add-on land walks toward another island or with no land
+   * cell near the target (addon.md 2.5); ships keep their one search.
    */
-  follow(e: Entity, x: number, y: number, maxNodes = 6000, mask = 0): boolean {
-    if (this.isShip(e)) return this.walk(e, x, y, maxNodes);
+  follow(e: Entity, x: number, y: number, mask = 0, delay = 0): boolean {
+    if (this.isShip(e)) return this.walk(e, x, y);
     let gx = x & (this.size - 1), gy = y & (this.size - 1);
     if (this.addon && e.kind === Kind.Unit) {
       const g = this.landGoal(e, gx, gy);
       if (!g) return false;
       [gx, gy] = g;
     }
-    this.motion.start(e, gx, gy, maxNodes, mask);
+    this.motion.start(e, gx, gy, mask, delay);
     return true;
   }
 
@@ -654,11 +679,11 @@ export class World {
    * comes 3 ticks after the plan (the original's planning delay), and never before the previous
    * step's duration is over. `path` null or empty: the unit is already there.
    */
-  setPath(e: Entity, path: [number, number][] | null, gx: number, gy: number, nodes: number): void {
+  setPath(e: Entity, path: [number, number][] | null, gx: number, gy: number): void {
     const m = this.size - 1;
+    this.motion.cancelPlan(e);
     e.path = path && path.length ? path : null;
     e.goalX = gx & m; e.goalY = gy & m;
-    e.walkNodes = nodes;
     e.plans = 1;
     e.walkState = WS.Normal;
     e.walkMask = 0;
@@ -669,6 +694,7 @@ export class World {
 
   /** drop the walk at once (entering a building, boarding, death); the position stays */
   halt(e: Entity): void {
+    this.motion.cancelPlan(e);
     e.path = null;
     e.walkState = WS.Normal;
     e.squeeze = 0;
@@ -692,10 +718,12 @@ export class World {
    */
   stashWalk(e: Entity, job: number): void {
     if (!job && !e.path) return;
+    // a plan still being made belongs to this walk: it is finished now (units-and-jobs.md 4.1.1)
+    this.motion.finishPlan(e);
     e.walks = e.walks.filter(s => s.job !== job);
     e.walks.push({
       job, path: e.path ? e.path.map(([x, y]) => [x, y] as [number, number]) : null, goalX: e.goalX, goalY: e.goalY,
-      walkNodes: e.walkNodes, plans: e.plans, walkState: e.walkState, squeeze: e.squeeze, pushes: e.pushes,
+      plans: e.plans, walkState: e.walkState, squeeze: e.squeeze, pushes: e.pushes,
       walkResult: e.walkResult, walkMask: e.walkMask,
     });
     if (e.path) { e.path = null; e.walkState = WS.Normal; e.squeeze = 0; }
@@ -712,7 +740,8 @@ export class World {
     if (k >= 0) {
       const s = e.walks[k];
       e.walks.splice(k, 1);
-      e.path = s.path; e.goalX = s.goalX; e.goalY = s.goalY; e.walkNodes = s.walkNodes; e.plans = s.plans;
+      this.motion.cancelPlan(e);
+      e.path = s.path; e.goalX = s.goalX; e.goalY = s.goalY; e.plans = s.plans;
       e.walkState = s.walkState; e.squeeze = s.squeeze; e.pushes = s.pushes; e.walkResult = s.walkResult; e.walkMask = s.walkMask;
       if (e.path) e.moveAt = Math.max(e.stepStart + e.stepTicks, this.tick + 1);
     }
@@ -725,15 +754,15 @@ export class World {
    * go-to target chooser `00485dc0`), so no search runs over the whole island for a cell it can
    * never reach.
    */
-  private walkLand(e: Entity, x: number, y: number, maxNodes: number): boolean {
+  private walkLand(e: Entity, x: number, y: number): boolean {
     const [cx, cy] = [Math.floor(e.x / SUB), Math.floor(e.y / SUB)];
     const g = this.landGoal(e, x & (this.size - 1), y & (this.size - 1));
     if (!g) return false;
     const [gx, gy] = g;
-    if (cx === gx && cy === gy) { this.setPath(e, null, gx, gy, maxNodes); return true; }
-    const path = this.findPathOn(this.blocked, cx, cy, gx, gy, maxNodes);
+    if (cx === gx && cy === gy) { this.setPath(e, null, gx, gy); return true; }
+    const path = this.plan(e, cx, cy, gx, gy);
     if (!path) return false;
-    this.setPath(e, path, gx, gy, maxNodes);
+    this.setPath(e, path, gx, gy);
     return true;
   }
 
@@ -907,7 +936,7 @@ export class World {
       paused: false, queue: [], trainStarted: 0, trainProgress: 0, trainJob: 0, doorTick: -1000,
       door: 0, doorOpen: -1000, doorShut: -1000, entering: -1, enterStep: 0,
       idle: 0, alive: true, homeX: o.x, homeY: o.y,
-      cooldownUntil: -1000, rank: 0, exp: 0, suspended: [], walks: [], charging: false, ordered: false, collapseStage: -1,
+      cooldownUntil: -1000, rank: 0, exp: 0, suspended: [], walks: [], charging: false, ordered: false, goTarget: 0, collapseStage: -1,
       amount: 0, reserved: 0, full: 0, yieldGood: -1, standing: false, stage: 0, growJob: 0,
       x: o.x * SUB + SUB / 2, y: o.y * SUB + SUB / 2, dir: 3,
       action: Action.Idle, actionTick: 0, idleTick: -1, idleLoops: 0, path: null,
@@ -1036,6 +1065,9 @@ export class World {
     for (const e of this.entities) {
       if (e.path && e.moveAt <= t && (e.kind === Kind.Nature || (e.kind === Kind.Unit && e.inside < 0))) this.motion.run(e);
     }
+    // the plans requested in this tick are made now, after all its jobs and steps (the lockstep
+    // reading of the original's between-ticks planner, units-and-jobs.md 4.1.1)
+    this.motion.flushPlans();
     // destroyed towns whose last reference went this tick leave their nation's list (combat.md 10.4)
     this.economy.releaseTowns();
   }
@@ -1062,6 +1094,13 @@ export class World {
         // mentor#16 "Du investierst nichts in Forschung!", unqueued (side-panel.md 1.1.3, `00450910`)
         if (cmd.invention >= 0 && (t.researchPct === 0 || t.researchSpent < 1)) this.notify(t.race, 16, false);
       }
+      return;
+    }
+    if (cmd.type === 'rename') {
+      // the original replaces the string with no test; ours: a living own town, the text up to its
+      // first zero character, at most the message's 31 characters
+      const t = this.ownTown(cmd.player, cmd.town);
+      if (t && typeof cmd.name === 'string') t.name = cmd.name.split('\0')[0].slice(0, 31);
       return;
     }
     if (cmd.type === 'order') {
@@ -1162,19 +1201,36 @@ export class World {
         const ships = ids.map(id => this.byId.get(id)!).filter(e => this.isShip(e));
         if (ships.length) { ids = ids.filter(id => !this.isShip(this.byId.get(id)!)); this.moveShips(ships, Math.trunc(cmd.x), Math.trunc(cmd.y)); }
       }
-      const targets = this.spreadTargets(cmd.x, cmd.y, ids.length);
-      ids.forEach((id, k) => {
+      // command 0x14 (`00451170`, units-and-jobs.md 3.2): the units one by one, each to its own
+      // cell (the first of the 4.8 spiral around the click that holds no unit, building, nature
+      // object or water and that no earlier unit of this order took); a unit on the clicked cell
+      // is left alone; an ordinary follow-path walk, first run after 1 tick
+      const m = this.size - 1;
+      const tx = Math.trunc(cmd.x) & m, ty = Math.trunc(cmd.y) & m;
+      const taken = new Set<number>();
+      for (const id of ids) {
         const e = this.byId.get(id)!;
+        if (Math.floor(e.x / SUB) === tx && Math.floor(e.y / SUB) === ty) continue;
+        const c = this.moveTarget(tx, ty, taken);
+        if (!c) continue;
+        const [gx, gy] = c;
+        // the same move order is already under way: nothing happens, and the cell is not taken
+        if (e.job === 0 && e.path && e.ordered && e.goalX === gx && e.goalY === gy) continue;
+        taken.add(this.cell(gx, gy));
         this.logistics.cancelJob(e);
+        this.follow(e, gx, gy, 0, 1);
         e.ordered = true;
-        const [gx, gy] = targets[k];
-        // the unit is always on a whole cell: a step under way only delays the first new step (setPath)
-        const [cx, cy] = [Math.floor(e.x / SUB), Math.floor(e.y / SUB)];
-        const path = this.findPathOn(this.blocked, cx, cy, gx, gy);
-        if (path) this.setPath(e, path, gx, gy, 40000);
-        else this.stopWalk(e);
-      });
+      }
     }
+  }
+
+  /** the move order's cell (3.2): the first cell of the 4.8 spiral around (x, y) whose flags miss 0x3E and that is not taken */
+  private moveTarget(x: number, y: number, taken: Set<number>): [number, number] | null {
+    const m = this.size - 1;
+    for (let r = 0; r <= this.size >> 1; r++) {
+      for (const [px, py] of ring(x, y, r)) if (!taken.has(this.cell(px, py)) && this.motion.free(px, py)) return [px & m, py & m];
+    }
+    return null;
   }
 
   /** move order for ships (addon.md 4.1): a free sea cell each; a fishing boat gets a fishing job there (6.1) */
@@ -1227,7 +1283,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1241,6 +1297,13 @@ export class World {
       copy.passengers ??= [];
       copy.enterSeq ??= 0;
       copy.walks ??= []; copy.walkMask ??= 0;
+      // before version 18 walks kept a node budget for the old one-way A*; the original planner
+      // has a fixed cap (units-and-jobs.md 4.1.1), so the field goes
+      if (snap.v < 18) {
+        delete (copy as Partial<Entity> & { walkNodes?: number }).walkNodes;
+        for (const k of copy.walks) delete (k as Partial<WalkSave> & { walkNodes?: number }).walkNodes;
+      }
+      copy.goTarget ??= 0;   // before version 17: no ordered go-to target (a running walk is restarted by a repeated click once)
       if (snap.v < 4) migrateMovement(copy, snap.tick, w.size);
       // before version 6: no door counter, no enter sequence (a unit inside stays inside; units on
       // their way out were already placed by the old immediate leave)
@@ -1280,6 +1343,9 @@ export class World {
     // before version 15 destroyed towns stayed in their nation's town list for good (combat.md 10.4
     // "Lifetime"): those nothing refers to any more leave it now
     if (snap.v < 15) w.economy.releaseTowns();
+    // before version 16 the plant job drew its cell in the operator run and made the crop after
+    // the work (units-and-jobs.md 7.6): map running plant jobs onto the new phases
+    if (snap.v < 16) w.logistics.migratePlantJobs();
     if (snap.lists) w.lists = snap.lists.map(l => l.map(([x, y]) => [x, y] as [number, number]));
     if (snap.territory) w.territory.restore(snap.territory);
     else w.migrateTerritory();
@@ -1314,7 +1380,7 @@ export class World {
       mix(e.path ? e.path.length : -1); mix(e.stepStart); mix(e.stepTicks); mix(e.moveAt);
       mix(e.plans); mix(e.walkState); mix(e.squeeze); mix(e.walkResult); mix(e.walkMask);
       if (e.walks.length) { mix(-9); for (const k of e.walks) { mix(k.job); mix(k.path ? k.path.length : -1); mix(k.plans); mix(k.goalX); mix(k.goalY); mix(k.walkState); } }
-      mix(e.job); mix(e.idle); mix(e.alive ? 1 : 0); mix(e.carryGood); mix(e.cooldownUntil); mix(e.exp); mix(e.suspended.length); mix(e.carryAmount); mix(e.amount); mix(e.reserved);
+      mix(e.job); mix(e.goTarget); mix(e.idle); mix(e.alive ? 1 : 0); mix(e.carryGood); mix(e.cooldownUntil); mix(e.exp); mix(e.suspended.length); mix(e.carryAmount); mix(e.amount); mix(e.reserved);
       mix(e.needed.length); mix(e.outputs.length); mix(e.doorQueue.length); mix(e.door); mix(e.entering); mix(e.enterStep); mix(e.queue.length); mix(e.trainProgress);
       for (const v of e.local) mix(v);
       if (e.passengers.length) { mix(-7); for (const v of e.passengers) mix(v); }
@@ -1335,6 +1401,8 @@ export class World {
   }
 }
 
+/** step times when an object has no record (all base-game units share 5/6/7/8, odb.md 2.3) */
+const DEFAULT_STEP_TIME: readonly number[] = [5, 6, 7, 8];
 const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.trunc(Number(v) || 0)));
 const wrapDelta = (d: number, n: number) => (d > n / 2 ? d - n : d < -n / 2 ? d + n : d);
 
@@ -1358,7 +1426,7 @@ function migrateMovement(e: Entity, tick: number, size: number): void {
   const goal = e.path && e.path.length ? e.path[e.path.length - 1] : [x, y];
   Object.assign(e, movementDefaults(e.x, e.y, goal[0], goal[1]));
   e.idleTick ??= -1; e.idleLoops ??= 0;
-  e.plans = 1; e.walkNodes = 6000;
+  e.plans = 1;
   e.moveAt = tick + left;
   if (stepping) { e.stepStart = tick - 1; e.stepTicks = left + 1; }
 }
@@ -1367,6 +1435,6 @@ function migrateMovement(e: Entity, tick: number, size: number): void {
 function movementDefaults(px: number, py: number, x: number, y: number) {
   return {
     stepFromX: px, stepFromY: py, stepStart: -1000, stepTicks: 0, moveAt: 0,
-    goalX: x, goalY: y, walkNodes: 0, plans: 0, walkState: 0, squeeze: 0, pushes: 0, walkResult: 0, walkMask: 0,
+    goalX: x, goalY: y, plans: 0, walkState: 0, squeeze: 0, pushes: 0, walkResult: 0, walkMask: 0,
   };
 }

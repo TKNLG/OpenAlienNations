@@ -11,7 +11,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import { Kind, Action, SUB } from './world.ts';
-import { T, ADVISOR_REPEAT_MS, type Town } from './economy.ts';
+import { T, ADVISOR_REPEAT_MS, JobKind, type Town } from './economy.ts';
 import type { Weapon } from '../formats/wdb.ts';
 import { WeaponKind } from '../formats/wdb.ts';
 import { dirToward, turnStep } from './path.ts';
@@ -48,8 +48,6 @@ const A = { Target: 0, AX: 1, AY: 2, Searches: 3, Auto: 4, Player: 5, Walk: 6, P
 const GONE = 2;
 /** attack state size before snapshot version 9 (no walk flag, no stored plan) */
 const A_SIZE_V8 = 6;
-/** node budget of the firing-position search (3.5) */
-const SEARCH_NODES = 2000;
 
 /** a display event (projectile, death); not part of the simulation state */
 export interface CombatEffect {
@@ -289,7 +287,7 @@ export class Combat {
     const [ux, uy] = this.cell(u), [tx, ty] = this.cell(t);
     const spot = wpn.range === 0 ? this.meleeSpot(u, t) : null;
     const [gx, gy] = spot ?? [tx, ty];
-    const path = this.w.planPath(u, ux, uy, gx, gy, SEARCH_NODES);
+    const path = this.w.planPath(u, ux, uy, gx, gy);
     if (!path || !path.length) return;
     const [lx, ly] = path[path.length - 1];
     let end = spot && lx === spot[0] && ly === spot[1] ? path.length - 1 : -1;
@@ -310,11 +308,11 @@ export class Combat {
     d[base + A.Plan] = 0;
     const m = this.w.size - 1;
     const px = d[base + A.PX], py = d[base + A.PY], gx = d[base + A.GX], gy = d[base + A.GY];
-    const way: [number, number][] = [[px, py], ...(this.w.planPath(u, px, py, gx, gy, SEARCH_NODES) ?? [])];
+    const way: [number, number][] = [[px, py], ...(this.w.planPath(u, px, py, gx, gy) ?? [])];
     const [ux, uy] = this.cell(u);
     const k = way.findIndex(([x, y]) => (x & m) === ux || (y & m) === uy);
     const rest = k < 0 ? [] : way.slice(k + 1);
-    this.w.setPath(u, rest, gx, gy, SEARCH_NODES);
+    this.w.setPath(u, rest, gx, gy);
     // made and run in the attack's run: no planning delay (units-and-jobs.md 4.1)
     if (u.path) u.moveAt = Math.max(u.stepStart + u.stepTicks, this.w.tick);
   }
@@ -648,7 +646,7 @@ export class Combat {
       if (dd >= sight + 2) return this.endUnitJob(v);
       const m = this.w.size - 1;
       const px = (ax + Math.trunc((dx * (sight + 3)) / dd)) & m, py = (ay + Math.trunc((dy * (sight + 3)) / dd)) & m;
-      this.w.follow(v, px, py, 2000, 1);
+      this.w.follow(v, px, py, 1);
       d[3] = 1;
       return 1;
     }
@@ -659,7 +657,7 @@ export class Combat {
       return 50;
     }
     if (d[3] === 2) {
-      this.w.follow(v, d[1], d[2], 2000, 0);
+      this.w.follow(v, d[1], d[2], 0);
       d[3] = 3;
       return 1;
     }
@@ -765,7 +763,7 @@ export class Combat {
     const i = d[GD.Index];
     const wx = d[GD.Points + 2 * i], wy = d[GD.Points + 2 * i + 1];
     if (x !== wx || y !== wy) {
-      this.w.walk(u, wx, wy, 6000);
+      this.w.walk(u, wx, wy);
     } else if (u.action !== Action.Idle) { u.action = Action.Idle; u.actionTick = this.w.tick; }
     d[GD.Walking] = 1;
     return 3;
@@ -972,11 +970,15 @@ export class Combat {
       if (nearest) { eco.leaveTown(u); eco.joinTown(u, nearest); nearest.homeless.push(u.id); }
       else this.die(u);
     }
+    // the receiving town's small, then large houses take the homeless at once (step 3)
+    if (nearest) eco.rehouseTown(nearest);
     for (const b of [...this.w.entities]) if (b.kind === Kind.Building && b.town === t.id && b.alive) this.collapse(b, false);
+    // the defeat (`0045d2a0`, step 5): the nation is dead (its alive byte); its finance job ends.
+    // The result comes from the goal job at its next run (mdb.md "Goals")
     if (p && !eco.towns.some(o => o.alive && o.race === t.race)) {
-      p.outcome = p.outcome || -1;
-      p.defeated = true;
       for (const o of eco.players) if (o && o.race !== t.race) this.w.notify(o.race, M.Defeated + t.race);
+      p.defeated = true;
+      for (const j of this.w.sched.jobs()) if (j.kind === JobKind.Finance && j.owner === t.race) j.cancelled = true;
     }
   }
 
@@ -1186,6 +1188,21 @@ export class Combat {
   }
 
   /** right-click order handling for combat cases (3.2); true if handled */
+  /** the order's attack branch (units-and-jobs.md 3.2): a unit or building of another side, an
+   *  armed unit that is not a priest */
+  attackBranch(u: Entity, target: Entity): boolean {
+    return target.kind !== Kind.Nature && this.race(target) !== this.race(u) && !!this.weapon(u) && this.type(u) !== U.Priest;
+  }
+
+  /** the repeated-order test (units-and-jobs.md 3.2): the unit's current job is a player-ordered
+   *  attack (0x08) or heal (0x29) on this target, which another click does not restart */
+  private ordering(u: Entity, kind: number, target: Entity): boolean {
+    const j = u.ordered && u.job ? this.w.sched.get(u.job) : undefined;
+    if (!j || j.cancelled || j.kind !== kind) return false;
+    if (kind === CJ.Heal) return j.data[1] !== 0 && j.data[2 + A.Target] === target.id;
+    return j.data[A.Target] === target.id;
+  }
+
   order(u: Entity, target: Entity): boolean {
     const ut = this.type(u);
     if (target.kind === Kind.Nature) return false;
@@ -1193,6 +1210,7 @@ export class Combat {
     // no class test (addon.md 4.3): on a damaged own ship this is a heal job that can never strike
     // (no land cell touches a ship), and it comes before boarding a transport
     if (ut === U.Priest && target.kind === Kind.Unit && target.hp < (this.rule(target)?.hp ?? 0) && sameRace) {
+      if (this.ordering(u, CJ.Heal, target)) return true;
       this.w.logistics.cancelJob(u);
       this.startHeal(u, target, true, 1);
       return true;
@@ -1203,6 +1221,9 @@ export class Combat {
       this.startArrest(u, 0);
       return true;
     }
+    // the attack branch: a running ordered attack on this target is kept, tested before 2.1; when
+    // 2.1 refuses, the go-to the order makes instead is not guarded (logistics.order)
+    if (this.attackBranch(u, target) && this.ordering(u, CJ.Attack, target)) return true;
     if (!sameRace && this.weapon(u) && ut !== U.Priest && this.mayAct(u, target)) {
       this.startAttack(u, target, true, true, 1, false);
       return true;

@@ -92,7 +92,7 @@ const goodName = (pc: PageCtx, g: number, race: number) =>
 const goodIcon = (pc: PageCtx, g: number) => pc.hud.uiIcon(((GOODS_GROUP << 16) | g) >>> 0);
 /** the market pages list goods 1..8 in good-number order; good 0 (raw material) never (5.5) */
 const MARKET_GOODS = [1, 2, 3, 4, 5, 6, 7, 8];
-const townName = (pc: PageCtx, t: Town) => pc.hud.str(142 + t.race * 10 + (t.nameIndex % 10));
+const townName = (pc: PageCtx, t: Town) => pc.hud.townName(t);
 const raceName = (pc: PageCtx, race: number) => pc.hud.str(116 + race);
 
 /** a SLIDERHANDEL bar (113x28) with a RING handle for a value in 0..max */

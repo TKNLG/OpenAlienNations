@@ -442,11 +442,22 @@ test('naval planner: a computer transport ferries waiting units to another islan
   const req = w.naval.request(2, units.length, 0, ...cell(units[0]), ...dest);
   for (const u of units) { w.naval.addWaiting(2, req, u); assert.equal(jobKind(w, u), NJ.Wait); }
   const states = new Set<number>();
-  runUntil(w, 6000, () => { states.add(pl.ships[0].state); return pl.ships[0].state === 1 && states.has(5); });
+  // where each unit first stands outside again after boarding (a unit landed may get other work
+  // later, e.g. a trainee order, and leave the island again)
+  const landed = new Map<number, [number, number]>();
+  const aboard = new Set<number>();
+  runUntil(w, 6000, () => {
+    states.add(pl.ships[0].state);
+    for (const u of units) {
+      if (u.inside === ship.id) aboard.add(u.id);
+      else if (aboard.has(u.id) && u.inside < 0 && !landed.has(u.id)) landed.set(u.id, cell(u));
+    }
+    return pl.ships[0].state === 1 && states.has(5);
+  });
   assert.deepEqual([...states].sort(), [1, 2, 3, 4, 5]);
   for (const u of units) {
-    assert.equal(u.inside, -1);
-    assert.equal(w.islandAt(...cell(u)), w.islandAt(...dest), 'ferried over');
+    assert.ok(landed.has(u.id), 'boarded and left the ship');
+    assert.equal(w.islandAt(...landed.get(u.id)!), w.islandAt(...dest), 'ferried over');
   }
 });
 

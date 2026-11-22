@@ -449,13 +449,22 @@ advisor says mentor#18 "You are running out of money!". The line is queued with 
 ### 4.2 Income (tax) (C, `0045a130`)
 
 ```
-taxpayers = population - homeless - criminals
+taxpayers = population - homeless - criminals          (not clamped)
 income    = 7 x taxpayers
-if the town has a completed (active) bank: income = trunc(income x 1.5)
+if the FIRST bank of the town is active: income = trunc(income x 1.5)   (double 1.5, toward 0)
 ```
 
 Founder, specialists and soldiers all pay (handbook p. 27: 4 residents incl. founder -> 28).
 The bank needs its operator (a scholar) to be active.
+
+- **First bank only (C, `45a16c`..`45a188`).** Only the first entry of the town's bank list
+  (town +0x304, in the order the buildings joined the town; construction sites are in the list
+  like in the town-hall list, I) is tested for state 2 (active). A second, active bank behind an inactive first one gives nothing.
+  (The bank is a unique building, so this only matters for maps that place more than one.)
+- **No clamp (C, `45a136`..`45a166`).** The homeless count (+0x4E8) and the criminal count
+  (+0x14C) are subtracted as they are; a criminal who is also homeless is subtracted twice, so
+  taxpayers and the income can be **negative**. A negative income lowers the town net (4.6) and
+  pays no motivation or research (both need income > 0); the stored spendings then stay 0.
 
 ### 4.3 Motivation spending (C)
 
@@ -470,8 +479,10 @@ the research test that follows (4.4).
 
 - `R = research% x income / 100` (town +0x40, computed at the last settlement). A research
   project must be selected (town +0x58 != -1).
-- Every 30 ticks, if R < player money and the town has an active laboratory: the step is
-  `s = R x 0.025` (float), x 1.5 if the town also has an active library. The invention's
+- Every 30 ticks, if R < player money and the town's **first** laboratory is active: the step
+  is `s = R x 0.025` (float), x 1.5 if the town's **first** library is also active. As for the
+  bank (4.2), only the first entry of the town's laboratory list (+0x2E0) and library list
+  (+0x2EC) is tested for state 2 (C, `0045a650`; sites in the lists as for the bank, I). The invention's
   progress (float) grows by s, capped at its cost; the town's research accumulator (+0x74) grows by
   the full s. The invention is finished when progress equals its cost.
 - At settlement the money charged for research is `4 x accumulator` (float), then the
@@ -495,16 +506,25 @@ settlement, and the accumulator only grows in a research step that actually happ
 | project selected, no active laboratory | skipped | nothing |
 | project running normally | progress and accumulator + s | 4 x (sum of s) ~ R per round (1.5 R with a library) |
 
-- **Starting** (`0045a570`): sets +0x58, marks the invention "in progress" and creates the
-  research job (first run after 30 ticks). Selecting the invention that is already running
-  instead stops its job (toggle). The command handler (`00450910`) then refreshes the panel and,
+- **Starting** (`0045a570`, C at instruction level): when the town's research job (+0x14)
+  exists and researches the chosen invention, that job is cancelled and nothing else happens:
+  +0x58 **stays set**, so the panel still shows the project, but no step runs (toggle quirk);
+  choosing it once more starts it again. Any other choice (or the same one while no job runs)
+  sets +0x58, marks the invention "in progress", cancels a running job and creates a **new**
+  research job, first run after 30 ticks, so switching projects always restarts the 30-tick
+  rhythm. The simulation does not test whether the invention is already finished (the panel
+  offers only open ones). The command handler (`00450910`) then refreshes the panel and,
   if the research slider is 0 or the stored R is below 1, tells the human player (status 0x10:
   research has no money).
 - **Stopping** (`0045a730`, the stop button): clears the "in progress" mark, ends the research
   job and sets +0x58 = -1. The progress made so far stays with the invention.
 - **Finishing** (`0046f490`): when a step makes progress equal the cost, a human town gets
   mentor#15, the panel is refreshed, and +0x58 becomes -1 and the job ends. Computer towns pick
-  the next invention themselves.
+  the next invention themselves. Only the **finishing town's** +0x58 is cleared (C): another town
+  of the same nation researching the same invention keeps its job; its next step (if it is
+  affordable and its first laboratory active) adds s to the accumulator, finds progress already
+  equal to the cost, and finishes again: one more step charged, mentor#15 said again, then its
+  +0x58 becomes -1.
 - **After stopping or finishing**, the steps already done in the current round are still in the
   accumulator and are charged at the next settlement (the accumulator is not cleared on stop).
   From the round after that, research costs nothing until a new project starts. The stored
@@ -530,7 +550,8 @@ order does not matter.
 3. **Disabled objects** (race block +0x68 / +0x74): the invention the disabled object needs
    (odb +0xE4, if any) is marked researched, the object itself stays unavailable.
 4. **Free-play development** (mode 4 = free play and multiplayer, base and add-on): when each
-   player object is set up (human and computer alike, `00463830`), "Entwicklungsstufe" Mittel
+   player object is set up (human and computer alike, AN `0045d780` calling the research-level
+   routine `004105b0`; Gold `00463830`), "Entwicklungsstufe" Mittel
    applies research level **12**, Hoch level **20**, by the same routine as source 1; Niedrig
    applies nothing.
 5. **Add-on inventions (Gold only, `00413730`):** whenever the research-level routine runs (n > 0;
@@ -573,13 +594,18 @@ limited by the available money (money just clamps at 0).
 
 ```
 paidMotivation = M if paid else 0
-net = trunc( (income - paidMotivation) - 4 x researchAccumulator - overheads )   (float)
+net = trunc( (income - paidMotivation) - 4 x researchAccumulator - overheads )
 ```
+
+Precision (C, `45a20e`..`45a235`): income − paidMotivation is an integer; the accumulator is a
+float32, multiplied by the float32 constant 4.0; the subtraction of that product and of the
+overheads (integer) happen on the x87 stack and are **truncated once** (toward 0). No
+intermediate is rounded to float32 (the product 4 x acc is exact in float32 anyway).
 
 After computing the net, the function overwrites the stored motivation and research spending
 with the full slider values (`motivation% x income / 100`, `research% x income / 100`), whether
 they were affordable or not, and **whether or not a project is selected** (only when the income
-is positive; with income 0 both stay 0). These stored values are what the happiness bonus (5.6)
+is positive; with income 0 or negative, 4.2, both stay 0). These stored values are what the happiness bonus (5.6)
 and the research affordability test (4.4) use. The finance panel computes the same values afresh
 and then decides per row whether they are actually being spent (side-panel 5.4).
 
@@ -687,7 +713,8 @@ The town keeps a set of open needs (town +0x4C4, size +0x4D0). Re-evaluation:
 - For each need entry, in list order (sorted by threshold): if population < threshold, remove its
   type from the set; otherwise add it (no change if already there) and queue its advisor line
   (odb +0x130, e.g. mentor#29 "Your people want a tavern!") with a delay of
-  `rand() mod (2 x D) + 2 x D` (D = the advisor time unit `DAT_004a5d7c`). **One rand() is drawn
+  `rand() mod (2 x D) + 2 x D` (D = the advisor time unit `DAT_004a5d7c` = **60000** ms, a
+  constant in the exe's data section that nothing writes, C). **One rand() is drawn
   for every need that is open after the test, every time the evaluation runs.**
 - For each luxury (5.2 thresholds, race order 0, 1, 2, only races in play): if population <
   threshold **or** the town has any of that luxury in stock, remove it from the set; otherwise
@@ -711,6 +738,8 @@ update.
 
 ### 5.5 Happiness formula (C, `0045a7c0` every 50 ticks)
 
+The bonus flag (town +0x78) is cleared at the start of **every** update, for every town (C,
+`0045a7c0` first instruction after the prologue), then set again only by the bonus branch below.
 Computed only for **human** towns that have population > 0 and whose first town hall (first
 entry of the town's town-hall list) is **active** (building state +0xB0 = 2). Computer towns,
 and towns without population or active town hall, get crime% 0 and food%, needs% and happiness
@@ -978,7 +1007,12 @@ once the houses wait for births.
    message only updates the animation copy on clients (`00458a30`).
 3. *(Resolved, 7 "The conversion ring".)* The raw-material page's slider sets it (d = 100 / p);
    the button converts p % of the stock now.
-4. How motivation% and research% sliders are limited (handbook: their sum may not exceed income).
+4. *(Resolved, C.)* The sliders are two separate commands, 0x48 motivation (`00452650`) and 0x52
+   research (`00452670`); each stores its byte for the current town without any test. The panel
+   (`00419710` / `004198e0`) keeps the sum at most 100: before sending a slider value v it first
+   sends the other slider lowered to 100 − v when the sum would exceed 100. *Our build* has one
+   command carrying both values, refused when their sum exceeds 100; the client lowers the other
+   slider the same way. Equivalent, except for two slider moves inside one lockstep delay.
 5. *(Resolved, `combat.md` 12.2 to 12.4.)* Police catching: the arrest job, the 80% rule, the escort
    job and the release as a porter.
 6. *(Resolved, `units-and-jobs.md` 8.6.)* The news round (job 0x1A) visits every house of the
@@ -1348,15 +1382,15 @@ fix. Choices made where the spec leaves room (I):
   construction sites and collapsing buildings included, the leaving building included;
 - the needs evaluation draws its rand() for computer towns too (the advisor, absent for computer
   players, only says the line);
-- the advisor time unit D (`DAT_004a5d7c`) is taken as 60000 ms, so a need line's interval is
-  rand() mod 120000 + 120000 ms = 120..152.8 s (the only interval documented with a number,
-  mentor#81 "2 x 60000 ms" in `units-and-jobs.md` 7.7.1, suggests it). The interval is tested in
+- the advisor time unit D (`DAT_004a5d7c`) is 60000 ms (C, read from the exe, 5.4), so a need
+  line's interval is rand() mod 120000 + 120000 ms = 120..152.8 s. The interval is tested in
   ticks of `TICK_MS` and kept per nation and line (display only, saved, not hashed); a line said
   within its interval is dropped. The lines are queued (queue flag set);
 - the map loader evaluates every town's needs once more after all objects exist (5.4 "at map
   load"), in town order;
 - the operator-inside quirk of `00461690` (a resident leaving a building whose current job is the
-  kind 0x22 job sends all occupants out first, 3.2) is not reproduced.
+  kind 0x22 job sends all occupants out first, 3.2) is reproduced (`logistics.ts`
+  `residentLeft`).
 
 What differed:
 

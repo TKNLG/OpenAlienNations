@@ -7,6 +7,7 @@
 
 import { deriveHd, type UiImages, type BitmapFont, type FontName } from './ui-assets.ts';
 import type { World, Entity, Command } from '../engine/world.ts';
+import type { Town } from '../engine/economy.ts';
 import type { GameData } from './data.ts';
 import type { ObjectDesc } from '../formats/od.ts';
 import { format } from '../formats/tdb.ts';
@@ -43,6 +44,8 @@ export interface HudHost {
   /** centre the camera on a cell */
   centerOn(x: number, y: number): void;
   openMenu(): void;
+  /** `RENAME` on the town-hall page: open the rename dialog for the current town */
+  renameTown?(): void;
   /** minimap layer toggles: buildings, units, resources, town areas */
   layers: boolean[];
 }
@@ -412,7 +415,7 @@ export class Hud {
     for (let i = 0; i < rows && this.townScroll + i < towns.length; i++) {
       const t = towns[this.townScroll + i];
       const y = 200 + i * 15, id = `town:${t.id}`;
-      const name = this.str(142 + t.race * 10 + (t.nameIndex % 10));
+      const name = this.townName(t);
       const color = t.id === host.currentTown ? '#ffff00' : this.hover === id ? '#ff0000' : '#ffffff';
       f.draw(this.ctx, name, 20, y + 1, color);
       this.addButton({ x: 20, y, w: 121, h: 15, id, tip: name,
@@ -528,6 +531,10 @@ export class Hud {
   /** where an entity's info belongs: used by the overlay for status lines */
   describeTown(id: number): string {
     const t = this.host?.world?.economy.town(id);
-    return t ? this.str(142 + t.race * 10 + (t.nameIndex % 10)) : '';
+    return t ? this.townName(t) : '';
   }
+
+  /** a town's name: the one given with the rename command, else its default name (DV.tdb 142 +
+   *  10 x race + index, units-and-jobs.md 11.2) */
+  townName(t: Town): string { return t.name ?? this.str(142 + t.race * 10 + (t.nameIndex % 10)); }
 }

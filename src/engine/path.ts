@@ -1,4 +1,5 @@
-// Deterministic 8-neighbour A* on a wrapping (toroidal) grid. Spec: docs/architecture/simulation.md
+// The original's path planner (two searches at once) on the wrapping grid, plus facing helpers.
+// Spec: docs/game/units-and-jobs.md 4.1.1 (planner), 4.6 (facing); docs/architecture/simulation.md
 
 /**
  * Grid step (dx, dy) for each facing 0..7 (units-and-jobs.md 2 / 4.6, unit-motion.md 1.1): on screen
@@ -7,11 +8,6 @@
  */
 export const DIR_STEP: readonly [number, number][] = [
   [-1, -1], [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1],
-];
-
-/** neighbour order of the A* expansion (independent of the facing numbering; keeps paths unchanged) */
-const NEIGHBOURS: readonly [number, number][] = [
-  [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0],
 ];
 
 /**
@@ -53,167 +49,267 @@ export function turnStep(cur: number, want: number): number {
   return (cur + s + 8) & 7;
 }
 
-/**
- * Find a path from (sx, sy) to (tx, ty). `blocked[i]` != 0 means impassable.
- * Returns the cells to visit after the start (start excluded), or null if unreachable within
- * `maxNodes` expansions. If the target itself is blocked, paths to the nearest reachable cell.
- */
-export function findPath(blocked: Uint8Array, bits: number, sx: number, sy: number, tx: number, ty: number,
-                         maxNodes = 40000): [number, number][] | null {
-  const n = 1 << bits, mask = n - 1;
-  const idx = (x: number, y: number) => ((y & mask) << bits) | (x & mask);
-  const start = idx(sx, sy), goal = idx(tx, ty);
-  if (start === goal) return [];
+/** neighbour order of an expansion (4.1.1): (+1, -1), (-1, -1), (+1, +1), (-1, +1), (0, -1), (0, +1), (+1, 0), (-1, 0) */
+const EXPAND_DX: readonly number[] = [1, -1, 1, -1, 0, 0, 1, -1];
+const EXPAND_DY: readonly number[] = [-1, -1, 1, 1, -1, 1, 0, 0];
 
-  // shortest wrapped delta for the heuristic
-  const wd = (a: number, b: number) => { let d = Math.abs(a - b); if (d > n / 2) d = n - d; return d; };
-  const h = (i: number) => {
-    const dx = wd(i & mask, tx & mask), dy = wd(i >> bits, ty & mask);
-    return 10 * Math.max(dx, dy) + 4 * Math.min(dx, dy);
-  };
+/** iterations per run, and the cap tested after each run (4.1.1) */
+export const PLAN_RUN = 100;
+export const PLAN_CAP = 2000;
+/** a plan never makes more than 21 runs: at most 2 roots + 2100 iterations x 2 expansions x 8 nodes */
+const NODE_CAP = 2 + (PLAN_CAP + PLAN_RUN) * 16;
+const BUCKETS = 8192;
+/** mode 0 adds the unit flag within this distance D of the start (4.1 "Two planning modes") */
+const NEAR_UNITS = 32;
 
-  const g = new Map<number, number>();
-  const parent = new Map<number, number>();
-  const closed = new Set<number>();
-  const heap = new MinHeap();
-  g.set(start, 0);
-  heap.push(h(start), start);
-  let best = start, bestH = h(start), expanded = 0;
-
-  while (heap.size > 0 && expanded < maxNodes) {
-    const cur = heap.pop();
-    if (closed.has(cur)) continue;
-    closed.add(cur);
-    expanded++;
-    if (cur === goal) { best = cur; break; }
-    const ch = h(cur);
-    if (ch < bestH) { bestH = ch; best = cur; }
-    const cx = cur & mask, cy = cur >> bits, cg = g.get(cur)!;
-    for (let d = 0; d < 8; d++) {
-      const [dx, dy] = NEIGHBOURS[d];
-      const ni = idx(cx + dx, cy + dy);
-      // only the destination cell is tested: a diagonal step may pass between two blocked
-      // orthogonal cells (units-and-jobs.md 4.1 "Diagonal steps cut corners")
-      if (blocked[ni]) continue;
-      const ng = cg + (dx !== 0 && dy !== 0 ? 14 : 10);
-      const old = g.get(ni);
-      if (old !== undefined && old <= ng) continue;
-      g.set(ni, ng);
-      parent.set(ni, cur);
-      heap.push(ng + h(ni), ni);
-    }
-  }
-  if (best === start) return null;
-  const out: [number, number][] = [];
-  for (let c = best; c !== start; c = parent.get(c)!) out.push([c & mask, c >> bits]);
-  return out.reverse();
+/** what one plan needs (units-and-jobs.md 4.1.1 "The request") */
+export interface PlanRequest {
+  sx: number; sy: number; gx: number; gy: number;
+  /** step time per slope class 0..3 (record +0xC4) */
+  steps: readonly number[];
+  /** path shift: 0, animals 2 (a path cell costs step << shift, any other cell 2 x step) */
+  shift: number;
+  /** 1 ignore units, 0 avoid the units with D < 32 from the start */
+  mode: number;
+  /** every cell holding a unit is impassable (planning mask 0x3E, the flee's outward walk) */
+  allUnits: boolean;
+  /** cells whose flags meet the planning mask without the unit bit (!= 0 = impassable) */
+  blocked: Uint8Array;
+  /** path flag per cell (1 = paved) */
+  pathFlag: Uint8Array;
+  height: ArrayLike<number>;
+  /** does a unit (other than the walker) stand on this cell; only asked when the unit bit is in the mask */
+  unitAt: (i: number) => boolean;
 }
 
 /**
- * The same search as `findPath` (same expansion order, ties and result) with typed-array
- * bookkeeping that is reused between searches on one grid size: much cheaper for many searches.
+ * The original planner (`AStarIdle`, units-and-jobs.md 4.1.1), reproduced exactly: a forward
+ * search from the start and a backward search from the goal, each until its best node stands on
+ * its own far end; priority = moves + 4 x (step cost + D to the far end); the meeting boost; the
+ * 8192-bucket duplicate check with its quirk; open lists in ascending priority, newest first among
+ * equals (kept as two binary heaps keyed by priority and insertion sequence, with stale entries
+ * skipped: the same order as the original's sorted lists); 100 iterations per run, failure once
+ * the total passes 2000 after a run (a path found in that run is dropped); never a partial path.
+ * Buffers are reused between plans on one map size.
  */
-export class PathSearcher {
+export class Planner {
   private bits: number;
-  private g: Int32Array;
-  private parent: Int32Array;
-  /** per cell: stamp of the search that set g / closed it */
-  private seen: Uint32Array;
-  private shut: Uint32Array;
+  private size: number;
+  // nodes
+  private cell = new Int32Array(NODE_CAP);
+  private moves = new Int32Array(NODE_CAP);
+  private pri = new Int32Array(NODE_CAP);
+  private parent = new Int32Array(NODE_CAP);
+  private seq = new Int32Array(NODE_CAP);
+  private hnext = new Int32Array(NODE_CAP);
+  private dir = new Uint8Array(NODE_CAP);
+  private closed = new Uint8Array(NODE_CAP);
+  private count = 0;
+  private seqNo = 0;
+  // hash buckets (stamped, so a new plan starts empty without clearing)
+  private bhead = new Int32Array(BUCKETS);
+  private bstamp = new Uint32Array(BUCKETS);
   private stamp = 0;
-  private heap = new MinHeap();
+  // open lists: heaps of (node, sequence, priority) per direction (0 backward, 1 forward)
+  private heap: [OpenHeap, OpenHeap] = [new OpenHeap(), new OpenHeap()];
+  // the current request
+  private req!: PlanRequest;
+  private start = 0;
+  private goal = 0;
+  /** iterations of the last plan (tests, statistics) */
+  iterations = 0;
 
   constructor(bits: number) {
     this.bits = bits;
-    const n = 1 << (2 * bits);
-    this.g = new Int32Array(n); this.parent = new Int32Array(n);
-    this.seen = new Uint32Array(n); this.shut = new Uint32Array(n);
+    this.size = 1 << bits;
   }
 
-  find(blocked: Uint8Array, sx: number, sy: number, tx: number, ty: number, maxNodes = 40000): [number, number][] | null {
-    const bits = this.bits, n = 1 << bits, mask = n - 1;
-    const idx = (x: number, y: number) => ((y & mask) << bits) | (x & mask);
-    const start = idx(sx, sy), goal = idx(tx, ty);
+  /** the cells after the start up to and including the goal, or null (failure). Start = goal gives []. */
+  plan(r: PlanRequest): [number, number][] | null {
+    const m = this.size - 1, bits = this.bits;
+    this.req = r;
+    const start = this.start = ((r.sy & m) << bits) | (r.sx & m);
+    const goal = this.goal = ((r.gy & m) << bits) | (r.gx & m);
+    this.iterations = 0;
     if (start === goal) return [];
-    if (++this.stamp === 0xffffffff) { this.stamp = 1; this.seen.fill(0); this.shut.fill(0); }
-    const st = this.stamp, g = this.g, parent = this.parent, seen = this.seen, shut = this.shut;
-    const gx = tx & mask, gy = ty & mask, half = n / 2;
-    const h = (i: number) => {
-      let dx = Math.abs((i & mask) - gx); if (dx > half) dx = n - dx;
-      let dy = Math.abs((i >> bits) - gy); if (dy > half) dy = n - dy;
-      return dx > dy ? 10 * dx + 4 * dy : 10 * dy + 4 * dx;
-    };
-    const heap = this.heap;
-    heap.clear();
-    g[start] = 0; seen[start] = st;
-    heap.push(h(start), start);
-    let best = start, bestH = h(start), expanded = 0;
-    while (heap.size > 0 && expanded < maxNodes) {
-      const cur = heap.pop();
-      if (shut[cur] === st) continue;
-      shut[cur] = st;
-      expanded++;
-      if (cur === goal) { best = cur; break; }
-      const ch = h(cur);
-      if (ch < bestH) { bestH = ch; best = cur; }
-      const cx = cur & mask, cy = cur >> bits, cg = g[cur];
-      for (let d = 0; d < 8; d++) {
-        const [dx, dy] = NEIGHBOURS[d];
-        const ni = idx(cx + dx, cy + dy);
-        if (blocked[ni]) continue;   // the destination only: diagonals cut corners (4.1)
-        const ng = cg + (dx !== 0 && dy !== 0 ? 14 : 10);
-        if (seen[ni] === st && g[ni] <= ng) continue;
-        g[ni] = ng; seen[ni] = st;
-        parent[ni] = cur;
-        heap.push(ng + h(ni), ni);
+    if (++this.stamp === 0xffffffff) { this.stamp = 1; this.bstamp.fill(0); }
+    this.count = 0; this.seqNo = 0;
+    const hf = this.heap[1], hb = this.heap[0];
+    hf.clear(); hb.clear();
+    // the roots: forward on the start, backward on the goal, moves 0, priority 999999 (each is
+    // alone in its list); forward goes into the hash first
+    const f = this.node(start, 0, 999999, -1, 1);
+    const b = this.node(goal, 0, 999999, -1, 0);
+    this.hashFront(f); this.hashFront(b);
+    hf.push(f, this.seq[f] = ++this.seqNo, 999999);
+    hb.push(b, this.seq[b] = ++this.seqNo, 999999);
+    let total = 0;
+    for (;;) {
+      // one run
+      let found = -1, fh = this.head(1), bh = this.head(0);
+      for (let k = 0; k < PLAN_RUN && fh >= 0 && bh >= 0 && found < 0; k++) {
+        total++;
+        if (this.cell[fh] === goal) found = fh;
+        else if (this.cell[bh] === start) found = bh;
+        else { this.expand(fh); this.expand(bh); }
+        fh = this.head(1); bh = this.head(0);
       }
+      this.iterations = total;
+      if (total > PLAN_CAP || fh < 0 || bh < 0) return null;
+      if (found >= 0) return this.path(found);
     }
-    if (best === start) return null;
-    const out: [number, number][] = [];
-    for (let c = best; c !== start; c = parent[c]) out.push([c & mask, c >> bits]);
-    return out.reverse();
+  }
+
+  // ------------------------------------------------------------------ internals
+
+  private node(c: number, moves: number, pri: number, parent: number, dir: number): number {
+    const n = this.count++;
+    this.cell[n] = c; this.moves[n] = moves; this.pri[n] = pri; this.parent[n] = parent;
+    this.dir[n] = dir; this.closed[n] = 0; this.hnext[n] = -1;
+    return n;
+  }
+
+  private bucket(c: number): number {
+    const m = this.size - 1;
+    return (((c >> this.bits) * 256) + (c & m)) & (BUCKETS - 1);
+  }
+
+  private hashFront(n: number): void {
+    const b = this.bucket(this.cell[n]);
+    this.hnext[n] = this.bstamp[b] === this.stamp ? this.bhead[b] : -1;
+    this.bhead[b] = n; this.bstamp[b] = this.stamp;
+  }
+
+  /** the head of an open list (lowest priority, newest among equals), -1 when empty */
+  private head(d: number): number {
+    const h = this.heap[d];
+    while (h.size > 0) {
+      const n = h.topNode();
+      if (!this.closed[n] && this.seq[n] === h.topSeq()) return n;
+      h.pop();
+    }
+    return -1;
+  }
+
+  /** D = 2 max(|dx|, |dy|) + min(|dx|, |dy|), wrapped */
+  private dist(a: number, b: number): number {
+    const n = this.size, m = n - 1, half = n >> 1;
+    let dx = Math.abs((a & m) - (b & m)); if (dx > half) dx = n - dx;
+    let dy = Math.abs((a >> this.bits) - (b >> this.bits)); if (dy > half) dy = n - dy;
+    return dx > dy ? 2 * dx + dy : 2 * dy + dx;
+  }
+
+  /** step cost from cell a to its neighbour c; 0 = impassable (4.1.1 "Step cost") */
+  private cost(a: number, c: number): number {
+    const r = this.req;
+    const end = c === this.start || c === this.goal;
+    if (!end) {
+      if (r.blocked[c]) return 0;
+      if ((r.allUnits || (r.mode === 0 && this.dist(this.start, c) < NEAR_UNITS)) && r.unitAt(c)) return 0;
+    }
+    let cls = Math.abs((r.height[a] - r.height[c]) >> 4);
+    if (cls > 3) cls = 3;
+    const t = r.steps[cls] | 0;
+    if (!t) return 0;
+    return !end && r.pathFlag[c] === 1 ? t << r.shift : t << 1;
+  }
+
+  private expand(p: number): void {
+    const bits = this.bits, m = this.size - 1;
+    const pc = this.cell[p], px = pc & m, py = pc >> bits, d = this.dir[p];
+    const far = d === 1 ? this.goal : this.start;
+    for (let k = 0; k < 8; k++) {
+      const dx = EXPAND_DX[k], dy = EXPAND_DY[k];
+      const c = (((py + dy) & m) << bits) | ((px + dx) & m);
+      const cost = this.cost(pc, c);
+      if (!cost) continue;
+      const moves = this.moves[p] + (dx !== 0 && dy !== 0 ? 3 : 2);
+      const rating = cost + this.dist(c, far);
+      this.insert(c, moves, moves + 4 * rating, p, d);
+    }
+    this.closed[p] = 1;
+  }
+
+  /** insertion with the duplicate check (4.1.1 "Insertion"); the new node is only kept when it goes in */
+  private insert(c: number, moves: number, pri: number, parent: number, d: number): void {
+    const b = this.bucket(c);
+    let match = -1;
+    for (let k = this.bstamp[b] === this.stamp ? this.bhead[b] : -1; k >= 0; k = this.hnext[k]) {
+      if (this.cell[k] === c) match = k;
+      if (this.dir[k] === d) break;
+    }
+    if (match >= 0 && this.dir[match] === d) {
+      if (moves < this.moves[match]) {
+        this.moves[match] = moves;
+        this.parent[match] = parent;
+        if (pri < this.pri[match]) this.pri[match] = pri;
+      }
+      if (this.closed[match]) return;
+      // an open match is taken off its list and inserted again, changed or not
+      this.heap[d].push(match, this.seq[match] = ++this.seqNo, this.pri[match]);
+      return;
+    }
+    if (match >= 0) pri >>= 2;   // the other search was here: the meeting boost
+    const n = this.node(c, moves, pri, parent, d);
+    this.hashFront(n);
+    this.heap[d].push(n, this.seq[n] = ++this.seqNo, pri);
+  }
+
+  private path(n: number): [number, number][] {
+    const m = this.size - 1, bits = this.bits, out: [number, number][] = [];
+    if (this.dir[n] === 1) {
+      for (let k = n; this.parent[k] >= 0; k = this.parent[k]) out.push([this.cell[k] & m, this.cell[k] >> bits]);
+      out.reverse();
+    } else {
+      for (let k = this.parent[n]; k >= 0; k = this.parent[k]) out.push([this.cell[k] & m, this.cell[k] >> bits]);
+    }
+    return out;
   }
 }
 
-/** binary min-heap of (priority, value); ties pop in insertion order */
-class MinHeap {
-  private pri: number[] = [];
-  private seq: number[] = [];
-  private val: number[] = [];
-  private counter = 0;
-  get size(): number { return this.val.length; }
-  clear(): void { this.pri.length = 0; this.seq.length = 0; this.val.length = 0; this.counter = 0; }
-  push(p: number, v: number): void {
-    this.pri.push(p); this.seq.push(this.counter++); this.val.push(v);
-    let i = this.val.length - 1;
+/**
+ * Binary min-heap of open-list entries: lower priority first, and among equal priorities the
+ * higher (newer) insertion sequence first: the order of the original's sorted list, where a node
+ * goes in front of the first node of greater or equal priority. Entries keep the priority they
+ * were pushed with; outdated ones are skipped by the caller.
+ */
+class OpenHeap {
+  private node: number[] = [];
+  private sq: number[] = [];
+  private pr: number[] = [];
+  get size(): number { return this.node.length; }
+  clear(): void { this.node.length = 0; this.sq.length = 0; this.pr.length = 0; }
+  topNode(): number { return this.node[0]; }
+  topSeq(): number { return this.sq[0]; }
+  push(n: number, s: number, p: number): void {
+    const node = this.node, sq = this.sq, pr = this.pr;
+    let i = node.length;
+    node.push(n); sq.push(s); pr.push(p);
     while (i > 0) {
-      const parent = (i - 1) >> 1;
-      if (!this.less(i, parent)) break;
-      this.swap(i, parent); i = parent;
+      const up = (i - 1) >> 1;
+      if (!(p < pr[up] || (p === pr[up] && s > sq[up]))) break;
+      node[i] = node[up]; sq[i] = sq[up]; pr[i] = pr[up];
+      i = up;
     }
+    node[i] = n; sq[i] = s; pr[i] = p;
   }
-  pop(): number {
-    const top = this.val[0];
-    const last = this.val.length - 1;
-    this.swap(0, last);
-    this.pri.pop(); this.seq.pop(); this.val.pop();
+  pop(): void {
+    const node = this.node, sq = this.sq, pr = this.pr;
+    const last = node.length - 1;
+    const n = node[last], s = sq[last], p = pr[last];
+    node.pop(); sq.pop(); pr.pop();
+    if (last === 0) return;
     let i = 0;
     for (;;) {
-      const l = 2 * i + 1, r = l + 1;
-      let m = i;
-      if (l < this.val.length && this.less(l, m)) m = l;
-      if (r < this.val.length && this.less(r, m)) m = r;
-      if (m === i) break;
-      this.swap(i, m); i = m;
+      const l = 2 * i + 1;
+      if (l >= last) break;
+      let c = l;
+      const r = l + 1;
+      if (r < last && (pr[r] < pr[l] || (pr[r] === pr[l] && sq[r] > sq[l]))) c = r;
+      if (!(pr[c] < p || (pr[c] === p && sq[c] > s))) break;
+      node[i] = node[c]; sq[i] = sq[c]; pr[i] = pr[c];
+      i = c;
     }
-    return top;
-  }
-  private less(a: number, b: number): boolean {
-    return this.pri[a] < this.pri[b] || (this.pri[a] === this.pri[b] && this.seq[a] < this.seq[b]);
-  }
-  private swap(a: number, b: number): void {
-    [this.pri[a], this.pri[b]] = [this.pri[b], this.pri[a]];
-    [this.seq[a], this.seq[b]] = [this.seq[b], this.seq[a]];
-    [this.val[a], this.val[b]] = [this.val[b], this.val[a]];
+    node[i] = n; sq[i] = s; pr[i] = p;
   }
 }

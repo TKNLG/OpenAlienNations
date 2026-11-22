@@ -30,11 +30,15 @@ they are listed once below.
   exact; births, food, needs and happiness, finances, research, nature respawn: exact.
 - Add-on island labelling and island generator: match (SajikisAO 2 and 4 quirks are original).
 
-## Policy decisions (vanilla copies the original, the fix becomes an enhanced option)
+## Policy decisions
 
-- AI porter-shortage bug (AI A5): the original's copy loop only works for the Amazons, so Pimmon
-  and Sajiki computer towns stall after their first house. We apply the Amazon behaviour to all.
+- AI porter-shortage bug (AI A5): the original's copy loop only works for the Amazons; a Pimmon or
+  Sajiki computer town short of porters (porters < population / 10, 5+ buildings) builds nothing
+  but a first house until births lift its porters again, while Amazons build houses. **Maintainer
+  decision (2026-11-22): keep our fix** (all races react like the Amazons), a deliberate deviation
+  from the original in vanilla (`integration-ai.md` §7 item 2).
 - Fishing-boat harvest bug (addon A2): vanilla gives the fixed fishing job; the original loops.
+  Open: to be decided by the maintainer.
 
 ## Batches
 
@@ -43,7 +47,9 @@ they are listed once below.
   costs, a 100-iteration step per run, a 2000-iteration cap and up to 15 re-plans, and never a
   partial path. Ours is a one-way shortest path without terrain costs, so units ignore worn paths.
   Fully reproducible; spec in the report.
-- movement M3 (HIGH): group move orders send the whole group to one shared cell as a normal walk.
+- movement M3: the audit was wrong here. Re-derived (batch 1): the player's move order gives each
+  unit its own spiral cell around the click (the shared-cell routine is only used by computer
+  armies); fixed were the 1-tick start, the unit already on the clicked cell, repeated orders.
 - movement M2: slope class is asymmetric (any rise of 1..16 is class 1, a drop needs 16).
 - movement M5, addon A7, AI walk items: legs of 24/32 cells and node budgets go once the original
   planner is in; ships cut diagonal corners like units (sea bodies must be 8-connected for that).
@@ -94,8 +100,8 @@ they are listed once below.
 **6. Computer players.**
 - AI A1 (army cut keeps the last candidates), A2 (up to w more scouts every think), A3 (founding
   site search rings 1..9 + a ring-10 corner, as `naval.siteSearch`), A4 (intruder records per step
-  and strike, 3 defenders per record), A5 (policy above), A6 (army keeps fighting within 40 cells of
-  a fallen target town).
+  and strike, 3 defenders per record), A6 (army keeps fighting within 40 cells of
+  a fallen target town). A5 is not changed (policy above).
 
 **7. Logistics details.**
 - movement M4 (trade-route and errand trips ignore walk failure, enter from where they stand),

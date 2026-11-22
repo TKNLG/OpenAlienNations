@@ -158,27 +158,62 @@ the think interval by 1.5 for Amazons and 2 for Pimmons. Field values seen: 0 (r
 +16 p3
 ```
 
-### Evaluation (C)
+### Evaluation (C, goal job `0046ee40`, Gold `00478530`: identical)
 
-Single-player only. Every 50 game ticks, for the human player:
+Each human nation has a goal job (computer nations have none). It first runs 50 ticks after the
+nation is created and then every 50 ticks.
 
-1. If the player is dead (has nothing left), the mission is lost.
-2. Each non-empty slot is tested. If a **loss** condition is true, the mission is lost at once.
-   The mission is won when **every win condition** is true at the same check. (A record with no
-   win conditions would be won at the first check; none of the shipped ones does that.)
+**"Dead".** A nation is dead only when its alive byte (nation +0x0C) has been cleared, which
+happens in exactly one place: the defeat routine `0045d2a0`, called by town destruction
+(`combat.md` 10.4) when the destroyed town was the nation's **last living town**. Owning no units
+and no buildings does not make a nation dead. Consequences (C):
 
-In multiplayer (no mission goals are checked) the last surviving player wins.
+- a nation that never had a town (a free-play or network founder killed before he founded) is
+  never dead: the game simply goes on;
+- a nation with a living town is never dead, whatever else it has lost;
+- when a nation loses its last town hall it is dead at once, so goal 13 and the loss check see it
+  at the next goal run, while its units and buildings are still dying.
 
-"City n" below is the n-th settlement in the player's settlement list (1-based, founding order).
-If that settlement does not exist the condition is false. "Objects of type t" counts everything of
-that type in the settlement (units and buildings share the type space of the race's group).
-"Finished" means construction state 2 (complete). All types refer to the evaluating player unless
-a race is named.
+**Network game** (session pointer `004b3b1c` set; this includes a network game started from a
+campaign record): mission goals are **never read**. Each run:
+
+1. If no other nation (computer nations included) exists with its alive byte set, the "won"
+   message (0x3C, result 1) goes to this nation. The job goes on, so it is sent again every 50
+   ticks; the client shows only the first result box (`00457460` tests a box flag).
+2. Then, if this nation is dead, the "lost" message (0x3C, result 0) goes out and the job ends.
+3. Otherwise the job runs again after 50 ticks.
+
+So the last nation alive wins, and with a nation that can never die (see above) nobody can win.
+
+**Single player** (no session): if no mission record is loaded the job only repeats. Otherwise:
+
+1. If the nation is dead, "lost" is sent and the job ends.
+2. Each of the 10 slots is tested in order 0..9 (empty slots skipped). A true **loss** condition
+   sends "lost", but the loop goes on; a false **win** condition clears the "all won" flag.
+3. If every win condition was true, "won" is sent. The job ends after a result (if both were
+   sent, the first box shown, "lost", counts). If no slot decided anything, it runs again after
+   50 ticks. (A record with no win conditions would be won at the first check; none of the
+   shipped ones does that.)
+
+*Our build* (`economy.ts runGoals`, `Player.defeated`, `Economy.network`): as above. Every lockstep
+game is a network game (`WorldSetup.network`, `architecture/multiplayer.md`). The result is one
+value per nation, so when "lost" and "won" fall in one run the first one counts, as the client's
+first box does. A record with no win conditions is not won (deviation, kept for records built
+without goals).
+
+"City n" below is the n-th entry of the race's town list (1-based, founding order; C, every
+city-based check walks the list from its first entry n − 1 steps). The list still holds destroyed
+towns whose object is not freed yet (`combat.md` 10.4 "Lifetime"); there is no alive test. If the
+list ends before the n-th entry, or **n <= 0**, the condition is **false**, for every city-based
+type (1..10, 12, 14, 15, 20), including the "no object" and "at most" types 12 and 15. "Objects of
+type t" counts the town's per-type list of that type: units and buildings (they share the type
+space of the race's group), construction sites included. "Finished" means construction state 2
+(complete). All types refer to the evaluating player unless a race is named.
 
 | type | condition | parameters |
 |---|---|---|
 | 1 | stock of good p1 in city p3 >= p2 | |
-| 2 | number of finished objects of type p1 in city p3 >= p2 | |
+| 2 | number of finished objects of type p1 in city p3 >= p2 | false when none is finished, even for p2 <= 0 (the count is tested only on a finished object) |
 | 3 | number of finished buildings in city p2 >= p1 | |
 | 4 | number of objects of type p1 in city p3 >= p2 | |
 | 5 | inhabitants of city p2 >= p1 | |
@@ -188,10 +223,10 @@ a race is named.
 | 9 | open wishes of city p2 >= p1 | |
 | 10 | satisfaction of city p2 <= p1 | |
 | 11 | relation between the player and race p1 == p2 | p2 = -1 matches "no entry" |
-| 12 | race p1, its city p3 has **no** object of type p2 | the race's group is used for p2; false if that city does not exist |
-| 13 | race p1 is eliminated (no player, or player dead) | |
+| 12 | race p1, its city p3 has **no** object of type p2 | the race's group is used for p2; false if that city does not exist (also for p3 <= 0) |
+| 13 | race p1 is eliminated (no player, or player dead) | dead = the defeat of `combat.md` 10.4, see "Dead" above |
 | 14 | stock of good p1 in **the Pimmons'** city p3 >= p2 | hard-wired to race 1 |
-| 15 | number of objects of type p1 in city p3 <= p2 | used as a loss condition ("all newspaper girls lost") |
+| 15 | number of objects of type p1 in city p3 <= p2 | used as a loss condition ("all newspaper girls lost"); false if the city does not exist |
 | 16 | player's treasury >= p1 gold | |
 
 **Gold Edition goals 17..20** (`dvge.exe`; evaluated in every mission): 17 = object #p1 within

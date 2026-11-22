@@ -202,30 +202,36 @@ export class Ai {
     return (hall && this.w.rules.get(hall.oid)?.radius) || 25;
   }
 
-  /** start walking to a cell; true if a path exists (or already there) */
-  walk(u: Entity, x: number, y: number, maxNodes = 3000): boolean {
-    const ok = this.w.walk(u, this.mask(x), this.mask(y), maxNodes);
+  /** start walking to a cell with one plan made at once (World.walk); true if a path exists (or already there) */
+  walk(u: Entity, x: number, y: number): boolean {
+    const ok = this.w.walk(u, this.mask(x), this.mask(y));
     if (ok && u.path && u.action !== 0) { u.action = 0; u.actionTick = this.w.tick; }
     return ok;
   }
 
   /**
-   * Walk towards a far cell in legs of at most 32 cells per axis: each leg is a small path
-   * search; the calling job issues the next leg when the unit stands again.
+   * One follow-path walk (job 0x06, `World.follow`, units-and-jobs.md 4.1) to a cell however far,
+   * with the original planner and its re-plans; first run after `delay` ticks (0: planned in this
+   * tick). False only where the walk fails at once (add-on: another island).
    */
-  walkToward(u: Entity, x: number, y: number): boolean {
-    const [ux, uy] = this.cell(u);
-    const dx = Math.max(-32, Math.min(32, this.wrap(this.mask(x) - ux))), dy = Math.max(-32, Math.min(32, this.wrap(this.mask(y) - uy)));
-    return this.walk(u, ux + dx, uy + dy, 2500);
+  walkToward(u: Entity, x: number, y: number, delay = 0): boolean {
+    const ok = this.w.follow(u, this.mask(x), this.mask(y), 0, delay);
+    if (ok && u.path && u.action !== 0) { u.action = 0; u.actionTick = this.w.tick; }
+    return ok;
   }
 
-  /** a unit gives up its reservation, stops its job and walks back to its town hall */
+  /**
+   * A unit gives up its reservation; with `home` it stops its job and walks back to the first free
+   * cell of a spiral around its town's position (integration-ai.md 7 item 7)
+   */
   release(u: Entity, home: boolean): void {
     u.group = Grp.None;
     if (!home) return;
     this.w.logistics.cancelJob(u);
     const t = this.w.economy.town(u.town);
-    if (t && u.inside < 0) this.walkToward(u, t.x, t.y);
+    if (!t || u.inside >= 0) return;
+    const [gx, gy] = this.w.freeSpiral(t.x, t.y, 24, u) ?? [t.x, t.y];
+    this.walkToward(u, gx, gy);
   }
 
   /**
@@ -531,7 +537,8 @@ export class Ai {
         return 50;
       }
     }
-    this.walkToward(f, c[0], c[1]);
+    // a follow-path walk to it, first run after 5 ticks (spec 1.12 step f)
+    this.walkToward(f, c[0], c[1], 5);
     return 50;
   }
 
@@ -555,14 +562,9 @@ export class Ai {
     if (!u || u.job !== job.id) return 0;
     if (u.path) return 10;
     if (this.w.isShip(u)) return this.exploreShip(u);
-    const [x, y] = this.cell(u);
-    if (!d[2] || this.dist(x, y, d[0], d[1]) <= 2 || d[3] > 40) {
-      d[0] = this.rand() % this.w.size; d[1] = this.rand() % this.w.size; d[2] = 1; d[3] = 0;
-    }
-    // legs of at most 24 cells keep each path search small
-    const dx = Math.max(-24, Math.min(24, this.wrap(d[0] - x))), dy = Math.max(-24, Math.min(24, this.wrap(d[1] - y)));
-    d[3]++;
-    if (!this.walk(u, x + dx, y + dy, 2000) || !u.path) d[2] = 0;
+    // standing: the next random map cell, one follow-path walk there (integration-ai.md 7 item 6)
+    d[0] = this.rand() % this.w.size; d[1] = this.rand() % this.w.size; d[2] = 1; d[3] = 0;
+    if (!this.walkToward(u, d[0], d[1]) || !u.path) d[2] = 0;
     return 10;
   }
 
@@ -574,7 +576,7 @@ export class Ai {
   private exploreShip(u: Entity): number {
     const x = this.rand() % this.w.size, y = this.rand() % this.w.size;
     const c = this.w.naval.spiral(x, y, this.w.size >> 1, (px, py) => this.w.shipBlocked[(this.mask(py) << this.w.bits) | this.mask(px)] === 0);
-    if (c) this.walk(u, c[0], c[1], 30000);
+    if (c) this.walk(u, c[0], c[1]);
     return 1 + (this.rand() % 5);
   }
 
@@ -668,8 +670,15 @@ export class Ai {
       joined.push(u);
     }
     ps.armyMembers.sort((a, b) => a - b);
+    // `00465ad0` (units-and-jobs.md 4.7): a member farther than 20 from the target point walks to
+    // the first cell of the 4.8 spiral around it whose flags miss 0x3E (one cell for the whole
+    // join: nobody moves before the walks start), first run after 2 ticks
+    let spot: [number, number] | null = null;
     const walkIn = (u: Entity) => {
-      if (this.distTo(u, t.x, t.y) > 20) { this.w.logistics.cancelJob(u); this.walkToward(u, t.x, t.y); }
+      if (this.distTo(u, t.x, t.y) <= 20) return;
+      spot ??= this.w.freeSpiral(t.x, t.y, this.w.size >> 1) ?? [t.x, t.y];
+      this.w.logistics.cancelJob(u);
+      this.walkToward(u, spot[0], spot[1], 2);
     };
     if (!this.w.addon) { for (const u of joined) walkIn(u); return; }
     const groups = new Map<number, Entity[]>();
@@ -698,7 +707,7 @@ export class Ai {
   private sailToTown(u: Entity, t: Town): void {
     this.w.logistics.cancelJob(u);
     const c = this.w.naval.spiral(t.x, t.y, this.w.size >> 1, (px, py) => this.w.shipBlocked[(this.mask(py) << this.w.bits) | this.mask(px)] === 0);
-    if (c) this.walk(u, c[0], c[1], 30000);
+    if (c) this.walk(u, c[0], c[1]);
   }
 
   /**
@@ -706,20 +715,19 @@ export class Ai {
    * (`004657c0`, spec 2.5 last bullet): group 0, its current job cancelled, one follow-path walk
    * to the first free cell of a spiral around its home town, however far (not a leg: no job would
    * issue the next one). The original's walk starts after rand() mod 10 + 2 ticks: one draw per
-   * living member, in member order (ours walks at once).
+   * living member, in member order.
    */
   private endArmy(ps: AiPlayer): number {
     for (const id of ps.armyMembers) {
       const u = this.w.get(id);
       if (!u || u.group !== Grp.Army) continue;
-      if (u.alive) this.rand();
+      const delay = u.alive ? (this.rand() % 10) + 2 : 0;
       this.release(u, false);
       this.w.logistics.cancelJob(u);
       const t = this.w.economy.town(u.town);
       if (!t || u.inside >= 0) continue;
       const [gx, gy] = this.w.freeSpiral(t.x, t.y, 24, u) ?? [t.x, t.y];
-      this.w.follow(u, gx, gy);
-      if (u.path && u.action !== 0) { u.action = 0; u.actionTick = this.w.tick; }
+      this.walkToward(u, gx, gy, delay);
     }
     ps.armyMembers = [];
     ps.army = 0;

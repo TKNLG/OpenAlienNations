@@ -152,8 +152,25 @@ x - size_x + 1 .. x and y - size_y + 1 .. y (`00462870`). The entrance cell is
 
 ### 2.3 Movement (step_time)
 
-Height class = |height(from) - height(to)| / 16, rounded down and capped at 3 (`0047e8c0`;
-heights are the per-cell u16 in the map).
+Height class = the absolute value of floor((height(from) − height(to)) / 16), capped at 3
+(C at instruction level, November 2026: the difference is shifted arithmetically right by 4
+**before** the absolute value is taken; `0047e8c0`, `00471280`, planner `0x4718df`, step
+`00480410`; Gold `0047b210` the same; heights are the per-cell u16 in the map). The class is
+therefore **asymmetric**:
+
+| height change from → to | class |
+|---|---|
+| level | 0 |
+| rise of 1..16 | 1 |
+| rise of 17..32 | 2 |
+| rise of 33 or more | 3 |
+| drop of 1..15 | 0 |
+| drop of 16..31 | 1 |
+| drop of 32..47 | 2 |
+| drop of 48 or more | 3 |
+
+So every slightly uphill step costs one class more than the same step downhill. (Before
+November 2026 this section said |from − to| / 16 rounded down, symmetric: fidelity audit M2.)
 
 - A straight step takes step_time[class] ticks.
 - A diagonal step (both x and y change) takes floor(1.5 x step_time[class]) ticks. This is a

@@ -15,6 +15,9 @@ let app: FrontEndApp | null = null;
 /** open the in-game options menu (3.11); does nothing outside a running game */
 export function openGameMenu(): void { app?.openGameMenu(); }
 
+/** open the rename dialog of the town-hall page (side-panel.md 5.2) over the running game */
+export function openRenameDialog(current: string, done: (name: string) => void): void { app?.renameDialog(current, done); }
+
 export interface FrontEndOptions {
   music: Music;
   data: GameData;
