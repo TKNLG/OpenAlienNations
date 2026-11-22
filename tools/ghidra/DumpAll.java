@@ -24,7 +24,7 @@ public class DumpAll extends GhidraScript {
             for (Function f : fm.getFunctions(true)) {
                 if (monitor.isCancelled()) break;
                 DecompileResults r = di.decompileFunction(f, 60, monitor);
-                pw.println("// ===== " + f.getEntryPoint() + " " + f.getName() + " =====");
+                pw.println("// ===== " + f.getEntryPoint() + " " + f.getName(true) + " =====");
                 if (r != null && r.decompileCompleted()) pw.println(r.getDecompiledFunction().getC());
                 else pw.println("// decompile failed");
                 n++;

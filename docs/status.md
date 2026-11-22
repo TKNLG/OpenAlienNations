@@ -36,6 +36,31 @@ game executables:
   dumps (`DV.tdb`, `Mentor.tdb`), and simulation harnesses for AI/economy diagnosis (TypeScript
   runners that import `src/` and print metrics; tools, not tests).
 
+**Virtual methods.** Auto-analysis misses functions reachable only through vtables (about 650 per
+exe). After the first analysis, list them and re-analyse before dumping:
+`python3 tools/macsyms/vtables.py pe re/bin/AN.exe <features> <vt.json>` gives the vtables; their
+slot targets not yet defined (preceded by `ret`/`nop`/`int3`) go into a text file for
+`-preScript CreateFunctions.java <file>` on `-process`, followed by `DumpAll.java` again.
+
+**Original names from the Mac build** (results: `docs/game/original-names.md`). The Mac port kept
+its C++ symbols; a community IDA database of it (and of a Gold 3.03 exe with hand-ported names)
+is `github.com/ShaneDoyle/Alien-Nations-IDA`. Pipeline, all scripts in `tools/macsyms/` and
+`tools/ghidra/`, output in `re/`:
+
+1. `extract_idb.py <idb> <dir>` (needs the `python-idb` package) dumps segments, functions and
+   names; `cwdemangle.py <dir>/idb.json <dir>/names.tsv` demangles them (CodeWarrior style).
+2. `analyzeHeadless re/ghidra-proj-mac MAC -import re/mac/seg_00000000.bin -loader BinaryLoader
+   -processor PowerPC:BE:32:default -preScript IdbImport.java re/mac 1889f0 -postScript
+   DumpAll.java re/dump-mac` (1889f0 = the TOC, r2) gives the named Mac decompile; the 3.03 IDB
+   the same way as x86 (`-loader-baseAddr 0x401000 -processor x86:LE:32:default -cspec windows`).
+3. `FeatureDump.java <out.jsonl>` on every program (`-process ... -noanalysis -readOnly`),
+   `vtables.py mac|pe`, `factory.py` (job factories, case = job type), `tables.py` (handler tables
+   aligned by index), then `match.py A B out --cross --vt ... --fac ... --seed ...` (Mac → Gold;
+   `--th 0.55 --mg 0.06 --om 0.55`) and `match.py` without `--cross` for Gold → AN and 3.03 →
+   Gold. `score.py` measures a match file against known pairs.
+4. `names.py` builds the name tables; `ApplyNames.java <table>` (pre-script, then `DumpAll.java`)
+   writes them into the Ghidra projects, so `re/dump*/decomp.c` show `Class::method` names.
+
 Addresses in the docs refer to the GOG `AN.exe` unless marked Gold. All specs (docs/) cite the
 addresses they were derived from, so any claim can be re-checked.
 
@@ -46,7 +71,9 @@ addresses they were derived from, so any claim can be re-checked.
 - `game/`: rules. `units-and-jobs.md` (jobs, walking §4, transports §5, construction §6,
   harvesting §7, operators §8, training §9), `combat.md` (attack, flee, police/criminals §12,
   garrisons), `economy.md` (needs, happiness, births, research, finances), `ai-diplomacy-trade.md`
-  (computer players, raids, diplomacy), `fog-of-war.md`, `addon.md`, `editions.md`.
+  (computer players, raids, diplomacy), `fog-of-war.md`, `addon.md`, `editions.md`,
+  `original-names.md` (original class and function names from the Mac build: job types, goals,
+  dialogs, message types).
 - `rendering/`: projection, terrain drawing, objects/picking, unit motion, projectiles, territory.
 - `ui/`: front-end menus, side panel (incl. advisor §1.1), cursors.
 - `architecture/`: simulation/lockstep, multiplayer, AI integration with the list of remaining
