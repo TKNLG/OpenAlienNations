@@ -168,6 +168,11 @@ export interface BuildOrder {
 export type Command =
   | { type: 'move'; player: number; ids: number[]; x: number; y: number }
   | { type: 'sliders'; player: number; town: number; motivation: number; research: number }
+  /** game speed (economy.md 1.2): 100 normal, 50 about x2, 25 about x4; a network game takes only the host's */
+  | { type: 'speed'; player: number; setting: number }
+  /** a typed cheat word (fog-of-war.md 8), single player only: its table index (MAGICEYE is the
+   *  client's own display switch) and the player's current town */
+  | { type: 'cheat'; player: number; word: number; town: number }
   | { type: 'research'; player: number; town: number; invention: number }
   /** rename a town (command 0x4B, units-and-jobs.md 11.2 "Renaming a town"): the client's current town */
   | { type: 'rename'; player: number; town: number; name: string }
@@ -302,6 +307,12 @@ export interface WorldSnapshot {
 
 export class World {
   tick = 0;
+  /** game speed setting (economy.md 1.2): 100 normal, 50 about x2, 25 about x4. It paces the
+   *  client's ticks only: not saved and not hashed (a loaded game starts at normal speed) */
+  speed = 100;
+  /** network game: the host's race (only its speed command counts, no cheats); -1 single player.
+   *  Set by the client before the first tick, identically on every peer */
+  netHost = -1;
   readonly terrain: Terrain;
   readonly bits: number;
   readonly size: number;
@@ -1174,6 +1185,28 @@ export class World {
   }
 
   private apply(cmd: Command): void {
+    if (cmd.type === 'speed') {
+      // only the machine that owns the simulation changes the speed: in a network game the host
+      if (this.netHost >= 0 && cmd.player !== this.netHost) return;
+      if (cmd.setting === 100 || cmd.setting === 50 || cmd.setting === 25) this.speed = cmd.setting;
+      return;
+    }
+    if (cmd.type === 'cheat') {
+      // no cheats in a network game, nor for a computer player (fog-of-war.md 8)
+      const p = this.economy.players[cmd.player];
+      if (this.netHost >= 0 || !p || p.computer) return;
+      const k = Math.trunc(cmd.word);
+      if (k === 0) { p.money = Math.max(0, p.money + 5000); return; }   // CASHCOW
+      if (k >= 1 && k <= 9) {
+        // RAIN .. LOLLY: + 50 of good k - 1 in the current town, as a delivery adds it (crop
+        // conversion, food counter, capped at the capacity)
+        const t = this.ownTown(cmd.player, cmd.town);
+        if (t) this.economy.addGood(t, k - 1, 50);
+        return;
+      }
+      if (k === 11 && p.outcome === 0) p.outcome = 1;   // WINNER: the "won" message (the client skips free play)
+      return;
+    }
     if (cmd.type === 'sliders') {
       const t = this.ownTown(cmd.player, cmd.town);
       if (!t) return;

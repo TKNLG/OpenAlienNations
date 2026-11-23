@@ -171,6 +171,9 @@ export class Effects {
   }
 
   /** sprites for the current time (t in ticks, wall in ms); arriving shots play their hit sound and spawn their impact effect */
+  /** real length of a tick at the current game speed (set by the game each frame, economy.md 1.2) */
+  tickMs = TICK_MS;
+
   update(t: number, wall: number, size: number): FxDraw[] {
     const out: FxDraw[] = [];
     const now = quantClock(wall);
@@ -186,7 +189,7 @@ export class Effects {
         let dx = s.ax - s.sx, dy = s.ay - s.sy;
         if (dx > size / 2) dx -= size; else if (dx < -size / 2) dx += size;
         if (dy > size / 2) dy -= size; else if (dy < -size / 2) dy += size;
-        s.step.begin(dx * OFFSET_UNITS, dy * OFFSET_UNITS, quantClock(wall - Math.min(1, t - s.release) * TICK_MS), s.f);
+        s.step.begin(dx * OFFSET_UNITS, dy * OFFSET_UNITS, quantClock(wall - Math.min(1, t - s.release) * this.tickMs), s.f);
         // the start point in cells, wrapped next to the aim cell, for the height
         s.sx = s.ax - dx; s.sy = s.ay - dy;
       }

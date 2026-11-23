@@ -182,9 +182,9 @@ const TEXTS: Record<string, [string, string]> = {
   'Spieler': ['Player', 'Joueur'],
   'Spiel mit dieser Mission eröffnen': ['Open a game with this mission', 'Ouvrir une partie avec cette mission'],
   'Aktualisieren': ['Refresh', 'Actualiser'],
-  'Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad: zoomen':
-    ['Left: select (drag = box) · Right: move · Middle button drag / arrow keys / WASD: scroll · Mouse wheel: zoom',
-     'Gauche : sélectionner (glisser = cadre) · Droite : déplacer · Bouton du milieu / flèches / WASD : défiler · Molette : zoom'],
+  'Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad / + / −: zoomen · 1 / 2 / 3: Spieltempo':
+    ['Left: select (drag = box) · Right: move · Middle button drag / arrow keys / WASD: scroll · Mouse wheel / + / −: zoom · 1 / 2 / 3: game speed',
+     'Gauche : sélectionner (glisser = cadre) · Droite : déplacer · Bouton du milieu / flèches / WASD : défiler · Molette / + / − : zoom · 1 / 2 / 3 : vitesse du jeu'],
   'Texteingabe': ['Text input', 'Saisie de texte'],
   'Noch keine Spielstände.': ['No save games yet.', 'Aucune partie sauvegardée.'],
   'Laden': ['Load', 'Charger'],

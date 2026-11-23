@@ -451,8 +451,42 @@ same modular arithmetic.
 - MAGICEYE flips fog bit 0x08 and forces a full world redraw (`0x43FD70`). Typing it again turns
   fog back on. The vision counters and explored bits keep being maintained either way, so turning
   fog back on immediately shows the correct state.
-- Cheats are ignored while the global at `0x4B3B1C` is set (I: the network session object, so
-  no cheats in multiplayer).
+- Cheats are ignored while the global at `0x4B3B1C` is set (C, `0x43fbf3`: the network
+  `Communicator`, created when a session is joined or hosted and destroyed with
+  `Communicator::destroyPlayer` / `close`), so **no cheats in network games**, and unless this
+  machine owns the simulation (`0x4AF3D4`, set in single player).
+
+**The cheat words (C, `MapView::handleKeyboardEvent` `0043fb80`, re-read November 2026).** Every
+character message (WM_CHAR) of the world view, except while the chat line is open and except `+`
+and `-` (the zoom keys, `side-panel.md` 4.2), is appended to the 10-character ring; after each
+character the ring's tail is compared with each word, **ignoring case** (`_strcmpi`), in table
+order. "The player" is the local player; "the current town" is the player's current town
+(player +0x258: set by the go-to-town command, the selection mark and a newly added town,
+i.e. the town the side panel shows). Effects, all applied at once in the simulation:
+
+| # | word | effect |
+|---|---|---|
+| 0 | CASHCOW | the player's money + 5000 (`Player::IncCredits`) |
+| 1 | RAIN | + 50 of good 0 (the race's crop) in the current town |
+| 2 | LUMBERJACK | + 50 wood (good 1) |
+| 3 | STONEMASON | + 50 stone (good 2) |
+| 4 | IRONMAN | + 50 iron (good 3) |
+| 5 | IAMHUNGRY | + 50 food (good 4) |
+| 6 | WARTIME | + 50 of good 5 |
+| 7 | CHOCO | + 50 of good 6 |
+| 8 | JUICE | + 50 of good 7 |
+| 9 | LOLLY | + 50 of good 8 |
+| 10 | MAGICEYE | fog drawing off / on (below) |
+| 11 | WINNER | unless the mission list is free play (mode 4, `0x4AF8A0`): the "won" message (0x3C, result 1, `GameOver`) to the player, the same message a met win goal sends (`mdb.md` "Goals"). The goal job is not touched |
+
+Words 1..9 add the 50 units exactly as a delivery does (the add-goods rules of `0046e820`,
+`economy.md` "Adding goods", inlined: the stock is capped at the capacity, food also counts as "food produced this round"
+(+0x60), and good 0 goes through the crop conversion when the town's ring is set). Without a
+current town (none yet) they do nothing.
+
+*Our build:* the same words, single player only. MAGICEYE stays a display switch of the client;
+the others are world commands (`cheat`, the client's current town carried in the command), so
+saves and replays keep them.
 - The fog bit is reset to on at every new map and every load (`0040e970`).
 - There is no other fog setting: no menu option, no mission flag, no free-play parameter.
 

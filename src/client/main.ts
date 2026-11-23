@@ -5,6 +5,8 @@
 import { GameData, CAMPAIGNS, CAMPAIGNS_AO, FREEPLAY_AO, type Campaign } from './data.ts';
 /** every campaign a save or the dev bar may name (base, add-on) */
 const ALL_CAMPAIGNS = [...CAMPAIGNS, ...CAMPAIGNS_AO];
+/** the cheat words in the original's table order (fog-of-war.md 8): the index is the command's word */
+const CHEATS = ['CASHCOW', 'RAIN', 'LUMBERJACK', 'STONEMASON', 'IRONMAN', 'IAMHUNGRY', 'WARTIME', 'CHOCO', 'JUICE', 'LOLLY', 'MAGICEYE', 'WINNER'];
 import { Camera } from './camera.ts';
 import { TerrainRenderer } from './terrain-renderer.ts';
 import { SpriteAtlas, SpriteBatch, Compositor, type SpriteDraw } from './sprites.ts';
@@ -382,15 +384,46 @@ class Game implements HudHost {
       this.sfx.preload([42, 43, 53, 57, 58, 68, 69, ...[...this.data.rules.values()].map(r => r.sound ?? 0)]);
     }, { once: true });
     window.addEventListener('keydown', e => {
-      // cheat words (fog-of-war.md 8): MAGICEYE toggles the fog of this display, single player only
-      if (e.key.length === 1) {
-        this.cheatKeys = (this.cheatKeys + e.key.toUpperCase()).slice(-10);
-        if (this.cheatKeys.endsWith('MAGICEYE') && !this.lockstep && this.vision) {
-          this.vision.off = !this.vision.off; this.fogVersion = -1; this.cheatKeys = '';
-        }
-      }
+      const field = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+      if (this.world && !this.paused && !field && !e.ctrlKey && !e.altKey && !e.metaKey) this.worldKey(e);
       this.keys.add(e.key); if (e.key === 'Escape' && (this.placing >= 0 || this.founding !== null)) { this.placing = -1; this.founding = null; this.recomputeCursor(); e.preventDefault(); } });
     window.addEventListener('keyup', e => this.keys.delete(e.key));
+  }
+
+  /**
+   * Keys of the world view (`MapView::handleKeyboardEvent`): `+` / `-` step the zoom, Page Up /
+   * Page Down jump to its ends (side-panel.md 4.2); 1 / 2 / 3 set the game speed (economy.md 1.2,
+   * the original's F5..F7, which browsers keep for themselves); every other character goes into the
+   * cheat ring (fog-of-war.md 8).
+   */
+  private worldKey(e: KeyboardEvent): void {
+    const zoom = (v: number) => { this.zoomValue = Math.max(16, Math.min(64, v)); e.preventDefault(); };
+    if (e.key === '+') { if (this.zoomValue > 16) zoom(this.zoomValue - 1); else e.preventDefault(); return; }
+    if (e.key === '-') { zoom(this.zoomValue + 1); return; }
+    if (e.key === 'PageUp') { zoom(64); return; }
+    if (e.key === 'PageDown') { zoom(16); return; }
+    const speed = { '1': 100, '2': 50, '3': 25 }[e.key];
+    if (speed) {
+      // only the machine that owns the simulation: single player or the network host (slot 0)
+      if (!this.lockstep || this.lockstep.slot === 0) this.command({ type: 'speed', player: this.player, setting: speed });
+      e.preventDefault();
+      return;
+    }
+    if (e.key.length !== 1) return;
+    this.cheatKeys = (this.cheatKeys + e.key.toUpperCase()).slice(-10);
+    // no cheats in a network game (fog-of-war.md 8)
+    if (this.lockstep) return;
+    const word = CHEATS.findIndex(c => this.cheatKeys.endsWith(c));
+    if (word < 0) return;
+    this.cheatKeys = '';
+    if (CHEATS[word] === 'MAGICEYE') {
+      if (this.vision) { this.vision.off = !this.vision.off; this.fogVersion = -1; }
+      return;
+    }
+    // WINNER does nothing in free play (mission list mode 4)
+    const free = this.current?.campaign === FREEPLAY_CAMPAIGN.id || this.current?.campaign === FREEPLAY_AO.id;
+    if (CHEATS[word] === 'WINNER' && free) return;
+    this.command({ type: 'cheat', player: this.player, word, town: this.currentTown });
   }
 
   /** screen pixel -> map cell, accounting for terrain height (a few refinement steps) */
@@ -582,14 +615,16 @@ class Game implements HudHost {
     const w = this.world;
     if (w && !this.paused) {
       this.acc += Math.min(250, t - this.lastT);
-      while (this.acc >= TICK_MS) {
+      // the game speed (economy.md 1.2) sets the tick length; it can change in a step
+      while (this.acc >= this.tickMs) {
+        const ms = this.tickMs;
         if (this.lockstep) {
-          if (!this.lockstep.step()) { this.acc = Math.min(this.acc, TICK_MS); break; } // waiting for others
+          if (!this.lockstep.step()) { this.acc = Math.min(this.acc, ms); break; } // waiting for others
           if (this.lockstep.desync) status(desyncText(this.lockstep.desync.tick));
         } else {
           w.step();
         }
-        this.acc -= TICK_MS;
+        this.acc -= ms;
       }
     }
     this.lastT = t;
@@ -630,7 +665,7 @@ class Game implements HudHost {
       // territory border stones: ground decals after the terrain, before every object (rendering/territory.md 3)
       this.stones.refresh(w.territory);
       this.batch.draw(this.stones.sprites(this.cam, this.stoneHost, this.data.objects, this.atlas.rects), this.cam.zoom, this.cam.viewW, this.cam.viewH);
-      this.batch.draw(this.sprites(this.paused ? 0 : this.acc / TICK_MS, t), this.cam.zoom, this.cam.viewW, this.cam.viewH);
+      this.batch.draw(this.sprites(this.paused ? 0 : Math.min(1, this.acc / this.tickMs), t), this.cam.zoom, this.cam.viewW, this.cam.viewH);
     }
     this.drawBox();
     if (w && this.frames % 4 === 2) this.minimap.draw(w, this.cam, this.vision);
@@ -877,7 +912,7 @@ class Game implements HudHost {
       if (this.looks.missing(e)) { missing = true; continue; }
       const disp = this.displays.get(e.id);
       // units and animals: step drawing, facing and action animation (unit-motion.md 1-3)
-      if (Looks.moves(e, rule)) this.looks.motion(e, rule, disp, { t: now, wall, tickMs: TICK_MS, smooth, workCycles: this.workCycles(w, e) });
+      if (Looks.moves(e, rule)) this.looks.motion(e, rule, disp, { t: now, wall, tickMs: this.tickMs, smooth, workCycles: this.workCycles(w, e) });
       const [sx0, sy0] = this.toScreen(e);
       const sx = (sx0 - cam.viewW / 2) / cam.zoom, sy = (sy0 - cam.viewH / 2) / cam.zoom;
       const onScreen = fog !== 0 && Math.abs(sx) <= halfW && Math.abs(sy) <= halfH;
@@ -921,6 +956,7 @@ class Game implements HudHost {
     this.comp.sweep();
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);   // composing used its own
     this.fx.drain(w, now, wall);
+    this.fx.tickMs = this.tickMs;
     for (const d of this.fx.update(now, wall, t.size)) {
       const ar = this.atlas.rects.get(`${d.entry.name}#${d.frame}`);
       if (!ar) continue;
@@ -964,7 +1000,7 @@ class Game implements HudHost {
       if (this.looks.missing(u)) { missing = true; return; }
       const ur = this.data.rules.get(u.oid);
       const ud = this.displays.get(u.id);
-      this.looks.motion(u, ur, ud, { t: now, wall, tickMs: TICK_MS, smooth, workCycles: this.workCycles(w, u) });
+      this.looks.motion(u, ur, ud, { t: now, wall, tickMs: this.tickMs, smooth, workCycles: this.workCycles(w, u) });
       const v = this.looks.view(u, ur, now, wall, ud, true, this.displays.rng);
       if (!v.picks.length) return;
       if (v.sound && ur) this.sfx.play(ur.sound, (sx0 - cam.viewW / 2) / (cam.viewW / 2), (sy0 - cam.viewH / 2) / (cam.viewH / 2));
@@ -1056,6 +1092,9 @@ class Game implements HudHost {
     this.applyCursor();
   }
 
+  /** real length of a tick at the current game speed (economy.md 1.2: 100 ms at normal speed) */
+  get tickMs(): number { return (TICK_MS * (this.world?.speed ?? 100)) / 100; }
+
   command(cmd: WorldCommand): void {
     if (this.lockstep) this.lockstep.issue(cmd);
     else this.world?.schedule(cmd);
@@ -1087,6 +1126,7 @@ class Game implements HudHost {
       for (const r of [0, 1, 2]) if (!races.includes(r)) races.push(r);
       await this.loadMission(c, setup.mission ?? 0, races[you], undefined, races.slice(0, players));
     }
+    this.world!.netHost = races[0];   // slot 0 hosts: its speed command counts, no cheats (economy.md 1.2)
     this.lockstep = new Lockstep(this.world!, you, players, msg => net.send(msg), races);
     for (const m of early) this.lockstep.receive(m);
     status(t('Mehrspieler: {0} Spieler, du bist Spieler {1} ({2})', players, you + 1, raceName(this.player)));
@@ -1100,6 +1140,7 @@ class Game implements HudHost {
     this.netOff?.();
     this.netOff = net.on(msg => { if (this.lockstep) this.lockstep.receive(msg); else early.push(msg); });
     await this.loadMission(c, 0, slotRaces[you], undefined, slotRaces, m);
+    this.world!.netHost = slotRaces[0];
     this.lockstep = new Lockstep(this.world!, you, slotRaces.length, msg => net.send(msg), slotRaces);
     for (const msg of early) this.lockstep.receive(msg);
     status(t('Mehrspieler: {0} Spieler, du bist Spieler {1} ({2})', slotRaces.length, you + 1, raceName(this.player)));
@@ -1141,7 +1182,7 @@ function localizePage(first = false): void {
   attr('pname', 'placeholder', t('Spieler'));
   text('create', t('Spiel mit dieser Mission eröffnen'));
   text('refresh', t('Aktualisieren'));
-  text('help', t('Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad: zoomen'));
+  text('help', t('Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad / + / −: zoomen · 1 / 2 / 3: Spieltempo'));
 }
 
 /** the language of the player's game data (DV.tdb string 81, "off"; i18n.ts detectLang) */

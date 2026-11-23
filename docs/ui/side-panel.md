@@ -638,8 +638,11 @@ Consequences that a rebuild must reproduce:
 
 ### 4.2 Keyboard zoom
 
-Page Up sets maximum zoom-out (value 64), Page Down sets normal zoom (value 16). Other keys are
-outside the panel's scope.
+Page Up sets maximum zoom-out (value 64), Page Down sets normal zoom (value 16). The characters
+`+` and `-` (C, `0043fb80`, character messages 0x2B / 0x2D, re-read November 2026) step the zoom by
+one: `+` one step closer (value − 1, not below 16), `-` one step farther (value + 1, not above 64).
+They work in network games too and are never part of a cheat word (`fog-of-war.md` 8). The
+slider follows.
 
 ### 4.3 Tooltips
 

@@ -62,7 +62,18 @@ Where the original uses 32-bit floats this is stated, because it changes results
 | F6 | 50 | 47 ms | fast (about x2) |
 | F7 | 25 | 23 ms | fastest (about x4) |
 
-  (Same switch: PageUp/PageDown zoom, arrows scroll, F1..F4 chat, F12 quicksave.)
+  (Same switch: PageUp/PageDown zoom, arrows scroll, F1..F4 chat, F12 quicksave. Checked
+  November 2026 in the key table at `0x440370` / `0x440340`: F5, F6 and F7 call `004403d0` with
+  100, 50 and 25.)
+- **Network games** (C): the owner flag `0x4AF3D4` is set in single player and on the hosting
+  machine, and cleared when a session is joined (`0x42c818`, just before the communicator is
+  created). So only the **host** changes the speed; the setter sends the new interval to the
+  other players (message 0x65), and their F5..F7 do nothing. There is no on-screen speed display.
+- A new game starts at normal speed (the scheduler is created with setting 100).
+- *Our build:* the keys are **1, 2, 3** (normal, x2, x4): browsers reserve F5 (reload), F6 and
+  F7. The speed is a world command (`speed`), applied by every client at the same tick; in a
+  network game only the host's command is accepted. Our tick is 100 ms, so 50 and 25 ms at the
+  faster speeds. Not saved: a loaded game starts at normal speed, like a new one.
 - Pause (C): opening a modal menu (`004295e0`) sets the scheduler's pause byte when this machine
   owns the simulation and either it is single player or the caller asks for it; closing the menu
   (`00429800`) clears it.
