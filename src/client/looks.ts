@@ -151,7 +151,25 @@ export class Looks {
     }
     if (!onScreen) return NONE;
     const p = this.pick(e, rule, t, d.unit);
-    return p ? { picks: [p], sound: !!d.unit?.sound && (rule?.sound ?? 0) > 0 } : NONE;
+    return p ? { picks: [p], sound: (!!d.unit?.sound && (rule?.sound ?? 0) > 0) || this.fallSound(e, rule, desc, t, d) } : NONE;
+  }
+
+  /**
+   * A felled tree's record sound (59 / 60, sound action 2 = its work row, the fall animation WO):
+   * once per fall, when the fall animation reaches the record's sound frame (the event rule of
+   * unit-motion.md 3). A fall that is already over when the tree comes into view stays silent.
+   */
+  private fallSound(e: Entity, rule: ObjectRule | undefined, desc: ObjectDesc, t: number, d: ObjDisplay): boolean {
+    if (e.kind !== Kind.Nature || rule?.cls !== 8 || e.standing || e.action !== Action.Work) return false;
+    if ((rule.sound ?? 0) <= 0 || rule.soundAction !== Action.Work || d.fallSound === e.actionTick) return false;
+    const en = this.entry(desc.slots[S.WO]);
+    if (!en) return false;
+    const f = Math.floor(Math.max(0, t - e.actionTick) * FRAMES_PER_TICK);
+    if (f > en.frames - 1) return false;
+    const at = rule.soundFrame < 0 ? en.frames - 1 : Math.min(en.frames - 1, rule.soundFrame);
+    if (f < at) return false;
+    d.fallSound = e.actionTick;
+    return true;
   }
 
   private building(e: Entity, rule: ObjectRule | undefined, desc: ObjectDesc, now: number, d: ObjDisplay, onScreen: boolean, rng: DisplayRng): View {

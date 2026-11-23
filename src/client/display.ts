@@ -147,6 +147,8 @@ export class ObjDisplay {
   leap: LayerPlayer | null = null;
   /** units and animals: drawn step offset, walk frame, facing and action animation (unit-motion.md 1-3) */
   unit: UnitDisplay | null = null;
+  /** trees: the fall (its start tick) whose record sound has played (objects.md "Trees") */
+  fallSound = Number.NaN;
 
   constructor(rng: DisplayRng) { this.timer = new IdleTimer(rng); }
 

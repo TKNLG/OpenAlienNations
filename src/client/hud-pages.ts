@@ -547,7 +547,6 @@ function buildPage(pc: PageCtx): void {
     const id = `build:${r.type}`;
     button(pc, pc.hud.portrait(race, r.type), x, y, { id, tip, w: 45, h: 45, disabled: st === 2 || st === 4, off: st === 3,
       onClick: () => pc.host.startPlacing(r.type) });
-    if (pc.host.placing === r.type) { pc.hud.g.strokeStyle = '#ffe9a0'; pc.hud.g.strokeRect(pc.x0 + x + 0.5, pc.y0 + y + 0.5, 44, 44); }
     if (st === 2) return;
     let k = 0;
     for (let g = 0; g <= 4; g++) {

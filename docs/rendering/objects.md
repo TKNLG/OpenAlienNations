@@ -138,6 +138,13 @@ Initial action of a new display object (`00433e10`), from the record's product (
 
 The messages in section 9 change the action and frame later.
 
+**Trees: the felling sound.** A felled tree plays its fall animation (`WO`, work row) once
+(`units-and-jobs.md` 7.1, phase 5). Its record sound (59 or 60 in the base game, 59 for the
+add-on palms) has sound action 2 (the work row) and sound frame 0, so by the event rule of
+`unit-motion.md` 3 it sounds once as the fall begins. *Our build* (`looks.ts` `fallSound`): once
+per fall, when the fall animation reaches the sound frame; a fall that is already over when the
+tree comes into view stays silent. (Missing until 0.5.0: the felling itself had no sound.)
+
 ---
 
 ## 2. The layer player (C, `004394f0`, `004395a0`, `004395c0`, `004395e0`)
