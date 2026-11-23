@@ -60,11 +60,11 @@ More in [docs/server.md](docs/server.md#multiplayer-hosting).
 
 ## Saves
 
-Saved games are stored **in your browser**, separately for each browser and address. To back them up or move them, use **Exportieren** / **Importieren** in the **Spiel laden** menu.
+Saved games are stored **in your browser**, separately for each browser and address. To back them up or move them, use **Export** / **Import** in the **Load game** menu (German edition: **Exportieren** / **Importieren** in **Spiel laden**).
 
 ## In-game settings
 
-Einstellungen → Grafik → **HD-Grafik** switches the HD interface (Alle / Teilweise / Aus); Einstellungen → **Erweitert** has optional comforts that are not in the original, all off by default.
+Settings → Graphics → **HD graphics** switches the HD interface (All / Partly / Off); Settings → **Enhanced** has optional comforts that are not in the original, all off by default.
 
 ## Problems?
 

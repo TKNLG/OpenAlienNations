@@ -46,24 +46,26 @@ Saved games are stored **in your browser** (IndexedDB), separately for each brow
 address. `http://localhost:8080/` and `http://192.168.1.20:8080/` (or another port) count as
 different addresses with their own saves, and clearing the browser's site data deletes them.
 
-To keep a backup or move saves to another browser or computer: in the **Spiel laden** (load
-game) menu, use **Exportieren** to download a save as an `.ansave` file and **Importieren** to
-load one back.
+To keep a backup or move saves to another browser or computer: in the **Load game** menu, use
+**Export** to download a save as an `.ansave` file and **Import** to load one back (German
+edition: **Spiel laden**, **Exportieren**, **Importieren**).
 
-## Why are some menus in German?
+## Which language are the menus in?
 
-The menus use the game's own texts from your copy. The few menus added by OpenAlienNations
-(for example **Erweitert**) are labelled in German, like the original German release.
+The menus use the game's own texts from your copy, so they are in the language of your edition
+(German, English or French). The few texts OpenAlienNations adds (for example the **Enhanced**
+settings) follow the same language.
 
 ## In-game settings worth knowing
 
-- **HD interface:** Settings (Einstellungen) → Graphics (Grafik) → **HD-Grafik** cycles through
-  **Alle** (upscaled menus and side panels, every building picture rendered sharp from the game's
-  own building sprites), **Teilweise** (only the building pictures that match the originals
-  exactly; the others stay original) and **Aus** (the original art).
-- **Enhanced options:** Settings → **Erweitert** has optional comfort features that differ from
-  the original (selection rings, smoother movement, cursor hints, advisor queue). All are off by
-  default; off means exactly the original behaviour.
+- **HD interface:** Settings → Graphics → **HD graphics** cycles through **All** (upscaled menus
+  and side panels, every building picture rendered sharp from the game's own building sprites),
+  **Partly** (only the building pictures that match the originals exactly; the others stay
+  original) and **Off** (the original art). German edition: Einstellungen → Grafik → HD-Grafik
+  (Alle / Teilweise / Aus).
+- **Enhanced options:** Settings → **Enhanced** (German edition: **Erweitert**) has optional
+  comfort features that differ from the original (selection rings, smoother movement, cursor
+  hints, advisor queue). All are off by default; off means exactly the original behaviour.
 
 ## Do my friends need their own copy?
 
