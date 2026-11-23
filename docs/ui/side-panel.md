@@ -1288,7 +1288,9 @@ storage capacity, the price slider 0..2 x the good's base price (record +0xD4).
 `0x4AF490`, buying `0x4AF488`, both **initially 1 (wood)** (data section). They survive closing
 the page and selecting another market (never reset; a different market only rebuilds the detail
 part). A click on a grid button selects that good (`0041c700` → `0041cac0`). So good 0 can never
-be selected, shown or changed from the panel.
+be selected, shown or changed from the panel. The selected good is shown only by the icon at (5,40):
+its grid button gets no frame or other mark. *(Our build drew a light frame around it; that was
+our own addition and is removed.)*
 
 Read-only test: the sliders are enabled and the start/stop buttons exist only when the market's
 race (data byte +0x117, the town owner's race) equals the local player's race (`0x4AF3CC`).

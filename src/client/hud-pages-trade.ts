@@ -82,11 +82,6 @@ function button(pc: PageCtx, sprite: string | HTMLCanvasElement | undefined, x: 
   pc.hud.imageButton(c, pc.x0 + x, pc.y0 + y, { ...b, w: b.w ?? c?.width ?? 30, h: b.h ?? c?.height ?? 30 });
 }
 
-function frame(pc: PageCtx, x: number, y: number, w: number, h: number): void {
-  pc.hud.g.strokeStyle = '#ffe9a0'; pc.hud.g.lineWidth = 1;
-  pc.hud.g.strokeRect(pc.x0 + x + 0.5, pc.y0 + y + 0.5, w - 1, h - 1);
-}
-
 const goodName = (pc: PageCtx, g: number, race: number) =>
   g === 0 ? pc.hud.str(220 + race) : pc.world.rules.get(((GOODS_GROUP << 16) | g) >>> 0)?.name ?? '';
 const goodIcon = (pc: PageCtx, g: number) => pc.hud.uiIcon(((GOODS_GROUP << 16) | g) >>> 0);
@@ -170,12 +165,12 @@ export function marketPage(pc: PageCtx, selling: boolean): void {
   valueSlider(pc, 'mkt:price', 10, 125, price, 2 * tr.basePrice(good), own ? v => setField(priceName, price, v) : null);
   sep(pc, 152);
 
-  // goods grid: goods 1..8 in number order; click selects; goods not enabled for this side are drawn "off"
+  // goods grid: goods 1..8 in number order; click selects (shown only by the icon at (5,40), no frame
+  // in the grid); goods not enabled for this side are drawn "off"
   MARKET_GOODS.forEach((g, i) => {
     const x = 5 + 45 * (i % 4), y = 160 + 45 * Math.floor(i / 4);
     button(pc, goodIcon(pc, g), x, y, { id: `mkt:g${g}`, tip: goodName(pc, g, t.race), w: 30, h: 30, off: tr.get(t.id, g, flagF) === 0,
       onClick: () => { pc.hud.pageState[selKey] = g; } });
-    if (g === good) frame(pc, x, y, 30, 30);
     text(pc, String(t.stock[g]), x + 30, y, { h: 30, valign: 5 });
   });
 }
