@@ -158,6 +158,7 @@ jobs:
           sparse-checkout: |
             LICENSE
             NOTICE
+            CHANGELOG.md
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v8
         with:
@@ -185,6 +186,11 @@ jobs:
 
           License: GPL-3.0-or-later (\`LICENSE.txt\`); see \`NOTICE.txt\` for the game trademarks and the HD UI pack, which is not covered by the GPL.
           EOF
+          # this version's section of CHANGELOG.md (from "## <version>" to the next "## ")
+          awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > changes.md || true
+          if [ -s changes.md ]; then
+            { printf '\n## What changed\n'; cat changes.md; } >> notes.md
+          fi
           gh release create "v$VERSION" release/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

@@ -3,7 +3,8 @@
 Releases are built by `.github/workflows/release.yml` when a tag `v<version>` is pushed.
 
 1. Bump `"version"` in `package.json` (the server reports it in `/api/info`, `--version` and
-   the console; the workflow refuses a tag that does not match it).
+   the console; the workflow refuses a tag that does not match it), and add a `## <version>`
+   section to `CHANGELOG.md` (what changed for players; the release notes include it).
 2. Commit, then tag and push:
    ```
    git commit -am "Release 0.2.0"
@@ -21,8 +22,8 @@ Releases are built by `.github/workflows/release.yml` when a tag `v<version>` is
      `Dockerfile` (`LICENSE` and `NOTICE` in `/app`).
 4. The `release` job creates the GitHub Release with both downloads, `LICENSE.txt`,
    `NOTICE.txt` and `SHA256SUMS.txt`, with
-   short download instructions followed by the generated changelog. Edit the text on GitHub if
-   needed.
+   short download instructions, the version's section of `CHANGELOG.md` and GitHub's generated
+   list of changes. Edit the text on GitHub if needed.
 
 A dry run: Actions -> release -> "Run workflow" on a branch builds everything and keeps the
 executables as workflow artifacts, without a release or an image push. Running it on a tag
