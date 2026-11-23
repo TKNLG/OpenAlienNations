@@ -10,7 +10,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { RaceSetupLite } from './economy.ts';
-import { cellOf, enterDoor, exitBuilding, leaveQueues, nearEntity, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
+import { cellOf, enterDoor, exitBuilding, goLost, leaveQueues, nearEntity, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
 
 /** relation states (3.1); hostile in AI and patrol code: 0 and 1 */
 export const Rel = { None: 0, War: 1, Ceasefire: 2, Peace: 3 } as const;
@@ -327,6 +327,8 @@ export class Diplomacy {
           d[ER.Phase] = PH.Home;
           continue;
         case PH.ToDest: {
+          // the go-to's alive test (units-and-jobs.md 4.2): a dead embassy stops him at once, home
+          if (goLost(this.w, u, this.w.get(d[ER.Dest]))) { d[ER.Phase] = PH.Home; continue; }
           if (u.path) return walkDelay(this.w, u);
           const dest = this.w.get(d[ER.Dest]);
           // he cannot get in (embassy gone, refused at the door): nothing changes, back home (3.4
@@ -360,6 +362,7 @@ export class Diplomacy {
           return 1;
         }
         case PH.ToHome: {
+          if (goLost(this.w, u, this.w.get(d[ER.Home]))) return this.finish(u);
           if (u.path) return walkDelay(this.w, u);
           const home = this.w.get(d[ER.Home]);
           if (!home || !home.alive || !nearEntity(this.w, u, home)) { leaveQueues(this.w, u); return this.finish(u); }

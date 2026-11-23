@@ -14,11 +14,15 @@ import { BuildingFlag, type ObjectRule } from '../formats/odb.ts';
 import { MAX_PLANS, WalkResult } from './motion.ts';
 import { needsTerritory } from './territory.ts';
 import { ring } from './ai-defs.ts';
+import { goLost } from './visit.ts';
 
 export const LJ = {
   Dispatcher: 0x00, Leisure: 0x03, Transport: 0x05, Builder: 0x0c, Training: 0x12, Production: 0x13, Harvest: 0x16,
   Growth: 0x1d, Regrowth: 0x1e, Plant: 0x21, Operator: 0x22, Animal: 0x24, Respawn: 0x37, Answer: 0x3c,
   Found: 0x0e, Hunt: 0x2b, Leave: 0x0d, News: 0x1a,
+  /** a dead site's construction job, deleted at its next 10-tick slot: its destructor sends the
+   *  builders away (units-and-jobs.md 6.4 "Site destroyed"); data [building, builder ids...] */
+  Construction: 0x11,
 } as const;
 /** leave job data (units-and-jobs.md 4.10): the building left, runs so far, the eject's "sent out"
  *  flag (send-out command and DEAKTIVIEREN, 4.11; absent in older saves = cleared) */
@@ -272,6 +276,7 @@ export class Logistics {
       case LJ.Hunt: return this.runHunt(job);
       case LJ.Leave: return this.runLeave(job);
       case LJ.News: return this.runNews(job);
+      case LJ.Construction: return this.runSiteGone(job);
       default: return 0;
     }
   }
@@ -1084,6 +1089,8 @@ export class Logistics {
           return 1;
         }
         case 1: { // arrive and enter the source, wherever the walk ended (4.2, 4.10)
+          // the go-to's alive test (4.2): a dead source stops the porter where he is
+          if (goLost(this.w, u, this.w.get(d[TR.Source]))) { this.cleanup(job, u); return this.finish(u); }
           if (u.path) return 1;
           const src = this.w.get(d[TR.Source]);
           const dst = this.w.get(d[TR.Dest]);
@@ -1109,6 +1116,7 @@ export class Logistics {
           return 1;
         }
         case 4: { // enter the destination wherever the walk ended
+          if (goLost(this.w, u, this.w.get(d[TR.Dest]))) { this.cleanup(job, u); return this.finish(u); }
           if (u.path) return 1;
           const dst = this.w.get(d[TR.Dest]);
           const src = d[TR.Source] >= 0 ? this.w.get(d[TR.Source]) : null;
@@ -1214,6 +1222,7 @@ export class Logistics {
     let total = 0;
     for (let g = 0; g < GOODS; g++) if (r.cost[g] > 0) { list.push([g, r.cost[g]]); total += r.cost[g]; for (let k = 0; k < r.cost[g]; k++) b.needed.push(g); }
     b.order = newOrder('build', type, total, list);
+    b.order.placed = this.w.tick;   // the construction job's first run is 10 ticks later (6.1)
     for (let k = 0; k < total; k++) this.requestTransport(t, List.Construction, b.id);
     this.requestWorker(t, T.Builder, b.id);
     return b;
@@ -1338,7 +1347,9 @@ export class Logistics {
     if (!u) return 0;
     const b = this.w.get(d[BJ.Building]);
     const r = b && this.rule(b);
-    if (!b || !r) return this.finish(u);
+    // the building is gone (after its collapse): the dismissal that follows a site's death stops
+    // the builder where he stands (6.4 "Site destroyed"); ours stops him here at the latest
+    if (!b || !r) { this.w.stopWalk(u); return this.finish(u); }
     switch (d[BJ.Phase]) {
       case 0: // walk to the entrance first
         if (!this.goEntity(u, b)) return this.builderToDoor(d);
@@ -1346,6 +1357,8 @@ export class Logistics {
         d[BJ.Phase] = 1;
         return 1;
       case 1: // the go-to ignores how its walk ended (4.2)
+        // ...but not its target: a dead site fails the go-to at once, phase 4 (6.4 "Site destroyed")
+        if (goLost(this.w, u, b)) return this.builderToDoor(d);
         if (u.path) return 1;
         // a successful go-to sets phase 3: walk on to the first spot (+x side) before the first
         // construction call (6.4); harbour and shipyard: the builder never walks round
@@ -1377,6 +1390,9 @@ export class Logistics {
         if (u.path) return 1;
         return this.builderDone(u, d);
       default: { // 2: face the building (the entrance) or the spot's facing, then work
+        // a dead building (its job is the collapse now): phase 4, the walk to the entrance, until
+        // the dismissal stops him (6.4 "Site destroyed")
+        if (!b.alive) return this.builderToDoor(d);
         const site = !b.complete && !!b.order;
         // waiting for material on a building that is no longer a site: walk to the door (6.4.1)
         if (!site && d[BJ.Step] === 2) return this.builderToDoor(d);
@@ -1427,8 +1443,9 @@ export class Logistics {
   private builderLeft(u: Entity, d: number[]): void {
     const b = this.w.get(d[BJ.Building]);
     // the destructor (`00477b90`) acts only while the site's construction job is not blocked: on a
-    // paused site the builder stays listed (a stale entry) and nothing is filed (6.4, 6.8)
-    if (b && !b.complete && b.order && !b.paused) {
+    // paused site the builder stays listed (a stale entry) and nothing is filed (6.4, 6.8); on a
+    // dead site the building's job is the collapse job: nothing either (6.4 "Site destroyed")
+    if (b && b.alive && !b.complete && b.order && !b.paused) {
       b.order.builders = b.order.builders.filter(id => id !== u.id);
       if (!b.order.builders.length) { const t = this.town(b); if (t) this.requestWorker(t, T.Builder, b.id); }
     }
@@ -1865,6 +1882,7 @@ export class Logistics {
 
   private deliverStep(u: Entity, d: number[]): number {
     if (d[HV.Store] === NONE) return this.deliverStart(u, d);
+    if (goLost(this.w, u, this.w.get(d[HV.Store]))) { d[HV.Phase] = 4; return 1; }
     if (u.path) return 1;
     const s = this.w.get(d[HV.Store]);
     // the delivery transport's go-to ignores how its walk ended (4.2, 5.5)
@@ -1936,12 +1954,13 @@ export class Logistics {
     if (!u) return 0;
     const b = this.w.get(d[AN.Building]);
     if (d[AN.Phase] === 2) return this.leaveEnd(u);
-    if (!b) return this.finish(u);
+    if (!b) { if (d[AN.Phase] === 1) goLost(this.w, u, b); return this.finish(u); }
     if (d[AN.Phase] === 0) {
       if (!this.goEntity(u, b)) { this.cleanup(job, u); return this.finish(u); }
       d[AN.Phase] = 1;
       return 1;
     }
+    if (goLost(this.w, u, b)) { this.cleanup(job, u); return this.finish(u); }
     if (u.path) return 1;
     // the go-to ignores how its walk ended and enters from where the unit stands (4.2, 4.10)
     if (!this.atDoor(u, b)) { this.cleanup(job, u); return this.finish(u); }
@@ -2131,7 +2150,8 @@ export class Logistics {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || !u.alive) return 0;
     const farm = this.w.get(d[PL.Farm]);
-    if (!farm || !farm.alive) return this.finish(u);
+    // phase 3 is the go-to back into the farm: a dead farm stops him where he is (4.2)
+    if (!farm || !farm.alive) { if (d[PL.Phase] === 3) goLost(this.w, u, farm); return this.finish(u); }
     if (d[PL.Phase] === 3 && !d[PL.Planted] && u.inside < 0) {
       const [x, y] = this.cellOf(u);
       if (x !== d[PL.X] || y !== d[PL.Y]) {
@@ -2533,17 +2553,50 @@ export class Logistics {
   private pauseSite(b: Entity, t: Town): void {
     const o = b.order!;
     b.paused = true;
-    for (const id of o.builders.slice()) {
+    o.builders = this.sendBuildersAway(b.id, o.builders);
+    for (let li = 0; li < t.lists.length; li++) if (t.lists[li].includes(b.id)) t.lists[li] = t.lists[li].filter(x => x !== b.id);
+    b.needed = [];
+  }
+
+  /**
+   * The builders are sent away (`00475ab0`, 6.8 step 2): every listed builder whose current job is
+   * the builder job on this building loses it at once and stops where he is. Returns the list
+   * without them (entries whose job is not current stay).
+   */
+  private sendBuildersAway(building: number, ids: number[]): number[] {
+    const kept: number[] = [];
+    for (const id of ids) {
       const u = this.w.get(id);
       const j = u?.job ? this.w.sched.get(u.job) : undefined;
-      if (!u || !j || j.cancelled || j.kind !== LJ.Builder || j.data[BJ.Building] !== b.id) continue;
-      o.builders = o.builders.filter(x => x !== id);
+      if (!u || !j || j.cancelled || j.kind !== LJ.Builder || j.data[BJ.Building] !== building) { kept.push(id); continue; }
+      this.abortEnter(u);
       this.cancelJob(u);
       this.w.stopWalk(u);
       this.w.combat.endUnitJob(u);
     }
-    for (let li = 0; li < t.lists.length; li++) if (t.lists[li].includes(b.id)) t.lists[li] = t.lists[li].filter(x => x !== b.id);
-    b.needed = [];
+    return kept;
+  }
+
+  /**
+   * A site dies (combat.md 10.3 phase 1, units-and-jobs.md 6.4 "Site destroyed"): its construction
+   * job is cancelled and deleted at its next 10-tick slot (first run 10 ticks after placement),
+   * where its destructor sends the builders away. A paused site has no listed builder on the job
+   * any more (the pause sent them away): nothing to do.
+   */
+  siteDied(b: Entity): void {
+    const o = b.order;
+    if (!o || o.kind !== 'build' || b.complete || b.paused) return;
+    const first = (o.placed ?? 0) + 10, t = this.w.tick;
+    const at = t < first ? first : first + 10 * (Math.floor((t - first) / 10) + 1);
+    this.w.sched.create(LJ.Construction, b.id, at - t, [b.id, ...o.builders]);
+  }
+
+  private runSiteGone(job: Job): number {
+    const [building, ...ids] = job.data;
+    const kept = this.sendBuildersAway(building, ids);
+    const b = this.w.get(building);
+    if (b?.order) b.order.builders = b.order.builders.filter(id => kept.includes(id));
+    return 0;
   }
 
   /**
@@ -2619,7 +2672,8 @@ export class Logistics {
     if (!u) return 0;
     const hall = this.w.get(d[FD.Hall]);
     const fail = () => { this.cleanup(job, u); return this.finish(u); };
-    if (!hall || !hall.alive) return fail();
+    // the go-to's alive test (4.2): a dead site stops a walking founder where he is
+    if (!hall || !hall.alive) { if (d[FD.Phase] === 1 || d[FD.Phase] >= 4) goLost(this.w, u, hall); return fail(); }
     if (d[FD.Phase] === 0) {
       if (!this.goEntity(u, hall)) return fail();
       d[FD.Phase] = 1;

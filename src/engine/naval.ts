@@ -15,6 +15,7 @@
 import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import { ring } from './ai-defs.ts';
+import { goLost } from './visit.ts';
 
 export const NJ = {
   /** go to a transport ship and board it (go-to job 0x07 with the transport branch, 5.2) */
@@ -361,7 +362,12 @@ export class Naval {
     const u = this.w.get(job.owner), d = job.data;
     if (!u || !u.alive || u.job !== job.id) return 0;
     const ship = this.w.get(d[BO.Ship]);
-    if (!ship || !ship.alive || u.inside >= 0) { this.leaveQueue(ship, u); return this.finish(u); }
+    if (!ship || !ship.alive || u.inside >= 0) {
+      this.leaveQueue(ship, u);
+      // the go-to's alive test (units-and-jobs.md 4.2): a sunk ship stops the unit where it is
+      if (u.inside < 0) goLost(this.w, u, ship);
+      return this.finish(u);
+    }
     const [sx, sy] = this.cellOf(ship);
     switch (d[BO.Phase]) {
       case BP.Choose: {

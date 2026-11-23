@@ -17,6 +17,7 @@ import { WeaponKind } from '../formats/wdb.ts';
 import { dirToward, turnStep } from './path.ts';
 import { WalkResult } from './motion.ts';
 import { aimCell } from './aim.ts';
+import { goLost } from './visit.ts';
 
 export const CJ = {
   Attack: 0x08, Impact: 0x15, Criminal: 0x17, Arrest: 0x18, Escort: 0x19, GarrisonFire: 0x1b, Outpost: 0x1c,
@@ -953,6 +954,8 @@ export class Combat {
       k = o && o.T ? Math.trunc(((o.T - o.R) * 10) / o.T) : 0;
       if (this.type(b) === T.TownHall) k = 0;
     } else this.w.economy.deactivate(b);
+    // the construction job is cancelled: its deletion sends the builders away (units-and-jobs.md 6.4)
+    if (!b.complete) this.w.logistics.siteDied(b);
     if (noRubble) stone = 0;   // a cancelled founding (units-and-jobs.md 11.6)
     // the training job is deleted: its destructor drops the queued orders from the town's pending
     // counts, no refund (units-and-jobs.md 9 "Lost building")
@@ -1127,6 +1130,8 @@ export class Combat {
     if (!u || !u.alive) return 0;
     const station = d[0] ? this.w.get(d[0]) : undefined;
     if (d[1] === 2) { // walking home
+      // the go-to into the station (units-and-jobs.md 4.2): a dead station stops him where he is
+      if (station && goLost(this.w, u, station)) return this.endUnitJob(u);
       if (u.path) return 1;
       if (station) { u.job = 0; this.w.logistics.goHome(u, station); return 0; }
       return this.endUnitJob(u);
@@ -1174,6 +1179,8 @@ export class Combat {
     if (!st) { c.job = 0; return 0; }
     if (d[1] === 0) { this.w.logistics.walkTo(c, st); d[1] = 1; return 1; }
     if (d[1] === 1) {
+      // a dead station ends the go-to at once (units-and-jobs.md 4.2): the same 599-tick wait
+      if (goLost(this.w, c, st)) { d[1] = 2; return 599; }
       if (c.path) return 1;
       // the go-to enters from wherever its walk ended (units-and-jobs.md 4.2, 4.10)
       const e = this.w.logistics.enter(c, st);

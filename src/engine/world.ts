@@ -160,6 +160,9 @@ export interface BuildOrder {
   started: number;
   N: number; step: number; counter: number; E: number; d: number; stage: number;
   builders: number[];
+  /** construction orders: the tick the site was placed (its construction job runs 10 ticks later,
+   *  then every 10; units-and-jobs.md 6.4 "Site destroyed"); 0 in saves before version 26 */
+  placed?: number;
 }
 
 export type Command =
@@ -258,8 +261,10 @@ export interface ScheduledCommand { tick: number; seq: number; cmd: Command; }
  *  keep the labels of the bare terrain); 24: the attack state's stored plan holds the firing-position
  *  search's whole path behind the state (combat.md 3.5; older plans are dropped), the towns'
  *  porter lists in join order (`Town.porters`, combat.md 12.1; older saves start from entity order);
- *  25: the economy's no-record flag (`noRecord`, mdb.md "Goals"; absent = a record is loaded) */
-export const SNAPSHOT_VERSION = 25;
+ *  25: the economy's no-record flag (`noRecord`, mdb.md "Goals"; absent = a record is loaded);
+ *  26: construction orders keep their placement tick (`BuildOrder.placed`, units-and-jobs.md 6.4 "Site
+ *  destroyed"; older sites count from tick 0) */
+export const SNAPSHOT_VERSION = 26;
 /** `convert` command value for UMWANDELN (the original's byte 0xFF) */
 export const CONVERT_NOW = 255;
 export interface WorldSnapshot {
@@ -1144,7 +1149,16 @@ export class World {
       : this.economy.runJob(job)));
     const t = this.tick;
     for (const e of this.entities) {
-      if (e.path && e.moveAt <= t && (e.kind === Kind.Nature || (e.kind === Kind.Unit && e.inside < 0))) this.motion.run(e);
+      if (e.path && e.moveAt <= t && (e.kind === Kind.Nature || (e.kind === Kind.Unit && e.inside < 0))) {
+        // a player's go-to without a job (to a nature object or a unit, `goTarget`): the go-to's
+        // alive test comes before the step (units-and-jobs.md 4.2); a dead or removed target stops
+        // the unit on its cell
+        if (e.goTarget && !e.job && e.kind === Kind.Unit) {
+          const g = this.get(e.goTarget);
+          if (!g || (!g.alive && g.kind !== Kind.Nature)) { e.goTarget = 0; this.stopWalk(e); continue; }
+        }
+        this.motion.run(e);
+      }
     }
     // the plans requested in this tick are made now, after all its jobs and steps (the lockstep
     // reading of the original's between-ticks planner, units-and-jobs.md 4.1.1)
@@ -1380,7 +1394,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23 && snap.v !== 24) throw Object.assign(new Error(`save game version ${snap.v} is not supported`), { i18n: ['Spielstand-Version {0} wird nicht unterstützt', snap.v] }); // translated by the client (i18n.ts TextError)
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23 && snap.v !== 24 && snap.v !== 25) throw Object.assign(new Error(`save game version ${snap.v} is not supported`), { i18n: ['Spielstand-Version {0} wird nicht unterstützt', snap.v] }); // translated by the client (i18n.ts TextError)
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it
@@ -1405,6 +1419,7 @@ export class World {
         delete (copy as Partial<Entity> & { walkNodes?: number }).walkNodes;
         for (const k of copy.walks) delete (k as Partial<WalkSave> & { walkNodes?: number }).walkNodes;
       }
+      if (copy.order) copy.order.placed ??= 0;   // before version 26: placement tick unknown
       copy.goTarget ??= 0;   // before version 17: no ordered go-to target (a running walk is restarted by a repeated click once)
       if (snap.v < 4) migrateMovement(copy, snap.tick, w.size);
       // before version 6: no door counter, no enter sequence (a unit inside stays inside; units on
@@ -1501,6 +1516,7 @@ export class World {
       mix(e.job); mix(e.goTarget); mix(e.idle); mix(e.alive ? 1 : 0); mix(e.carryGood); mix(e.cooldownUntil); mix(e.exp); mix(e.suspended.length); mix(e.carryAmount); mix(e.amount); mix(e.reserved);
       mix(e.needed.length); mix(e.outputs.length); mix(e.doorQueue.length); mix(e.door); mix(e.entering); mix(e.enterStep); mix(e.queue.length); mix(e.trainProgress);
       for (const v of e.local) mix(v);
+      if (e.order) mix(e.order.placed ?? 0);
       if (e.passengers.length) { mix(-7); for (const v of e.passengers) mix(v); }
     }
     this.sched.digest(mix);

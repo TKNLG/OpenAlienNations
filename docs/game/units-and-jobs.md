@@ -693,6 +693,36 @@ So a go-to to a building fails only if the building dies or refuses the unit at 
 request (4.4). Walking problems never make it fail; they only cost time (up to 15 plans here and
 up to 15 more in the enter job's last walk, 4.10).
 
+**A target that dies stops the unit on the spot** (C, instruction level `0x47acb1..0x47acba`,
+re-read November 2026). The very first thing every run of the go-to does, before it runs its
+child, is to test the target's alive flag (object +0x34). Dead (a building in its collapse,
+`combat.md` 10.3 phase 1; a felled tree, a used-up stone, an emptied bush, a killed unit or
+animal): the go-to ends at once without success (success flag 0, return 0). Its child (the walk,
+or the enter job at the door) is deleted without running again, so the unit takes **no further
+step** and stands on the cell it has reached; a unit waiting in a door queue leaves it. Because
+the child runs inside the go-to's slot, the go-to runs at the child's cadence (every step, every
+2-tick plan poll, every door poll), so the stop comes at the unit's next due step after the
+death. What happens next is the parent job's rule for a failed go-to, the same branch a refusal
+at the door takes (builder: 6.4.1 and 6.4 "Site destroyed"; transport: 5.5; the player's
+right-click go-to, which is the unit's top job: it simply ends, the unit stands idle).
+
+Every job that walks to an object does so through this go-to (constructor `0047ac60`; callers
+read November 2026): the player's right-click on an object (`00450bb0`), the builder
+(`00477a80`), transports and deliveries (`0047bee0`, `0047bfd0`, `0047c2b0`), gatherers walking
+to their nature object (`00476930`), the farmer back to his farm (`0047ead0`), workers and
+trainees answering a request and the computer's go-into (`0047d850`, `0046ea30`, `00470340`),
+outpost garrisons (`0046cfd0`), the news seller (`0047b490`), the police (`0047b860`), the
+criminal's victim walk (`0047cc20`), traders (`0047ce00`), diplomats (`00478650`, `00478910`,
+`00478bd0`) and the founder (`00479410`). Walks to a cell (move orders, spots around a building,
+the walk home) have no target and are not affected.
+
+*Our build (November 2026):* the go-to's parents test the target at each of their polls while the
+walk or the door request runs (`logistics.ts` `goLost`); a dead or removed target ends the walk
+where the unit stands (`World.stopWalk`) and takes the parent's failure branch. A player's
+right-click go-to without a job (a walk to a nature object or a unit, `goTarget`) is stopped by
+the motion pass before its next step. Before November 2026 the unit walked on to the dead
+target's door and noticed only on arrival.
+
 Timing (C, `0047ac90`): the go-to's first run only creates its walk child (0x06) and returns 1;
 the walk plans in its own first run one tick later. The walk is a child job, run inside its
 parent's scheduler slot (1.1, 1.2). When the walk ends, the go-to turns the unit in its next run
@@ -2380,6 +2410,36 @@ Who calls a builder to a site:
 A builder never leaves a site because goods are missing (6.3 "Waiting"); he leaves only when the
 site is finished or destroyed, his walk to the next spot fails (6.4.1), he is given another job
 (player order, pause), or he dies.
+
+**Site destroyed or demolished** (C, `0045f5a0`, `004752f0`, `00475ab0`, `00477b90`, read
+November 2026). Phase 1 of the building's death (`combat.md` 10.3) sets the cancel flag of the
+building's current job, the construction job (0x11), and puts the collapse job in its place.
+The construction job runs every 10 ticks (its run only returns 10, 6.8), so it is deleted at its
+next due slot, **at most 10 ticks** after the death (a paused site's job is blocked: deleted when
+its block runs out, by which time the pause has already sent its builders away). Its destructor
+(`004752f0`) tests the order's success flag: for an **unfinished** site it **sends the builders
+away** exactly as a pause does (`00475ab0`, 6.8 step 2): every listed builder whose current job
+is the builder job on this site loses it at once and stands still where he is, idle, a free
+builder for the dispatcher. In the meantime:
+
+- a builder **walking to the site** finds the target dead at his go-to's next run (4.2): the
+  go-to fails, so his builder job takes phase 4 (6.4.1) and starts a plain walk toward the dead
+  site's entrance (planning delay 3 ticks first); the dismissal then stops him on the cell he
+  has reached. On screen he stops within about a second, at most a step or two further;
+- a builder **at work** (no child running) tests at his next run whether the building is a site
+  (+0xB0 = 1) whose current job is a construction job (0x11); after the death it is the collapse
+  job, so he takes phase 4 (6.4.1), the walk toward the entrance, until the dismissal stops him;
+- a builder **walking between spots** (a plain walk with no target, 6.4 phase 3) walks on until
+  the dismissal.
+
+The builder job's destructor (`00477b90`) acts on the builder list and files a new builder
+request only while the building's current job is a construction job that is not blocked. After
+the death the current job is the collapse job, so **no builder is called to a dying site**, and
+the dismissed builders are not re-sent.
+
+*Our build (November 2026):* the dismissal comes at the construction job's next 10-tick slot
+after the death, counted from the site's placement (its first run 10 ticks after placement);
+earlier versions left the builders walking to the dead site until they arrived.
 
 #### 6.4.1 End of the job: the builder walks to the door (C, `00477ce0` phase 4, destructor `00477b90`)
 

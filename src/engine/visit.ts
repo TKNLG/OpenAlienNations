@@ -6,7 +6,7 @@
 import type { World, Entity } from './world.ts';
 
 const SUBCELL = 256;
-const KIND_BUILDING = 1;
+const KIND_BUILDING = 1, KIND_NATURE = 2;
 /** animation actions (od-odb.md): walk, idle, carry */
 const ACT_WALK = 0, ACT_IDLE = 3, ACT_CARRY = 4;
 
@@ -84,6 +84,21 @@ export function leaveQueues(w: World, u: Entity): void {
 
 /** stop walking: a unit in the middle of a step finishes that step, then stands */
 export function stopWalking(w: World, u: Entity): void { w.stopWalk(u); }
+
+/**
+ * The go-to's alive test (units-and-jobs.md 4.2): every run first tests its target. A building or
+ * unit that died (a building in its collapse included), or any target that is gone, ends the go-to
+ * at once: the unit leaves the door queue and stops on the cell it has reached (a step under way
+ * is finished). True = the go-to failed; the caller takes its failure branch. Nature objects count
+ * as gone only when removed (a carcass is still a target).
+ */
+export function goLost(w: World, u: Entity, target: Entity | null | undefined): boolean {
+  if (target && (target.alive || target.kind === KIND_NATURE)) return false;
+  w.logistics.abortEnter(u);
+  leaveQueues(w, u);
+  w.stopWalk(u);
+  return true;
+}
 
 /** nearest of a list of buildings to a cell (torus distance, first one wins ties) */
 export function nearestTo(w: World, list: Entity[], x: number, y: number): Entity | null {

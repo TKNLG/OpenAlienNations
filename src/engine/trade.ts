@@ -11,7 +11,7 @@ import type { Job } from './scheduler.ts';
 import type { World, Entity } from './world.ts';
 import type { Town } from './economy.ts';
 import { BuildingFlag } from '../formats/odb.ts';
-import { cellOf, enterDoor, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
+import { cellOf, enterDoor, goLost, leaveQueues, nearEntity, nearestTo, setIdle, stopWalking, walkDelay, walkToEntity } from './visit.ts';
 
 export const TradeJob = { Route: 0x20 } as const;
 export const isTradeJob = (kind: number) => kind === TradeJob.Route;
@@ -330,6 +330,8 @@ export class Trade {
           return 1;
         }
         case PH.Arrive: {
+          // the go-to's alive test (units-and-jobs.md 4.2): a dead market stops him, the leg fails
+          if (goLost(this.w, u, this.w.get(d[RT.Market]))) { this.dropLeg(u); return this.legEnd(d); }
           if (u.path) return walkDelay(this.w, u);
           const m = this.w.get(d[RT.Market]);
           if (!m || !m.alive || !nearEntity(this.w, u, m)) { this.dropLeg(u); return this.legEnd(d); }
@@ -361,6 +363,7 @@ export class Trade {
           return 1;
         }
         case PH.Home:
+          if (goLost(this.w, u, this.w.get(d[RT.Market]))) return this.finish(u);
           // an own-race merchant is not admitted at his market: the go-to ends at its door
           if (u.path) return walkDelay(this.w, u);
           return this.finish(u);
