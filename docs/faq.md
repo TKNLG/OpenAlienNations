@@ -23,6 +23,12 @@ differently from the original game? Please
   `Bin`, not a folder inside it.
 - **Wrong game folder remembered:** start once with `--setup` to choose again
   (see [install.md](install.md#changing-the-game-folder)).
+- **Only works as administrator:** OpenAlienNations only reads the game folder; the one file it
+  writes is its settings file in your user folder (`%APPDATA%\OpenAlienNations\config.json`).
+  Administrator rights are never needed. Since 0.5.2 the console names every file or folder in the
+  game folder that Windows does not let your user read (`! ... cannot be read and are skipped`);
+  give your user read access to those (folder Properties → Security), or copy the game folder to
+  a place of your own. Older versions stopped at the first such entry.
 - **Sounds or texts from another install (for example English speech with German texts):** start
   with `--verbose`; the console shows the folder in use and the full path of every file the game
   loads. Versions before 0.5.2 let the browser keep game files for a day, so after switching

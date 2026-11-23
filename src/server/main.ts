@@ -69,13 +69,20 @@ function parseArgs(argv: string[]): Options {
 }
 
 /** lower-case relative path ("data/dv.gd") -> absolute path */
-function indexGameFolder(root: string): Map<string, string> {
+function indexGameFolder(root: string, skipped: string[] = []): Map<string, string> {
   const map = new Map<string, string>();
+  const why = (err: unknown) => (err as { code?: string }).code ?? String(err);
+  // an entry this user may not read (or a broken link) is skipped and reported, never fatal: only
+  // reading is needed, so the server must not depend on running as administrator
   const walk = (dir: string, rel: string) => {
-    for (const name of readdirSync(dir)) {
+    let names: string[];
+    try { names = readdirSync(dir); } catch (err) { skipped.push(`${dir} (${why(err)})`); return; }
+    for (const name of names) {
       const abs = join(dir, name);
       const r = rel ? `${rel}/${name}` : name;
-      if (statSync(abs).isDirectory()) walk(abs, r);
+      let isDir: boolean;
+      try { isDir = statSync(abs).isDirectory(); } catch (err) { skipped.push(`${abs} (${why(err)})`); continue; }
+      if (isDir) walk(abs, r);
       else map.set(r.toLowerCase(), abs);
     }
   };
@@ -139,7 +146,12 @@ function sendFile(req: IncomingMessage, res: ServerResponse, asset: Asset, mime:
     etag = `"${size.toString(16)}-${VERSION}"`; // embedded files only change with the executable
   }
   const body = (start: number, end: number) => {
-    if ('file' in asset) createReadStream(asset.file, { start, end }).pipe(res);
+    if ('file' in asset) {
+      // a file Windows will not let this user open: report it and fail this request only
+      const s = createReadStream(asset.file, { start, end });
+      s.on('error', err => { console.warn(tr().readFailed(asset.file, err.message)); res.destroy(); });
+      s.pipe(res);
+    }
     else res.end(asset.data.subarray(start, end + 1));
   };
   res.setHeader('ETag', etag);
@@ -217,7 +229,9 @@ async function main(): Promise<void> {
 
   const publicDir = resolve(here, '..', 'public');
   const gameRoot = resolve(opt.game);
-  let game = indexGameFolder(gameRoot);
+  const skipped: string[] = [];
+  let game = indexGameFolder(gameRoot, skipped);
+  if (skipped.length) console.warn(tr().unreadable(skipped.length, skipped.slice(0, 10).map(s => `    ${s}`).join('\n') + (skipped.length > 10 ? '\n    ...' : '')));
   const music = indexMusic(opt.music ? resolve(opt.music) : '');
   if (music.size) console.log(tr().soundtrack(resolve(opt.music), music.size));
   // HD UI pack (tools/hdpack): --hd, else built into the executable, else next to dist/

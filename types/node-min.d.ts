@@ -21,6 +21,7 @@ declare module 'node:http' {
     setHeader(name: string, value: string | number): void;
     writeHead(status: number, headers?: Record<string, string | number>): void;
     end(data?: string | Uint8Array): void;
+    destroy(err?: Error): void;
   }
   export interface Server {
     listen(port: number, host: string, cb?: () => void): void;
@@ -43,7 +44,7 @@ declare module 'node:fs' {
   export function rmSync(path: string, opt?: { recursive?: boolean; force?: boolean }): void;
   export function existsSync(path: string): boolean;
   export function statSync(path: string): { size: number; mtimeMs: number; isDirectory(): boolean; isFile(): boolean };
-  export function createReadStream(path: string, opt?: { start?: number; end?: number }): { pipe(dest: unknown): void };
+  export function createReadStream(path: string, opt?: { start?: number; end?: number }): { pipe(dest: unknown): void; on(ev: 'error', cb: (err: Error) => void): void };
 }
 
 declare module 'node:path' {

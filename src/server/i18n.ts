@@ -155,6 +155,8 @@ const en = {
   portBusy: (port: number) => `! Port ${port} is already in use (is OpenAlienNations already running?). `
     + 'Close the other program or start with --port <another port>.',
   listenFailed: (where: string, err: string) => `! Cannot listen on ${where}: ${err}`,
+  unreadable: (n: number, list: string) => `! ${n} entries in the game folder cannot be read and are skipped (no permission or broken link):\n${list}`,
+  readFailed: (file: string, err: string) => `! Cannot read ${file}: ${err}`,
   listening: (version: string, where: string) => `OpenAlienNations ${version} listening on ${where}`,
   playHere: 'Play on this computer:',
   listeningOn: 'Listening on:',
@@ -224,6 +226,8 @@ const de: Strings = {
   portBusy: (port: number) => `! Port ${port} ist schon belegt (läuft OpenAlienNations bereits?). `
     + 'Schließe das andere Programm oder starte mit --port <anderer Port>.',
   listenFailed: (where: string, err: string) => `! ${where} lässt sich nicht öffnen: ${err}`,
+  unreadable: (n: number, list: string) => `! ${n} Einträge im Spielordner sind nicht lesbar und werden übersprungen (keine Berechtigung oder defekter Verweis):\n${list}`,
+  readFailed: (file: string, err: string) => `! ${file} lässt sich nicht lesen: ${err}`,
   listening: (version: string, where: string) => `OpenAlienNations ${version} läuft auf ${where}`,
   playHere: 'Auf diesem Computer spielen:',
   listeningOn: 'Erreichbar unter:',
@@ -291,6 +295,8 @@ const fr: Strings = {
   portBusy: (port: number) => `! Le port ${port} est déjà utilisé (OpenAlienNations tourne-t-il déjà ?). `
     + 'Ferme l\'autre programme ou lance avec --port <autre port>.',
   listenFailed: (where: string, err: string) => `! Impossible d'écouter sur ${where} : ${err}`,
+  unreadable: (n: number, list: string) => `! ${n} éléments du dossier du jeu sont illisibles et ignorés (pas d'autorisation ou lien cassé) :\n${list}`,
+  readFailed: (file: string, err: string) => `! Impossible de lire ${file} : ${err}`,
   listening: (version: string, where: string) => `OpenAlienNations ${version} à l'écoute sur ${where}`,
   playHere: 'Jouer sur cet ordinateur :',
   listeningOn: 'À l\'écoute sur :',
