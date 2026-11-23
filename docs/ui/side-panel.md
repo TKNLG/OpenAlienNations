@@ -1535,8 +1535,13 @@ Not in the original. Setting Einstellungen → Grafik → **HD-Grafik**, one cli
 
 | level | menus, panel art, goods icons | building and ship pictures | unit portraits |
 |---|---|---|---|
-| **Alle**, **Teilweise** (currently the same; maintainer decision 2026-11-23) | HD pack (menus Real-ESRGAN, small icons xBR) | every one rendered from its world sprite (finished building at frame 0, ships facing direction 5) at the panel's device resolution: the measured placement where the picture is an exact shrunk world sprite, otherwise (22 Sajiki buildings drawn from another camera, or a picture of another data set) the sprite's opaque box fitted into the picture's box, centred, standing on its bottom edge, so a few look slightly different from the original picture | the player's own picture, smoothed |
+| **Alle** | HD pack (menus Real-ESRGAN, small icons xBR) | every one rendered from its world sprite (finished building at frame 0, ships facing direction 5) at the panel's device resolution: the measured placement where the picture is an exact shrunk world sprite, otherwise (22 Sajiki buildings drawn from another camera, or a picture of another data set) the scale and offset that match the original picture best (`fitIcon`; mean error 14..35 for the Sajiki ones), so they keep the original's size and framing but a few look slightly different | the player's own picture, smoothed |
+| **Teilweise** | HD pack | rendered only where the measured placement reproduces the original exactly (mean error <= 10), the others stay original | the player's own picture, smoothed |
 | **Aus** | originals | originals | originals |
+
+Building, ship and unit portraits are never taken from the pack (its xBR portraits are unused;
+maintainer decisions 2026-11-23): buildings are rendered from their big sprites, units keep the
+player's own small drawing.
 
 - **HD pack check** (`hd/manifest.json` "hash", written by `tools/hdpack/hashes.ts`): every pack
   image carries the pixel checksum (`gd.ts` `pixelHash`) of the picture it was made from. The
@@ -1549,9 +1554,8 @@ Not in the original. Setting Einstellungen → Grafik → **HD-Grafik**, one cli
   the browser console (object, name, reason) and generated from the world sprite while HD art is
   on (measured placement, else the box 3..42 x 3..43); with "Aus" the slot stays empty.
 - **Unit portraits** are separate small drawings, not shrunk world sprites: every level shows the
-  player's own picture, drawn smoothed. The pack's xBR versions of them are not used (they looked
-  worse than plain smoothing; maintainer decision 2026-11-23), which also keeps them right for
-  every edition (dressed English and French Amazons).
+  player's own picture, drawn smoothed (the pack's xBR versions looked worse than plain
+  smoothing), which also keeps them right for every edition (dressed English and French Amazons).
 - Code: `ui-assets.ts` (`setHdMode`, `hdFor`, `pickPackKey` in `hd-pack.ts`), `hd-icons.ts`,
   `icon-fit.ts` (`FITS`, `boxFit`); tests `test/hd-modes.test.ts`, `test/icon-fit.test.ts`.
 

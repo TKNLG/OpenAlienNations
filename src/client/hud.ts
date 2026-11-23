@@ -15,7 +15,6 @@ import { drawPage, pageFor, infoBuilding, MissingOperatorLine, MENTOR_NO_OPERATO
 import { marketPagesAllowed } from './hud-pages-trade.ts';
 import { isTransport, isTrader, isMarketLike } from './addon-ui.ts';
 import { generatedPortrait, requestHdPortrait, requestHdUiIcon } from './hd-icons.ts';
-import { pixelHash } from '../formats/gd.ts';
 import { tintRgba, lookOf, type Tint } from './ui-tint.ts';
 
 export const PANEL_W = 192;
@@ -287,7 +286,7 @@ export class Hud {
         c.width = e.width; c.height = e.height;
         c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(fr[0].buffer, fr[0].byteOffset, fr[0].length), e.width, e.height), 0, 0);
         this.portraits.set(key, c);
-        requestHdPortrait(host.data, race, type, c, this.deviceScale, pixelHash(fr[0]));
+        requestHdPortrait(host.data, race, type, c, this.deviceScale);
         this.draw();
       }).catch(err => missing(`not decoded (${err instanceof Error ? err.message : String(err)})`));
     } else if (desc) missing(name ? 'not in the sprite archive' : 'no picture named');
