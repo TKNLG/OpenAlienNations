@@ -6,11 +6,11 @@
 // side-panel.md 3.1, use it. Everything is derived from the player's own dv.gd at run time;
 // nothing new is shipped.
 //
-// Levels (setting "HD-Grafik", docs/ui/side-panel.md "HD art"):
-// - "partly": only placements that reproduce the original picture (FITS, error check) are used;
-// - "all": every building and ship picture is rendered from its world sprite; pictures that are
-//   separate renders (22 Sajiki buildings, other camera) or fail the check are placed by their
-//   opaque box (boxFit), so a few look slightly different from the original picture;
+// Levels (setting "HD-Grafik", docs/ui/side-panel.md "HD art"), "all" and "partly" alike: every
+// building and ship picture is rendered from its world sprite, with the measured placement where
+// it reproduces the original picture (FITS, error check), else (22 Sajiki buildings drawn from
+// another camera, or pictures of other data) placed by its opaque box (boxFit), so a few look
+// slightly different from the original picture;
 // - in both, a picture whose original could not be loaded is generated from the world sprite;
 // - "off": the originals.
 // Unit portraits are separate small drawings: every level shows the player's own picture, smoothed.

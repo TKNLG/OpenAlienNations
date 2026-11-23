@@ -14,14 +14,14 @@ export const RACE_UI_DIR = ['AMAZONS', 'PIMONS', 'SAJIKI'];
 // The 1x canvases stay the layout truth (sizes, hit tests); an HD image is linked to a canvas and
 // used whenever that canvas is drawn. drawImage is wrapped once so that every existing call site
 // picks the HD image up without knowing about it. Setting "HD-Grafik" (docs/ui/side-panel.md
-// "HD art"): "all" = pack images plus every building picture rendered from its world sprite,
-// "partly" = pack images plus the pictures that are exact shrunk world sprites, "off" = originals.
+// "HD art"): "all" and "partly" = pack images plus every building and ship picture rendered from
+// its world sprite (the two levels currently show the same), "off" = originals.
 
 type HdImage = ImageBitmap | HTMLCanvasElement;
 export type HdMode = 'all' | 'partly' | 'off';
 /** pack image or verified render (the "partly" level) */
 const hdMap = new WeakMap<object, HdImage>();
-/** renders used only in "all" mode: pictures that are not exact shrunk world sprites */
+/** renders of pictures that are not exact shrunk world sprites (placed by box) */
 const hdLoose = new WeakMap<object, HdImage>();
 /** derivations (tints) to rebuild whenever a canvas gets its HD image */
 const hdDerived = new WeakMap<object, (() => void)[]>();
@@ -49,7 +49,7 @@ export function hdMode(): HdMode { return mode; }
 /** the HD image a canvas is drawn with in the current mode, if any */
 function hdFor(c: object): HdImage | undefined {
   if (!hdOn) return undefined;
-  return (mode === 'all' ? hdLoose.get(c) : undefined) ?? hdMap.get(c);
+  return hdLoose.get(c) ?? hdMap.get(c);
 }
 /** the HD image linked to a canvas, if any */
 export function hdOf(c: object): HdImage | undefined { return hdFor(c); }
@@ -73,7 +73,7 @@ export function linkRenderedHd(c: object, hd: HdImage): void {
   linkHd(c, hd);
 }
 
-/** an HD image rendered from a world sprite that is not an exact match: shown in "all" mode only */
+/** an HD image rendered from a world sprite that is not an exact match (placed by its box) */
 export function linkLooseHd(c: object, hd: HdImage): void {
   hdLoose.set(c, hd);
   changed(c);
@@ -86,7 +86,7 @@ export function linkLooseHd(c: object, hd: HdImage): void {
  */
 export function deriveHd(src: object, dst: object, make: (s: CanvasImageSource, w: number, h: number) => HTMLCanvasElement): void {
   const go = () => {
-    const h = (mode === 'all' ? hdLoose.get(src) : undefined) ?? hdMap.get(src);
+    const h = hdLoose.get(src) ?? hdMap.get(src);
     if (h) hdMap.set(dst, make(h, h.width, h.height)); else hdMap.delete(dst);
     changed(dst);
   };

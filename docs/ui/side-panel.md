@@ -1533,11 +1533,10 @@ Every button press plays the UI click sample on mouse down. Sounds of clicks in 
 Not in the original. Setting Einstellungen → Grafik → **HD-Grafik**, one click to the next level
 (`settings.ts` `hd`, default "Alle"; older builds stored on/off: on = "Alle", off = "Aus"):
 
-| level | menus and panel art | building and ship pictures |
-|---|---|---|
-| **Alle** | HD pack | every one rendered from its world sprite (finished building at frame 0, ships facing direction 5) at the panel's device resolution: the measured placement where the picture is an exact shrunk world sprite, otherwise (22 Sajiki buildings drawn from another camera, or a picture of another data set) the sprite's opaque box fitted into the picture's box, centred, standing on its bottom edge, so a few look slightly different from the original picture |
-| **Teilweise** | HD pack | rendered only where the measured placement reproduces the original (mean error <= 10); the others take the pack image (xBR) |
-| **Aus** | originals | originals |
+| level | menus, panel art, goods icons | building and ship pictures | unit portraits |
+|---|---|---|---|
+| **Alle**, **Teilweise** (currently the same; maintainer decision 2026-11-23) | HD pack (menus Real-ESRGAN, small icons xBR) | every one rendered from its world sprite (finished building at frame 0, ships facing direction 5) at the panel's device resolution: the measured placement where the picture is an exact shrunk world sprite, otherwise (22 Sajiki buildings drawn from another camera, or a picture of another data set) the sprite's opaque box fitted into the picture's box, centred, standing on its bottom edge, so a few look slightly different from the original picture | the player's own picture, smoothed |
+| **Aus** | originals | originals | originals |
 
 - **HD pack check** (`hd/manifest.json` "hash", written by `tools/hdpack/hashes.ts`): every pack
   image carries the pixel checksum (`gd.ts` `pixelHash`) of the picture it was made from. The
