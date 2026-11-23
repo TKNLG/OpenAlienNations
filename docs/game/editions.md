@@ -48,6 +48,31 @@ or newer and is the reference for the add-on. The patch readme lists the fixes: 
 loading saves of the original campaigns, Sajiki missions "Gefährlicher Botengang" and
 "Insel-Beschlagnahmung", Pimmons "Rettungsversuch" ending early, finished missions not unlocking.
 
+## GOG language editions (German, English, French; checked file by file)
+
+GOG ships the base game per language (same GOG build id; no add-on in any of them). Compared with
+the German install:
+
+| file(s) | English | French |
+|---|---|---|
+| `Bin/AN.exe` | **identical** to the German exe (Aug 2000 build): every spec here applies | **a different, later build** (Dec 2001; `.text` 8 KB smaller). Matched against the German exe: about 1,840 functions identical, about 220 changed, about 400 per side unpaired (among them AI tactics such as `HuntsmenRush`, `SmallAttacks`, `TacticSix` and `FloodMap`). Its behaviour is **not analysed**; it may contain fixes or changes |
+| `dv.odb` | object **names** only; every rule field identical | the same |
+| mission files (`*.mdb`) | **title and briefing** only; maps, goals, setup identical | the same |
+| `DV.tdb`, `Mentor.tdb`, race `DV.idb` | translated texts | translated texts |
+| fonts (`dv*.dvf`) | larger files (more glyphs) | the same as English |
+| `dv.gd` (world sprites, portraits) | 297 entries differ, all visible ones on the **Amazons**: every unit animation (282 entries, 18 unit types) and 14 unit portraits wear tops (the German Amazons are topless). Missing: the policewoman's strike frames `POLIZIST\ST0..7` and the scout's idle frames `SPAEHERIN\ID0..6`; added: `POLIZIST\WO0..7` | **identical to the English `dv.gd`** |
+| `dv.OD` | matches its `dv.gd`: frame offsets of 8 dressed Amazon units, no strike animation for the policewoman (slots 8..15 empty), no idle animation for the scout | **the German `dv.OD`**: it names the 15 frames its own `dv.gd` lacks (`POLIZIST\ST*`, `SPAEHERIN\ID*`); those animations have no picture in the French original |
+| race `interface.gd` | good 8 icon `RS\MI\MADEN` (and its bubble): a **lollipop** ("Lollipop maggots") instead of the cigar ("Zigarillos"); other entries re-stored with identical pixels | identical to German (cigar, "Cigares") |
+| `mainmenu.gd` | menu pictures with text (race names, race selection, loading screen, Sajiki briefing) | the same pictures, French text |
+| videos, advisor speech (`Sound/mentor`) | English | French |
+| other | race folders `Amazons` / `Pimons` / `Sajiki` (German: upper case) | the same; no `8x8.dvf`, `dv7pts.dvf`, `db.gdb`, `Sajiki.mdb` (unused by the rebuild) |
+
+Consequence for the HD UI pack (`hd/`, made from the German pictures and keyed by archive, name,
+frame and stored length): the 14 dressed Amazon portraits and the English lollipop icon have the
+same stored length as their German counterparts, so the pack's German images (topless portraits,
+cigar) would replace the player's own pictures. The menu pictures with text differ in length and
+are not affected.
+
 ## Consequences for the rebuild
 
 The Gold executable's file handling, add-on maps, island generator, add-on menus and the full
