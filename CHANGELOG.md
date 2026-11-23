@@ -2,6 +2,13 @@
 
 What changed for players in each release. Older releases: see the GitHub release pages.
 
+## 0.5.1
+
+A small follow-up to 0.5.0.
+
+- Trees now play their falling sound when they are cut down (the original's felling sound, as the tree starts to fall).
+- The build menu no longer draws a frame around the building you are placing (the original has none).
+
 ## 0.5.0
 
 A large fidelity release. The original's function names from the Mac version of the game were matched onto the PC executables, and every part of the game was audited against the original code: about 130 differences were found and fixed, so the default ("vanilla") mode plays much closer to the original. Saves from 0.4.0 keep loading.
