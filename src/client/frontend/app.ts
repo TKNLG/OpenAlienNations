@@ -16,7 +16,7 @@ import { C, Figure, Image, Label, ListBox, R, ScrollRing, Slider, TextButton, Te
 import { loadSettings, saveSettings, getUiScale, setUiScale, UI_SCALES, getProgress, recordWin, type Settings } from './settings.ts';
 import { applyFreePlay, randomSeed, spDefaults, FREEPLAY_CAMPAIGN, type FreePlayParams } from './freeplay.ts';
 import { Multiplayer } from './multiplayer.ts';
-import { setHdEnabled } from '../ui-assets.ts';
+import { setHdMode } from '../ui-assets.ts';
 
 /** what the front end needs from the running game (implemented by the Game class in main.ts) */
 export interface GameHost {
@@ -116,7 +116,7 @@ export class FrontEndApp {
 
   applySettings(): void {
     const st = this.settings;
-    setHdEnabled(st.hd);
+    setHdMode(st.hd);
     this.music.setEnabled(st.soundOn);
     this.music.setVolume(st.music / 100);
     this.a.soundOn = st.soundOn;
@@ -534,9 +534,12 @@ export class FrontEndApp {
       this.value(R(540, 350, 585, 380), onOff(st.alphaShadows), () => { st.alphaShadows = !st.alphaShadows; this.changed(); again(); }),
       this.label(R(230, 380, 439, 410), 'Bedienleiste:'),
       this.value(R(475, 380, 585, 410), scaleText, () => { setUiScale(UI_SCALES[(UI_SCALES.indexOf(scale) + 1) % UI_SCALES.length]); again(); }),
-      // HD pack (our addition): upscaled menu and side-panel art
-      this.label(R(230, 410, 539, 440), 'HD-Grafik:'),
-      this.value(R(540, 410, 585, 440), onOff(st.hd), () => { st.hd = !st.hd; setHdEnabled(st.hd); this.changed(); again(); }),
+      // HD art (our addition): all / partly / off, one click to the next (side-panel.md "HD art")
+      this.label(R(230, 410, 439, 440), 'HD-Grafik:'),
+      this.value(R(475, 410, 585, 440), st.hd === 'all' ? 'Alle' : st.hd === 'partly' ? 'Teilweise' : this.s(81), () => {
+        st.hd = st.hd === 'all' ? 'partly' : st.hd === 'partly' ? 'off' : 'all';
+        setHdMode(st.hd); this.changed(); again();
+      }),
       this.back(R(340, 470, 460, 490), back),
     ], back);
   }

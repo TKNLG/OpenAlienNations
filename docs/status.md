@@ -123,7 +123,7 @@ from a read-only folder, hosts lobbies, relays lockstep commands over WebSocket)
 | fog of war | explored / in sight per player, terrain, sprites, minimap, placement; MAGICEYE (docs/game/fog-of-war.md) |
 | free play / random maps | world populator: nature clusters, point lists, start positions (docs/formats/world-populate.md); founding towns with the city founder |
 | Gold Edition add-on (islands, ships) | add-on data, island maps and generator, AO campaigns and menus; harbours, shipyards, fishing, transport and war ships in the engine (docs/game/addon.md) and their side-panel pages (passengers, trade routes, ship info) |
-| HD UI pack | menus and side panels upscaled 4x (Real-ESRGAN animevideov3, icons xBR x4 + unsharp), shipped in `hd/`, toggle "HD-Grafik" in the graphics settings (tools/hdpack) |
+| HD UI pack | menus and side panels upscaled 4x (Real-ESRGAN animevideov3, icons xBR x4 + unsharp), shipped in `hd/`, setting "HD-Grafik" Alle / Teilweise / Aus, pack images checked against the player's pictures by pixel checksum (`ui/side-panel.md` 10; tools/hdpack) |
 | enhanced options | optional comfort options that differ from the original, all off by default (= vanilla): selection rings, smooth movement, cursor hints, advisor queue; Einstellungen -> "Erweitert" (docs/roadmap.md) |
 | building foundations, worn paths | buildings level and pave their ground permanently; busy routes become paths that speed units up (docs/game/units-and-jobs.md 6.6, 4.5) |
 

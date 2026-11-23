@@ -165,3 +165,19 @@ function toStraightRgba(canvas: Uint32Array): Uint8Array {
   }
   return out;
 }
+
+/**
+ * Content checksum of a decoded frame (RGBA bytes as decodeGdFrames returns them): two 32-bit
+ * FNV-1a lanes with different seeds, 16 hex digits. The HD pack stores it for the picture each HD
+ * image was made from, so the client only uses an HD image for a picture with identical pixels
+ * (other language editions change some pictures but keep their names, docs/game/editions.md).
+ */
+export function pixelHash(rgba: ArrayLike<number>): string {
+  let a = 0x811c9dc5, b = 0x01000193 ^ rgba.length;
+  for (let i = 0; i < rgba.length; i++) {
+    const v = rgba[i];
+    a = Math.imul(a ^ v, 0x01000193);
+    b = Math.imul(b ^ (v + (i & 0xff)), 0x01000193) ^ (b >>> 15);
+  }
+  return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
+}

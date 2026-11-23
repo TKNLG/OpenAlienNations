@@ -5,7 +5,7 @@
 - Gold Edition add-on: island campaigns, harbour, shipyard, ships, fishing, sea combat,
   add-on research, add-on menus (analysis of `dvge.exe` in progress, see `game/editions.md`)
 - HD UI pack: menus and side panels upscaled (Real-ESRGAN animevideov3 x4), icons with xBR x4 +
-  unsharp; built with `tools/hdpack`, switch "HD-Grafik" in the graphics settings
+  unsharp; built with `tools/hdpack`, setting "HD-Grafik" (Alle / Teilweise / Aus) in the graphics settings
 - Docker image for NAS / Unraid hosting (mount the game folder, and the GOG `Bin/music` folder as
   `--music` for a Gold Edition install, whose music was on the CD)
 

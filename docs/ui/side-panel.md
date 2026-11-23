@@ -1528,7 +1528,33 @@ Every button press plays the UI click sample on mouse down. Sounds of clicks in 
   menu: 4 rows = 8 items), and the grid scroll arrows sit at the bottom of the 600 px panel.
 - The modal message box keeps its fixed (200,190) position.
 
-## 10. Open points
+## 10. HD art (our addition)
+
+Not in the original. Setting Einstellungen → Grafik → **HD-Grafik**, one click to the next level
+(`settings.ts` `hd`, default "Alle"; older builds stored on/off: on = "Alle", off = "Aus"):
+
+| level | menus and panel art | building and ship pictures |
+|---|---|---|
+| **Alle** | HD pack | every one rendered from its world sprite (finished building at frame 0, ships facing direction 5) at the panel's device resolution: the measured placement where the picture is an exact shrunk world sprite, otherwise (22 Sajiki buildings drawn from another camera, or a picture of another data set) the sprite's opaque box fitted into the picture's box, centred, standing on its bottom edge, so a few look slightly different from the original picture |
+| **Teilweise** | HD pack | rendered only where the measured placement reproduces the original (mean error <= 10); the others take the pack image |
+| **Aus** | originals | originals |
+
+- **HD pack check** (`hd/manifest.json` "hash", written by `tools/hdpack/hashes.ts`): every pack
+  image carries the pixel checksum (`gd.ts` `pixelHash`) of the picture it was made from. The
+  client uses a pack image only for a picture with exactly those pixels, under any stored variant
+  of the entry. Language editions change some pictures under the same names and sizes (the
+  English and French Amazons wear tops, the English good 8 is a lollipop, `game/editions.md`):
+  those keep the player's own picture. A pack without checksums (an older `--hd` folder) is
+  matched by key as before.
+- **Missing originals:** a building or ship portrait that cannot be found or decoded is logged in
+  the browser console (object, name, reason) and generated from the world sprite while HD art is
+  on (measured placement, else the box 3..42 x 3..43); with "Aus" the slot stays empty.
+- Unit portraits are separate drawings: they take the pack image (if it passes the check) or the
+  original.
+- Code: `ui-assets.ts` (`setHdMode`, `hdFor`, `pickPackKey` in `hd-pack.ts`), `hd-icons.ts`,
+  `icon-fit.ts` (`FITS`, `boxFit`); tests `test/hd-modes.test.ts`, `test/icon-fit.test.ts`.
+
+## 11. Open points
 
 - The original redraw rate (and so the money counter's real speed); see 3.6 "rate".
 - The research status icon: whether page 2 really opens for the selected laboratory in every

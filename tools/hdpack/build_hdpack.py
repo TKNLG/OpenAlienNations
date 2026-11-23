@@ -15,6 +15,8 @@ Output (default ./hd):
 key = "<archive>|<entry>|<frame>|<data length>", archive = "mainmenu.gd", "<race dir lower>/interface.gd",
 "dv.gd" or "addon.gd" (lower case, as the client keys them).
 The data length tells the GOG and Gold variants of a sprite apart, so one pack serves both installs.
+After building, run hashes.ts (node --experimental-strip-types tools/hdpack/hashes.ts --game <Data> ...):
+it adds each image's source pixel checksum ("hash"), which the client requires before using an image.
 
 Usage: build_hdpack.py --game <Data folder> [--game <another Data folder>] [--out hd]
        [--onnx <dir with realesr-animevideov3.onnx>] [--only mainmenu|interface|portraits] [--limit N]

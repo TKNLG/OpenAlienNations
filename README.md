@@ -64,7 +64,7 @@ Saved games are stored **in your browser**, separately for each browser and addr
 
 ## In-game settings
 
-Einstellungen → Grafik → **HD-Grafik** switches the HD interface; Einstellungen → **Erweitert** has optional comforts that are not in the original, all off by default.
+Einstellungen → Grafik → **HD-Grafik** switches the HD interface (Alle / Teilweise / Aus); Einstellungen → **Erweitert** has optional comforts that are not in the original, all off by default.
 
 ## Problems?
 

@@ -47,8 +47,10 @@ The menus use the game's own texts from your copy. The few menus added by OpenAl
 
 ## In-game settings worth knowing
 
-- **HD interface:** Settings (Einstellungen) → Graphics (Grafik) → **HD-Grafik** switches the
-  upscaled menus and side panels on or off.
+- **HD interface:** Settings (Einstellungen) → Graphics (Grafik) → **HD-Grafik** cycles through
+  **Alle** (upscaled menus and side panels, every building picture rendered sharp from the game's
+  own building sprites), **Teilweise** (only the building pictures that match the originals
+  exactly) and **Aus** (the original art).
 - **Enhanced options:** Settings → **Erweitert** has optional comfort features that differ from
   the original (selection rings, smoother movement, cursor hints, advisor queue). All are off by
   default; off means exactly the original behaviour.

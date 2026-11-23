@@ -97,12 +97,32 @@ export function imageError(a: Img, b: Img): number {
 }
 
 /** bounding box [left, top, right, bottom) of the clearly opaque pixels */
-function alphaBox(img: Img): [number, number, number, number] | null {
+export function alphaBox(img: Img): [number, number, number, number] | null {
   let l = img.w, t = img.h, r = -1, b = -1;
   for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
     if (img.px[(y * img.w + x) * 4 + 3] > 100) { if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y; }
   }
   return r < 0 ? null : [l, t, r + 1, b + 1];
+}
+
+/**
+ * Placement that puts the opaque box `sb` of a big sprite into the box `ib` of a picture: as large
+ * as fits, centred horizontally, standing on the box's bottom edge. Used for the "all" HD level
+ * where a picture is a separate render (other camera) or missing (err is not measured: NaN).
+ */
+export function boxFit(ib: [number, number, number, number], sb: [number, number, number, number]): IconFit {
+  const s = Math.min((ib[2] - ib[0]) / (sb[2] - sb[0]), (ib[3] - ib[1]) / (sb[3] - sb[1]));
+  return { s, ox: (ib[0] + ib[2]) / 2 - s * (sb[0] + sb[2]) / 2, oy: ib[3] - s * sb[3], err: NaN };
+}
+
+/** the box a generated picture fills when the original is missing (45 x 45 panel picture) */
+export const DEFAULT_ICON_BOX: [number, number, number, number] = [3, 3, 42, 43];
+
+/** OD slot of the world object a panel picture is rendered from: buildings 1, add-on ships 5 */
+export function worldSlot(type: number): number | undefined {
+  if (type >= 37 && type <= 63) return 1;
+  if (type >= 64 && type <= 67) return 5;
+  return undefined;
 }
 
 /**

@@ -17,8 +17,10 @@ export interface Settings {
   menuScroll: boolean;
   /** 0 off, 1 = 10 min, 2 = 20 min, 3 = 30 min */
   autosave: number;
-  /** upscaled menu and side-panel art from the HD pack, when the server has one */
-  hd: boolean;
+  /** HD art (side-panel.md "HD art"): 'all' = pack art plus every building picture rendered from
+   *  its world sprite, 'partly' = pack art plus the exact shrunk world sprites, 'off' = originals.
+   *  Older settings stored a boolean (true = 'all', false = 'off'). */
+  hd: 'all' | 'partly' | 'off';
   /** enhanced mode: draw a ring under selected objects (the original only tints them blue,
    * docs/rendering/objects.md 7.1) */
   selectionRings: boolean;
@@ -44,12 +46,21 @@ export interface Settings {
 }
 
 /** defaults of a new configuration (3.9; music = the GOG sample value) */
-const DEFAULTS: Settings = { alphaShadows: true, soundOn: true, effects: 100, music: 67, speech: 100, eax: false, menuScroll: false, autosave: 1, hd: true, selectionRings: false, smoothMovement: false, cursorHints: false, advisorQueue: false, smoothTerrain: false };
+const DEFAULTS: Settings = { alphaShadows: true, soundOn: true, effects: 100, music: 67, speech: 100, eax: false, menuScroll: false, autosave: 1, hd: 'all', selectionRings: false, smoothMovement: false, cursorHints: false, advisorQueue: false, smoothTerrain: false };
+
+/** settings stored by older builds */
+export function migrate(s: Settings): Settings {
+  const hd = s.hd as unknown;
+  if (hd === true) s.hd = 'all';
+  else if (hd === false) s.hd = 'off';
+  else if (hd !== 'all' && hd !== 'partly' && hd !== 'off') s.hd = DEFAULTS.hd;
+  return s;
+}
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) as Partial<Settings> };
+    if (raw) return migrate({ ...DEFAULTS, ...JSON.parse(raw) as Partial<Settings> });
   } catch { /* storage unavailable or broken */ }
   return { ...DEFAULTS };
 }

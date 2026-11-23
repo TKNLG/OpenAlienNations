@@ -14,7 +14,8 @@ import { format } from '../formats/tdb.ts';
 import { drawPage, pageFor, infoBuilding, MissingOperatorLine, MENTOR_NO_OPERATOR, PanelPages, defaultTypePage, pageObj, type PageCtx } from './hud-pages.ts';
 import { marketPagesAllowed } from './hud-pages-trade.ts';
 import { isTransport, isTrader, isMarketLike } from './addon-ui.ts';
-import { requestHdPortrait, requestHdUiIcon } from './hd-icons.ts';
+import { generatedPortrait, requestHdPortrait, requestHdUiIcon } from './hd-icons.ts';
+import { pixelHash } from '../formats/gd.ts';
 import { tintRgba, lookOf, type Tint } from './ui-tint.ts';
 
 export const PANEL_W = 192;
@@ -273,16 +274,23 @@ export class Hud {
     const desc = host.data.objects.get(key);
     const name = desc?.slots.find(s => s);
     const e = name ? host.data.sprites.entry(name) : undefined;
+    // a picture that cannot be loaded: say which and why, and generate one from the world sprite
+    // (shown while HD art is on; side-panel.md "HD art")
+    const missing = (why: string) => {
+      console.warn(`portrait of object ${race}:${type} (${name ?? 'no name in dv.OD'}): ${why}`);
+      const g = generatedPortrait(host.data, race, type, this.deviceScale);
+      if (g) { this.portraits.set(key, g); this.draw(); }
+    };
     if (e) {
       void host.data.sprites.frames(e, 0).then(fr => {
         const c = document.createElement('canvas');
         c.width = e.width; c.height = e.height;
         c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(fr[0].buffer, fr[0].byteOffset, fr[0].length), e.width, e.height), 0, 0);
         this.portraits.set(key, c);
-        requestHdPortrait(host.data, race, type, c, this.deviceScale);
+        requestHdPortrait(host.data, race, type, c, this.deviceScale, pixelHash(fr[0]));
         this.draw();
-      }).catch(() => { /* missing portrait */ });
-    }
+      }).catch(err => missing(`not decoded (${err instanceof Error ? err.message : String(err)})`));
+    } else if (desc) missing(name ? 'not in the sprite archive' : 'no picture named');
     return undefined;
   }
 

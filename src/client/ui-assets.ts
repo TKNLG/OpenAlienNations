@@ -1,9 +1,10 @@
 // Interface art (per race interface.gd) and bitmap fonts (*.dvf) for the HUD.
 // Each race's interface archive is ~2 MB and fetched once; sprites are decoded on first use.
 
-import { parseGdIndex, decodeGdFrames, type GdEntry } from '../formats/gd.ts';
+import { parseGdIndex, decodeGdFrames, pixelHash, type GdEntry } from '../formats/gd.ts';
 import { parseDvf, type Font } from '../formats/dvf.ts';
 import { fetchBytes } from './data.ts';
+import { pickPackKey, type HdManifest } from './hd-pack.ts';
 
 export const RACE_UI_DIR = ['AMAZONS', 'PIMONS', 'SAJIKI'];
 
@@ -12,39 +13,56 @@ export const RACE_UI_DIR = ['AMAZONS', 'PIMONS', 'SAJIKI'];
 // Optional upscaled versions of the menu and side-panel art (tools/hdpack, served under /hd/).
 // The 1x canvases stay the layout truth (sizes, hit tests); an HD image is linked to a canvas and
 // used whenever that canvas is drawn. drawImage is wrapped once so that every existing call site
-// picks the HD image up without knowing about it. Toggle: settings "HD-Grafik".
+// picks the HD image up without knowing about it. Setting "HD-Grafik" (docs/ui/side-panel.md
+// "HD art"): "all" = pack images plus every building picture rendered from its world sprite,
+// "partly" = pack images plus the pictures that are exact shrunk world sprites, "off" = originals.
 
 type HdImage = ImageBitmap | HTMLCanvasElement;
+export type HdMode = 'all' | 'partly' | 'off';
+/** pack image or verified render (the "partly" level) */
 const hdMap = new WeakMap<object, HdImage>();
+/** renders used only in "all" mode: pictures that are not exact shrunk world sprites */
+const hdLoose = new WeakMap<object, HdImage>();
 /** derivations (tints) to rebuild whenever a canvas gets its HD image */
 const hdDerived = new WeakMap<object, (() => void)[]>();
+/** sources with derivations, to rebuild them when the mode changes */
+const derivedSources = new Set<object>();
 /** canvases whose HD image is rendered from the world sprites (the pack must not replace it) */
 const hdRendered = new WeakSet<object>();
+let mode: HdMode = 'all';
 let hdOn = true;
-let hdManifest: Promise<{ scale: number; items: Record<string, string> } | null> | null = null;
+let hdManifest: Promise<HdManifest | null> | null = null;
 
-/** switch the HD art on or off (takes effect on the next frame) */
-export function setHdEnabled(on: boolean): void {
+/** set the HD level (takes effect on the next frame) */
+export function setHdMode(m: HdMode): void {
   const was = hdOn;
-  hdOn = on;
+  mode = m;
+  hdOn = m !== 'off';
+  for (const src of derivedSources) for (const f of hdDerived.get(src) ?? []) f();
   for (const f of hdListeners) f();
-  if (on && !was) for (const ui of allUi) ui.loadMissingHd();   // frames decoded while it was off
+  if (hdOn && !was) for (const ui of allUi) ui.loadMissingHd();   // frames decoded while it was off
 }
 const allUi = new Set<UiImages>();
 export function hdEnabled(): boolean { return hdOn; }
+export function hdMode(): HdMode { return mode; }
 
+/** the HD image a canvas is drawn with in the current mode, if any */
+function hdFor(c: object): HdImage | undefined {
+  if (!hdOn) return undefined;
+  return (mode === 'all' ? hdLoose.get(c) : undefined) ?? hdMap.get(c);
+}
 /** the HD image linked to a canvas, if any */
-export function hdOf(c: object): HdImage | undefined { return hdOn ? hdMap.get(c) : undefined; }
+export function hdOf(c: object): HdImage | undefined { return hdFor(c); }
 
 /** called whenever HD art arrives (screens that paint on demand repaint) */
 export const hdListeners = new Set<() => void>();
 let hdNotify = 0;
 
-function linkHd(c: object, hd: HdImage): void {
-  hdMap.set(c, hd);
+function changed(c: object): void {
   if (!hdNotify) hdNotify = requestAnimationFrame(() => { hdNotify = 0; for (const f of hdListeners) f(); });
   for (const f of hdDerived.get(c) ?? []) f();
 }
+function linkHd(c: object, hd: HdImage): void { hdMap.set(c, hd); changed(c); }
 
 /**
  * Link an HD image rendered here (hd-icons.ts: panel pictures from the world sprites). It takes
@@ -55,17 +73,28 @@ export function linkRenderedHd(c: object, hd: HdImage): void {
   linkHd(c, hd);
 }
 
+/** an HD image rendered from a world sprite that is not an exact match: shown in "all" mode only */
+export function linkLooseHd(c: object, hd: HdImage): void {
+  hdLoose.set(c, hd);
+  changed(c);
+}
+
 /**
  * A canvas derived from another (tinted copy, ...): build the same derivation from the source's
- * HD image too, now and whenever the source's HD image arrives or is replaced. `make` gets the
- * source and its pixel size.
+ * HD image too, now and whenever the source's HD image arrives, is replaced or the mode changes.
+ * `make` gets the source and its pixel size.
  */
 export function deriveHd(src: object, dst: object, make: (s: CanvasImageSource, w: number, h: number) => HTMLCanvasElement): void {
-  const go = () => { const h = hdMap.get(src); if (h) linkHd(dst, make(h, h.width, h.height)); };
+  const go = () => {
+    const h = (mode === 'all' ? hdLoose.get(src) : undefined) ?? hdMap.get(src);
+    if (h) hdMap.set(dst, make(h, h.width, h.height)); else hdMap.delete(dst);
+    changed(dst);
+  };
   const l = hdDerived.get(src) ?? [];
   l.push(go);
   hdDerived.set(src, l);
-  if (hdMap.has(src)) go();
+  derivedSources.add(src);
+  if (hdMap.has(src) || hdLoose.has(src)) go();
 }
 
 function manifest() {
@@ -74,9 +103,10 @@ function manifest() {
 }
 
 /** fetch an HD frame, scaled once (high quality) to the size it will be shown at */
-function loadHd(c: HTMLCanvasElement, key: string, target: number): void {
+function loadHd(c: HTMLCanvasElement, archive: string, name: string, frame: number, dataLength: number, target: number, hash?: string): void {
   void manifest().then(async m => {
-    const file = m?.items[key];
+    const key = m ? pickPackKey(m, archive, name, frame, dataLength, hash) : undefined;
+    const file = key && m!.items[key];
     if (!file) return;
     const blob = await (await fetch(`/hd/${file}`)).blob();
     const s = Math.max(1, Math.min(m!.scale, target));
@@ -90,11 +120,11 @@ function loadHd(c: HTMLCanvasElement, key: string, target: number): void {
 
 /**
  * Link the pack's image of a sprite of a world archive ("dv.gd", "addon.gd": the side-panel
- * portraits) to its canvas, scaled once to `target` pixels per pixel. A rendered image
- * (linkRenderedHd) wins over it.
+ * portraits) to its canvas, scaled once to `target` pixels per pixel. `hash`: the player's
+ * decoded picture (pixelHash). A rendered image (linkRenderedHd) wins over it.
  */
-export function requestPackHd(c: HTMLCanvasElement, archive: string, name: string, frame: number, dataLength: number, target: number): void {
-  if (!hdMap.has(c)) loadHd(c, `${archive}|${name}|${frame}|${dataLength}`, target);
+export function requestPackHd(c: HTMLCanvasElement, archive: string, name: string, frame: number, dataLength: number, target: number, hash?: string): void {
+  if (!hdMap.has(c)) loadHd(c, archive, name, frame, dataLength, target, hash);
 }
 
 // every drawImage of a canvas with a linked HD image draws the HD image into the same rectangle
@@ -105,7 +135,7 @@ export function requestPackHd(c: HTMLCanvasElement, archive: string, name: strin
     const orig = proto.drawImage;
     proto.drawImage = function (this: CanvasRenderingContext2D, img: unknown, ...rest: unknown[]) {
       const a = rest as number[];
-      const hd = hdOn && img && typeof img === 'object' ? hdMap.get(img) : undefined;
+      const hd = hdOn && img && typeof img === 'object' ? hdFor(img) : undefined;
       if (!hd) return orig.call(this, img, ...rest);
       const src = img as { width: number; height: number };
       const k = hd.width / src.width, kh = hd.height / src.height;
@@ -125,6 +155,8 @@ export class UiImages {
   private buf: Uint8Array;
   private byName: Map<string, GdEntry>;
   private cache = new Map<string, HTMLCanvasElement[]>();
+  /** pixel checksums of the decoded frames (the HD pack's match test) */
+  private hashes = new Map<string, string[]>();
   /** sprites decoded fully opaque whatever their stored alpha (menu backgrounds, front-end.md 1.1) */
   private opaque = new Set<string>();
 
@@ -166,7 +198,8 @@ export class UiImages {
   private requestHd(name: string, frames: HTMLCanvasElement[]): void {
     const e = this.byName.get(name);
     if (!e) return;
-    frames.forEach((c, f) => { if (!hdMap.has(c)) loadHd(c, `${this.hdKey}|${name}|${f}|${e.dataLength}`, this.hdTarget); });
+    const hashes = this.hashes.get(name);
+    frames.forEach((c, f) => { if (!hdMap.has(c)) loadHd(c, this.hdKey, name, f, e.dataLength, this.hdTarget, hashes?.[f]); });
   }
 
   loadMissingHd(): void { for (const [name, frames] of this.cache) this.requestHd(name, frames); }
@@ -180,6 +213,7 @@ export class UiImages {
       const rgba = decodeGdFrames(e, this.buf.subarray(e.dataOffset, e.dataOffset + e.dataLength), e.frames - 1, this.opaque.has(name), true);
       frames = rgba.map(px => toCanvas(px, e.width, e.height));
       this.cache.set(name, frames);
+      this.hashes.set(name, rgba.map(px => pixelHash(px)));
       if (hdOn) this.requestHd(name, frames);
     }
     return frames[Math.min(frame, frames.length - 1)];

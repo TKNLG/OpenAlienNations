@@ -64,7 +64,7 @@ Spielstände werden **in deinem Browser** gespeichert, getrennt für jeden Brows
 
 ## Einstellungen im Spiel
 
-Einstellungen → Grafik → **HD-Grafik** schaltet die HD-Oberfläche um; Einstellungen → **Erweitert** enthält optionale Komfortfunktionen, die es im Original nicht gibt, alle standardmäßig aus.
+Einstellungen → Grafik → **HD-Grafik** schaltet die HD-Oberfläche um (Alle / Teilweise / Aus); Einstellungen → **Erweitert** enthält optionale Komfortfunktionen, die es im Original nicht gibt, alle standardmäßig aus.
 
 ## Probleme?
 
