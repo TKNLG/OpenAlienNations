@@ -17,6 +17,7 @@ import { loadSettings, saveSettings, getUiScale, setUiScale, UI_SCALES, getProgr
 import { applyFreePlay, randomSeed, spDefaults, FREEPLAY_CAMPAIGN, type FreePlayParams } from './freeplay.ts';
 import { Multiplayer } from './multiplayer.ts';
 import { setHdMode } from '../ui-assets.ts';
+import { t, type TextError } from '../i18n.ts';
 
 /** what the front end needs from the running game (implemented by the Game class in main.ts) */
 export interface GameHost {
@@ -147,7 +148,7 @@ export class FrontEndApp {
   /** "Spiel verlassen": a browser tab cannot quit; try to close it, else say so */
   private quit(): void {
     window.close();
-    setTimeout(() => this.fe.message('Du kannst das Browserfenster jetzt schließen.'), 200);
+    setTimeout(() => this.fe.message(t('Du kannst das Browserfenster jetzt schließen.')), 200);
   }
 
   // ---------------------------------------------------------------- 3.3 single-player mode
@@ -201,7 +202,7 @@ export class FrontEndApp {
 
   async missionList(c: Campaign): Promise<void> {
     let ms: Mission[];
-    try { ms = await this.missions(c); } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); return; }
+    try { ms = await this.missions(c); } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); return; }
     const last = Math.min(getProgress(c.id), ms.length - 1);
     const list = new ListBox(R(220, 330, 580, 450), { onPick: i => void this.briefing(c, i) }).layout(this.a);
     list.setLines(ms.slice(0, last + 1).map((m, i) => ({ text: m.title, value: i })));
@@ -218,12 +219,12 @@ export class FrontEndApp {
       m = override ?? (await this.missions(c))[index];
       await this.ready;
       rules = this.data.rules;
-    } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); return; }
+    } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); return; }
     if (!m) { this.mainMenu(); return; }
     const race = c.id === 'tutorials' ? 1 : m.humanRace >= 0 ? m.humanRace : 0;
     // briefing text, then the decoded goals (our addition: the original only has the text)
-    const goals = m.goals.map(g => `- ${g.defeat ? 'Niederlage, wenn: ' : ''}${describeGoal(g, race, rules)}`);
-    const text = `${m.briefing.trimEnd()}\n\nMissionsziele:\n${goals.join('\n')}`;
+    const goals = m.goals.map(g => `- ${g.defeat ? t('Niederlage, wenn: ') : ''}${describeGoal(g, race, rules)}`);
+    const text = `${m.briefing.trimEnd()}\n\n${t('Missionsziele:')}\n${goals.join('\n')}`;
     // add-on records use their own briefing art and layout (addon.md 11.3)
     const ao = !!m.addon;
     const list = new ListBox(ao ? R(220, 270, 570, 450) : R(220, 260, 597, 450), { onPick: null, align: 'L', spacing: 1.0 }).layout(this.a);
@@ -295,7 +296,7 @@ export class FrontEndApp {
       const base = (await this.missions(camp))[race];
       const mission = applyFreePlay(base, this.free, randomSeed());
       await this.startSession({ kind: 'free', campaign: camp, index: race, race, mission });
-    } catch (err) { this.fe.message(`Fehler: ${errText(err)}`, () => this.mainMenu()); }
+    } catch (err) { this.fe.message(t('Fehler: {0}', errText(err)), () => this.mainMenu()); }
   }
 
   /** the loading screen, painted at once (no progress bar, no text) */
@@ -320,7 +321,7 @@ export class FrontEndApp {
       this.enterGame();
     } catch (err) {
       console.error(err);
-      this.fe.message(`Fehler: ${errText(err)}`, () => this.mainMenu());
+      this.fe.message(t('Fehler: {0}', errText(err)), () => this.mainMenu());
     }
   }
 
@@ -384,7 +385,7 @@ export class FrontEndApp {
     const count = (await this.missions(s.campaign)).length;
     if (s.index + 1 < count) { await this.briefing(s.campaign, s.index + 1); return; }
     // campaign complete: the original plays the race's outro video (AVI, not playable here)
-    if (s.kind === 'campaign') { this.mainMenu(); this.fe.message('Kampagne abgeschlossen!'); } else this.mainMenu();
+    if (s.kind === 'campaign') { this.mainMenu(); this.fe.message(t('Kampagne abgeschlossen!')); } else this.mainMenu();
   }
 
   // ---------------------------------------------------------------- 3.11 in-game options menu
@@ -511,7 +512,7 @@ export class FrontEndApp {
       this.button(R(230, 371, 565, 400), this.s(287), () => this.controls(from)),
       this.button(R(230, 401, 565, 430), this.s(323), () => void this.deleteList(from)),
       // our addition: the optional "enhanced" comfort options (docs/roadmap.md)
-      this.button(R(230, 431, 565, 460), 'Erweitert', () => this.enhanced(from)),
+      this.button(R(230, 431, 565, 460), t('Erweitert'), () => this.enhanced(from)),
       this.back(R(340, 470, 460, 490), back),
     ], back);
   }
@@ -522,21 +523,21 @@ export class FrontEndApp {
     const st = this.settings, again = () => this.graphics(from), back = () => this.settingsMenu(from);
     const onOff = (v: boolean) => this.s(v ? 80 : 81);
     const scale = getUiScale();
-    const scaleText = scale === 0 ? 'Auto' : `${Math.round(scale * 100)} %`;
+    const scaleText = scale === 0 ? t('Auto') : `${Math.round(scale * 100)} %`;
     this.show([
       this.title(this.s(88)),
-      this.label(R(230, 320, 539, 350), 'Vollbild:'),
+      this.label(R(230, 320, 539, 350), t('Vollbild:')),
       this.value(R(540, 320, 585, 350), onOff(!!document.fullscreenElement), () => {
         const p = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
         p.catch(() => {}).finally(() => setTimeout(again, 100));
       }),
       this.label(R(230, 350, 539, 380), this.s(90)),
       this.value(R(540, 350, 585, 380), onOff(st.alphaShadows), () => { st.alphaShadows = !st.alphaShadows; this.changed(); again(); }),
-      this.label(R(230, 380, 439, 410), 'Bedienleiste:'),
+      this.label(R(230, 380, 439, 410), t('Bedienleiste:')),
       this.value(R(475, 380, 585, 410), scaleText, () => { setUiScale(UI_SCALES[(UI_SCALES.indexOf(scale) + 1) % UI_SCALES.length]); again(); }),
       // HD art (our addition): all / partly / off, one click to the next (side-panel.md "HD art")
-      this.label(R(230, 410, 439, 440), 'HD-Grafik:'),
-      this.value(R(475, 410, 585, 440), st.hd === 'all' ? 'Alle' : st.hd === 'partly' ? 'Teilweise' : this.s(81), () => {
+      this.label(R(230, 410, 439, 440), t('HD-Grafik:')),
+      this.value(R(475, 410, 585, 440), st.hd === 'all' ? t('Alle') : st.hd === 'partly' ? t('Teilweise') : this.s(81), () => {
         st.hd = st.hd === 'all' ? 'partly' : st.hd === 'partly' ? 'off' : 'all';
         setHdMode(st.hd); this.changed(); again();
       }),
@@ -585,15 +586,15 @@ export class FrontEndApp {
     const st = this.settings, again = () => this.enhanced(from), back = () => this.settingsMenu(from);
     const onOff = (v: boolean) => this.s(v ? 80 : 81);
     const rows: [string, 'selectionRings' | 'smoothMovement' | 'cursorHints' | 'advisorQueue' | 'smoothTerrain'][] = [
-      ['Auswahlringe:', 'selectionRings'],
-      ['Flüssige Bewegung:', 'smoothMovement'],
-      ['Cursor-Hinweise:', 'cursorHints'],
-      ['Berater-Warteschlange:', 'advisorQueue'],
-      ['Glattes Gelände:', 'smoothTerrain'],
+      [t('Auswahlringe:'), 'selectionRings'],
+      [t('Flüssige Bewegung:'), 'smoothMovement'],
+      [t('Cursor-Hinweise:'), 'cursorHints'],
+      [t('Berater-Warteschlange:'), 'advisorQueue'],
+      [t('Glattes Gelände:'), 'smoothTerrain'],
     ];
     const w: Widget[] = [
-      this.title('Erweitert'),
-      this.label(R(230, 300, 585, 329), 'Abweichend vom Original, wirken sofort. Aus = Original.', 'C', 'dv7pts2'),
+      this.title(t('Erweitert')),
+      this.label(R(230, 300, 585, 329), t('Abweichend vom Original, wirken sofort. Aus = Original.'), 'C', 'dv7pts2'),
     ];
     rows.forEach(([text, key], i) => {
       const y = 330 + i * 28;
@@ -624,7 +625,7 @@ export class FrontEndApp {
 
   async loadList(from: From, exportMode = false): Promise<void> {
     let infos: SaveInfo[];
-    try { infos = await this.saveInfos(); } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); return; }
+    try { infos = await this.saveInfos(); } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); return; }
     const back = () => (from === 'main' ? this.mainMenu() : this.optionsMenu());
     const list = this.listBox(v => {
       const info = infos[v];
@@ -634,11 +635,11 @@ export class FrontEndApp {
     list.setLines(infos.map((i, k) => ({ text: this.saveLine(i), value: k })));
     // browser storage is not permanent: export / import .ansave files (our addition)
     this.show([
-      this.title(exportMode ? 'Spielstand exportieren' : this.s(67)),
+      this.title(exportMode ? t('Spielstand exportieren') : this.s(67)),
       list,
       this.back(R(340, 470, 460, 490), exportMode ? () => void this.loadList(from) : back),
-      this.button(R(230, 505, 390, 525), 'Importieren', () => this.importSave(from)),
-      this.button(R(410, 505, 570, 525), exportMode ? this.s(67) : 'Exportieren', () => void this.loadList(from, !exportMode)),
+      this.button(R(230, 505, 390, 525), t('Importieren'), () => this.importSave(from)),
+      this.button(R(410, 505, 570, 525), exportMode ? this.s(67) : t('Exportieren'), () => void this.loadList(from, !exportMode)),
     ], back);
   }
 
@@ -649,7 +650,7 @@ export class FrontEndApp {
     inp.onchange = async () => {
       const f = inp.files?.[0];
       if (!f) return;
-      try { await saves.importFile(f); await this.loadList(from); } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); }
+      try { await saves.importFile(f); await this.loadList(from); } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); }
     };
     inp.click();
   }
@@ -680,7 +681,7 @@ export class FrontEndApp {
 
   private async saveList(): Promise<void> {
     let infos: SaveInfo[];
-    try { infos = (await this.saveInfos()).filter(i => i.id !== 'autosave' && i.id !== 'quicksave'); } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); return; }
+    try { infos = (await this.saveInfos()).filter(i => i.id !== 'autosave' && i.id !== 'quicksave'); } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); return; }
     const list = this.listBox(v => this.saveName(v < 0 ? null : infos[v]));
     list.setLines([{ text: this.s(77), value: -1 }, ...infos.map((i, k) => ({ text: this.saveLine(i), value: k }))]);
     const back = () => this.optionsMenu();
@@ -703,7 +704,7 @@ export class FrontEndApp {
     let failure = '';
     try {
       const save = this.host?.makeSave(name.trim() || this.s(72));
-      if (!save) failure = 'kein laufendes Spiel';
+      if (!save) failure = t('kein laufendes Spiel');
       else {
         if (target) save.id = target.id;
         if (this.session?.mission) save.missionData ??= this.session.mission;
@@ -716,7 +717,7 @@ export class FrontEndApp {
 
   private async deleteList(from: From): Promise<void> {
     let infos: SaveInfo[];
-    try { infos = await this.saveInfos(); } catch (err) { this.fe.message(`Fehler: ${errText(err)}`); return; }
+    try { infos = await this.saveInfos(); } catch (err) { this.fe.message(t('Fehler: {0}', errText(err))); return; }
     const back = () => this.settingsMenu(from);
     const list = this.listBox(v => this.fe.ask(this.s(324), () => void saves.remove(infos[v].id).then(() => this.deleteList(from))));
     list.setLines(infos.map((i, k) => ({ text: this.saveLine(i), value: k })));
@@ -726,7 +727,12 @@ export class FrontEndApp {
 
 // ---------------------------------------------------------------- helpers
 
-export const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** an error's message for the player; engine errors carrying a text key are translated */
+export const errText = (err: unknown) => {
+  if (!(err instanceof Error)) return String(err);
+  const key = (err as TextError).i18n;
+  return key ? t(...key) : err.message;
+};
 
 /** resolves after the browser painted the current frame (so the loading screen is visible) */
 export const nextPaint = () => new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 0)));

@@ -188,7 +188,7 @@ async function fatal(message: string, launcher: boolean): Promise<never> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  // language first: --lang de|en, AN_LANG, else the system language (detected on first use)
+  // language first: --lang de|en|fr, AN_LANG, else the system language (detected on first use)
   configureLang({ arg: langArg(argv), env: process.env, platform: process.platform, intlLocale: intlLocale(), uiCulture: windowsUiCulture });
   const bad = badLangValue(langArg(argv), process.env);
   if (bad !== null) console.warn(tr().badLang(bad));

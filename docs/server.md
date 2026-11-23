@@ -61,8 +61,8 @@ see [install.md](install.md#music).
 ### Language in a container
 
 The console texts follow the system language, and the container has none set, so it speaks
-English. For German console texts add `-e AN_LANG=de` (Compose: `AN_LANG: de`). The game's
-menus are not affected; they come from your game files.
+English. For German console texts add `-e AN_LANG=de` (Compose: `AN_LANG: de`), for French
+`-e AN_LANG=fr`. The game's menus are not affected: they follow the language of your game files.
 
 ### Unraid and other NAS
 

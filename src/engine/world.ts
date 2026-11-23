@@ -1380,7 +1380,7 @@ export class World {
 
   /** rebuild a world from a snapshot taken on the same mission */
   static restore(terrain: Terrain, snap: WorldSnapshot, rules: Map<number, ObjectRule> = new Map(), weapons: Weapon[] = []): World {
-    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23 && snap.v !== 24) throw new Error(`Spielstand-Version ${snap.v} wird nicht unterstützt`);
+    if (snap.v !== SNAPSHOT_VERSION && snap.v !== 2 && snap.v !== 3 && snap.v !== 4 && snap.v !== 5 && snap.v !== 6 && snap.v !== 7 && snap.v !== 8 && snap.v !== 9 && snap.v !== 10 && snap.v !== 11 && snap.v !== 12 && snap.v !== 13 && snap.v !== 14 && snap.v !== 15 && snap.v !== 16 && snap.v !== 17 && snap.v !== 18 && snap.v !== 19 && snap.v !== 20 && snap.v !== 21 && snap.v !== 22 && snap.v !== 23 && snap.v !== 24) throw Object.assign(new Error(`save game version ${snap.v} is not supported`), { i18n: ['Spielstand-Version {0} wird nicht unterstützt', snap.v] }); // translated by the client (i18n.ts TextError)
     const w = new World(terrain, [], rules);
     w.weapons = weapons;
     // terrain edits go onto the freshly generated terrain before anything reads it

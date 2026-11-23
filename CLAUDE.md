@@ -35,7 +35,9 @@ copy it and note it.
    read-only, present a plan with exact commands, wait for a go-ahead.
 4. **Commit and push regularly** to `origin main`; leave the working tree clean at the end of a
    session. Plain commit messages: no Co-Authored-By or session-link trailers (project decision).
-5. The game UI is German; docs, code and comments are English.
+5. The game's own texts come from the player's data files (German, English or French edition).
+   Every text we add goes through `src/client/i18n.ts` (`t('German text')`) with English and
+   French entries (`test/i18n-client.test.ts` checks it). Docs, code and comments are English.
 6. Keep the tree neutral: no personal data, machine-specific paths or environment details in
    tracked files. Those go into the git-ignored `local/` folder.
 
@@ -88,5 +90,5 @@ copy it and note it.
   criminals).
 - Verify visuals yourself before claiming a fix: UI changes in headless Chromium (Playwright)
   with screenshots (`tools/shot.py` and the other `tools/*_test.py` scripts).
-- Settings UI style: the "Erweitert" menu uses the game's own widgets and German labels; keep new
-  options consistent with it.
+- Settings UI style: the "Erweitert" menu uses the game's own widgets and labels through `t()`
+  (German key, English and French translations); keep new options consistent with it.

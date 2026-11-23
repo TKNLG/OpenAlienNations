@@ -8,6 +8,7 @@
 
 import type { MenuAssets } from './assets.ts';
 import { hdListeners } from '../ui-assets.ts';
+import { t } from '../i18n.ts';
 import { C, Image, Label, R, TextButton, TextEdit, type Ui, type Widget } from './widgets.ts';
 
 export interface Screen {
@@ -65,7 +66,7 @@ export class FrontEnd implements Ui {
     this.input.type = 'text';
     this.input.autocomplete = 'off';
     this.input.spellcheck = false;
-    this.input.setAttribute('aria-label', 'Texteingabe');
+    this.input.setAttribute('aria-label', t('Texteingabe'));
     Object.assign(this.input.style, { position: 'absolute', opacity: '0', border: '0', padding: '0', fontSize: '16px', background: 'transparent', color: 'transparent', caretColor: 'transparent', pointerEvents: 'none' });
     this.root.append(this.canvas, this.input);
     document.body.append(this.root);

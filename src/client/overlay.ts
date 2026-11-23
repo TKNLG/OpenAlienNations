@@ -11,6 +11,7 @@ import type { World } from '../engine/world.ts';
 import type { BitmapFont, FontName } from './ui-assets.ts';
 import { Hud } from './hud.ts';
 import { loadSettings } from './frontend/settings.ts';
+import { t } from './i18n.ts';
 import { AdvisorVoice, AdvisorQueue, type AdvisorPlayer, type AdvisorQueueIo } from './advisor-voice.ts';
 
 const LINE_MS = 5000;
@@ -84,7 +85,7 @@ export class Overlay {
     this.advisor.frame();   // the per-frame step (side-panel.md 1.1.2; the queue's fallback)
     const now = performance.now();
     this.lines = this.lines.filter(l => l.until > now);
-    const tip = this.hud.tooltip || hint || (placing ? 'Linksklick: Bauplatz wählen · Rechtsklick/Esc: abbrechen' : '');
+    const tip = this.hud.tooltip || hint || (placing ? t('Linksklick: Bauplatz wählen · Rechtsklick/Esc: abbrechen') : '');
     const key = this.lines.map(l => l.text).join('|') + '#' + tip + '#' + this.canvas.clientWidth + 'x' + this.canvas.clientHeight + '@' + this.hud.scale;
     if (key === this.lastKey || !this.fonts) return;
     this.lastKey = key;

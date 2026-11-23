@@ -41,9 +41,11 @@ job fails if any such file is tracked). Players point the program at their own i
 
 - The Node version is pinned by `NODE_VERSION` in the workflow (an LTS line; pin an exact
   version for reproducible builds). The executables are that Node binary plus our blob.
-- The launcher texts (console, dialogs, `--help`) are German or English, chosen by the system
-  language, `--lang de|en` or `AN_LANG` (`src/server/i18n.ts`; a new text needs both languages,
-  `test/i18n.test.ts` checks it). The release notes the workflow writes are English.
+- The launcher texts (console, dialogs, `--help`) are German, English or French, chosen by the
+  system language, `--lang de|en|fr` or `AN_LANG` (`src/server/i18n.ts`; a new text needs all
+  three languages, `test/i18n.test.ts` checks it). The client's own texts follow the language of
+  the game data (`src/client/i18n.ts`: `t('German text')`, English and French in its table;
+  `test/i18n-client.test.ts` checks every key). The release notes the workflow writes are English.
 - The actions in the workflow are pinned to major versions that run on Node 24 (checkout v7,
   setup-node v7, upload-artifact v7, download-artifact v8, docker/setup-buildx v4, login v4,
   metadata v6, build-push v7).

@@ -1,6 +1,7 @@
-// Player-facing texts of the server / launcher (console, dialogs, --help) in German and English.
-// The language: --lang de|en, else AN_LANG, else the system language (German for any German
-// locale: de, de-DE, de-AT, de-CH, ...; English otherwise).
+// Player-facing texts of the server / launcher (console, dialogs, --help) in German, English and
+// French. The language: --lang de|en|fr, else AN_LANG, else the system language (German for any
+// German locale: de, de-DE, de-AT, de-CH, ...; French for any French one: fr, fr-FR, fr-CA, ...;
+// English otherwise).
 //
 // System language without dependencies:
 //   - Linux / macOS: the POSIX locale variables as gettext reads them (LANGUAGE, unless the locale
@@ -14,16 +15,18 @@
 
 import { spawnSync } from 'node:child_process';
 
-export type Lang = 'de' | 'en';
+export type Lang = 'de' | 'en' | 'fr';
 
 const WIN = process.platform === 'win32';
 
-/** 'de' / 'en' for a locale or language name ("de_AT.UTF-8", "de-CH", "German_Germany.1252",
- *  "en_US"), null when it names none ("", "C", "POSIX") */
+/** 'de' / 'fr' / 'en' for a locale or language name ("de_AT.UTF-8", "de-CH", "German_Germany.1252",
+ *  "fr_CA", "French_France.1252", "en_US"), null when it names none ("", "C", "POSIX") */
 export function langOfLocale(tag: string | undefined): Lang | null {
   const lang = (tag ?? '').trim().split(/[-_.@:]/)[0].toLowerCase();
   if (!lang || lang === 'c' || lang === 'posix') return null;
-  return lang === 'de' || lang === 'gsw' || lang === 'deu' || lang === 'ger' || lang === 'german' || lang === 'deutsch' ? 'de' : 'en';
+  if (lang === 'de' || lang === 'gsw' || lang === 'deu' || lang === 'ger' || lang === 'german' || lang === 'deutsch') return 'de';
+  if (lang === 'fr' || lang === 'fra' || lang === 'fre' || lang === 'french' || lang === 'français' || lang === 'francais') return 'fr';
+  return 'en';
 }
 
 /** the value of --lang on a command line ('' when it is the last argument), undefined if absent */
@@ -35,11 +38,12 @@ export function langArg(argv: string[]): string | undefined {
   return undefined;
 }
 
-/** an explicit choice (--lang / AN_LANG): de or en, also "de-DE", "deutsch", "english";
- *  null for anything else (then the system language decides) */
+/** an explicit choice (--lang / AN_LANG): de, en or fr, also "de-DE", "deutsch", "english",
+ *  "fr-CA", "français"; null for anything else (then the system language decides) */
 export function explicitLang(v: string | undefined): Lang | null {
-  const m = /^(de|en|deutsch|german|english)(?:[-_].*)?$/i.exec((v ?? '').trim());
-  return m ? (/^(de|deutsch|german)$/i.test(m[1]) ? 'de' : 'en') : null;
+  const m = /^(de|en|fr|deutsch|german|english|french|fran[cç]ais)(?:[-_].*)?$/i.exec((v ?? '').trim());
+  if (!m) return null;
+  return /^(de|deutsch|german)$/i.test(m[1]) ? 'de' : /^(fr|french|fran[cç]ais)$/i.test(m[1]) ? 'fr' : 'en';
 }
 
 /** the POSIX locale for messages as gettext determines it */
@@ -69,7 +73,7 @@ export function detectLang(input: LangInput): Lang {
     if (posix) return posix;
   }
   const intl = langOfLocale(input.intlLocale);
-  if (intl === 'de') return 'de';
+  if (intl === 'de' || intl === 'fr') return intl;
   if (input.platform === 'win32' && /^(en-US|und|)$/i.test(input.intlLocale ?? '') && input.uiCulture) {
     return langOfLocale(input.uiCulture()) ?? 'en';
   }
@@ -106,12 +110,12 @@ const en = {
   --setup, --reset   choose the game folder again (packaged builds remember it in ${config})
   --no-browser       do not open the browser
   --open             open the browser (plain node runs do not by default)
-  --lang de|en       language of these texts, default: the system language (env AN_LANG)
+  --lang de|en|fr    language of these texts, default: the system language (env AN_LANG)
   --version          print the version
 `,
   unknownOption: (a: string) => `! unknown option ${a} (--help lists them)`,
   badPort: '! bad port, using 8080',
-  badLang: (v: string) => `! unknown language "${v}", use de or en`,
+  badLang: (v: string) => `! unknown language "${v}", use de, en or fr`,
 
   // choosing the game folder
   intro: 'Welcome to OpenAlienNations!\n\n'
@@ -171,12 +175,12 @@ const de: Strings = {
   --setup, --reset   den Spielordner neu wählen (die gepackte Version merkt ihn sich in ${config})
   --no-browser       den Browser nicht öffnen
   --open             den Browser öffnen (ein einfacher node-Start tut das sonst nicht)
-  --lang de|en       Sprache dieser Texte, Standard: die Systemsprache (env AN_LANG)
+  --lang de|en|fr    Sprache dieser Texte, Standard: die Systemsprache (env AN_LANG)
   --version          die Version anzeigen
 `,
   unknownOption: (a: string) => `! Unbekannte Option ${a} (--help zeigt alle)`,
   badPort: '! Ungültiger Port, verwende 8080',
-  badLang: (v: string) => `! Unbekannte Sprache „${v}“, möglich sind de und en`,
+  badLang: (v: string) => `! Unbekannte Sprache „${v}“, möglich sind de, en und fr`,
 
   intro: 'Willkommen bei OpenAlienNations!\n\n'
     + 'Dieser Open-Source-Nachbau spielt Alien Nations (Die Völker) in deinem Webbrowser. Dafür braucht er die Spieldateien deiner '
@@ -220,7 +224,68 @@ const de: Strings = {
   pressEnter: 'Drücke die Eingabetaste, um dieses Fenster zu schließen.',
 };
 
-export const STRINGS: Record<Lang, Strings> = { en, de };
+const fr: Strings = {
+  usage: (config: string) => `utilisation : OpenAlienNations [options]          (ou : node dist/server.mjs [options])
+
+  --game <dossier>   ton installation d'Alien Nations, le dossier qui contient Data et Bin (env AN_GAME)
+  --music <dossier>  dossier de la bande-son si le dossier du jeu n'en a pas, p. ex. <installation GOG>/Bin/music (env AN_MUSIC)
+  --hd <dossier>     pack d'interface HD de ce dossier au lieu du pack intégré (env AN_HD)
+  --port <n>         port, 8080 par défaut ; sans --port, le suivant libre est pris si 8080 est occupé (env AN_PORT)
+  --host <adresse>   adresse d'écoute, 0.0.0.0 par défaut = cet ordinateur et le réseau (env AN_HOST) ;
+                     127.0.0.1 = cet ordinateur seulement
+  --setup, --reset   choisir à nouveau le dossier du jeu (la version empaquetée le retient dans ${config})
+  --no-browser       ne pas ouvrir le navigateur
+  --open             ouvrir le navigateur (un simple lancement avec node ne le fait pas)
+  --lang de|en|fr    langue de ces textes, par défaut : la langue du système (env AN_LANG)
+  --version          afficher la version
+`,
+  unknownOption: (a: string) => `! option inconnue ${a} (--help les liste toutes)`,
+  badPort: '! port non valide, utilisation de 8080',
+  badLang: (v: string) => `! langue inconnue « ${v} », choix possibles : de, en ou fr`,
+
+  intro: 'Bienvenue dans OpenAlienNations !\n\n'
+    + "Ce remake open source fait tourner Alien Nations (Les Peuples) dans ton navigateur web. Il a besoin des fichiers de données "
+    + "de ta propre version d'Alien Nations (GOG, ou le CD / la Gold Edition installés sur cet ordinateur).\n\n"
+    + 'Choisis le dossier dans lequel le jeu est installé : celui qui contient les dossiers « Data » et « Bin »'
+    + (WIN ? ' (par exemple C:\\GOG Games\\Alien Nations).' : '.'),
+  introFound: (dir: string) => `Une installation a été trouvée ici, elle est déjà sélectionnée :\n${dir}`,
+  notInstall: (dir: string) => `Ce dossier n'est pas une installation d'Alien Nations :\n${dir}\n\n`
+    + "Il ne contient pas de dossier « Data » avec le fichier dv.gd. Choisis le dossier qui contient « Data » et « Bin ».",
+  pickTitle: "Choisis ton dossier Alien Nations (celui qui contient « Data » et « Bin »)",
+  chooseButton: 'Choisir le dossier',
+  quitButton: 'Quitter',
+  prompt: 'Dossier du jeu',
+  notGameFolder: (dir: string) => `! pas un dossier Alien Nations : ${dir}`,
+  savedGone: (dir: string) => `! Le dossier du jeu enregistré a disparu ou a changé : ${dir}`,
+  foundAt: (dirs: string) => `Alien Nations trouvé : ${dirs}`,
+  saved: (file: string) => `Ton choix est enregistré dans ${file} (lance avec --setup pour choisir à nouveau).`,
+  saveFailed: (file: string, err: string) => `! impossible d'enregistrer ${file} : ${err}`,
+  noFolder: "Aucun dossier de jeu choisi, le jeu ne peut donc pas démarrer. Relance-le pour choisir le dossier.",
+
+  soundtrack: (dir: string, n: number) => `bande-son : ${dir} (${n} morceaux)`,
+  hdPack: (where: string) => `pack HD : ${where}`,
+  builtIn: 'intégré',
+  noData: (dir: string) => `! Aucune donnée de jeu trouvée dans ${dir}\n`
+    + "  Copie-y ton installation d'Alien Nations (le dossier qui contient Data/ et Bin/),\n"
+    + '  ou lance avec --game <dossier>. Le serveur continue de tourner et vérifie à nouveau à chaque requête.',
+  gameData: (dir: string, n: number) => `données du jeu : ${dir} (${n} fichiers)`,
+  portNext: (port: number) => `le port ${port} est occupé, essai de ${port + 1}`,
+  portBusy: (port: number) => `! Le port ${port} est déjà utilisé (OpenAlienNations tourne-t-il déjà ?). `
+    + 'Ferme l\'autre programme ou lance avec --port <autre port>.',
+  listenFailed: (where: string, err: string) => `! Impossible d'écouter sur ${where} : ${err}`,
+  listening: (version: string, where: string) => `OpenAlienNations ${version} à l'écoute sur ${where}`,
+  playHere: 'Jouer sur cet ordinateur :',
+  listeningOn: 'À l\'écoute sur :',
+  friends: 'Les amis sur ton réseau ou ton VPN (Tailscale, ZeroTier, Hamachi) rejoignent la partie via :',
+  internet: (port: number) => `Par Internet : redirige le port TCP ${port} de ton routeur vers cet ordinateur.`,
+  onlyHere: '(seul cet ordinateur peut se connecter ; lance avec --host 0.0.0.0 pour que des amis puissent jouer)',
+  keepOpen: 'Laisse cette fenêtre ouverte pendant que tu joues. Ferme-la (ou appuie sur Ctrl+C) pour arrêter le serveur.',
+  ctrlC: 'Appuie sur Ctrl+C pour arrêter le serveur.',
+  noBrowser: (url: string) => `(impossible d'ouvrir un navigateur, ouvre ${url} toi-même)`,
+  pressEnter: 'Appuie sur Entrée pour fermer cette fenêtre.',
+};
+
+export const STRINGS: Record<Lang, Strings> = { en, de, fr };
 
 let input: LangInput | null = null;
 let current: Lang | null = null;
@@ -239,7 +304,7 @@ export function getLang(): Lang {
 /** the texts in the current language */
 export function tr(): Strings { return STRINGS[getLang()]; }
 
-/** a --lang / AN_LANG value that is neither de nor en (for a warning), else null */
+/** a --lang / AN_LANG value that is not de, en or fr (for a warning), else null */
 export function badLangValue(arg: string | undefined, env: Record<string, string | undefined>): string | null {
   if (arg !== undefined && !explicitLang(arg)) return arg;
   if (arg === undefined && env.AN_LANG && !explicitLang(env.AN_LANG)) return env.AN_LANG;

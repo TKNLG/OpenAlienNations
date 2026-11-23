@@ -26,7 +26,8 @@ import { fetchBytes } from './data.ts';
 import { Minimap } from './minimap.ts';
 import { Vision } from './vision.ts';
 import { placementAllowed, ghostAllowed, foundingAllowed } from './placement.ts';
-import { showBriefing } from './briefing.ts';
+import { showBriefing, raceName } from './briefing.ts';
+import { t, setLang, detectLang, lang, locale } from './i18n.ts';
 import { Looks, type Pick } from './looks.ts';
 import { Displays, isFish, offsetPixels, type DisplayRng } from './display.ts';
 import { compositeHit, frontToBack, categoryOf, chooseSelection, combineSelection, targetUnderCursor, CLICK_PX, CLICK_GROW, DOUBLE_MS,
@@ -51,7 +52,9 @@ import { startFrontEnd, openGameMenu, openRenameDialog, FREEPLAY_CAMPAIGN, apply
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = (msg: string) => { $('status').textContent = msg; };
-const RACE_NAMES = ['Amazonen', 'Pimmons', 'Sajiki'];
+/** texts used in Game.frame(), whose parameter is named t */
+const patrolHint = () => t('Linksklick: Wegpunkt (Strg: weitere) · Rechtsklick: fertig');
+const desyncText = (tick: number) => t('Achtung: Spielstände weichen ab (Tick {0})', tick);
 
 
 class Game implements HudHost {
@@ -131,7 +134,7 @@ class Game implements HudHost {
     this.canvas = canvas;
     this.data = data;
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
-    if (!gl) throw new Error('WebGL2 wird von diesem Browser nicht unterstützt.');
+    if (!gl) throw new Error(t('WebGL2 wird von diesem Browser nicht unterstützt.'));
     this.gl = gl;
     this.terrainR = new TerrainRenderer(gl, data.terrainSets);
     this.atlas = new SpriteAtlas(gl);
@@ -218,7 +221,7 @@ class Game implements HudHost {
   /** `override`: an already modified record (free play, docs/ui/front-end.md 6.2) instead of record `index` */
   async loadMission(c: Campaign, index: number, player?: number, snapshot?: WorldSnapshot, humans?: number[], override?: Mission): Promise<void> {
     this.lockstep = null;
-    status('Lade Mission …');
+    status(t('Lade Mission …'));
     const m = override ?? (await this.data.missions(c))[index];
     this.player = player ?? (m.humanRace >= 0 ? m.humanRace : 0);
     this.mission = m;
@@ -235,7 +238,7 @@ class Game implements HudHost {
     if (m.addon && m.seed === -2) {
       // add-on campaign map: the terrain is stored in the map file (addon.md 8.2)
       file = await this.data.mapFile(m);
-      if (!file?.terrain) throw new Error(`${m.mapFile}: keine Geländedaten`);
+      if (!file?.terrain) throw new Error(t('{0}: keine Geländedaten', m.mapFile));
       terrain = addonTerrainFromStored(file.terrain);
     } else if (isGeneratedWorld(m)) {
       // free play / random maps, islands in add-on mode (addon.md 9, 10). A save is rebuilt through
@@ -274,7 +277,7 @@ class Game implements HudHost {
 
     // sprites of every object type on the map (types appearing later are loaded on demand)
     this.looks.clear();
-    status('Lade Grafiken …');
+    status(t('Lade Grafiken …'));
     await this.looks.ensure([...world.entities.map(e => e.oid), ...Effects.oids()]);
     this.fx.clear();
 
@@ -305,7 +308,7 @@ class Game implements HudHost {
     if (hq) { this.cam.x = hq.x / SUB; this.cam.y = hq.y / SUB; }
     else { this.cam.x = this.cam.y = terrain.size / 2; }
     const units = world.entities.filter(e => e.kind === Kind.Unit && e.owner === this.player).length;
-    status(`${m.title} — du spielst die ${RACE_NAMES[this.player]} · ${terrain.size}×${terrain.size} · ${units} eigene Einheiten`);
+    status(t('{0} — du spielst die {1} · {2}×{2} · {3} eigene Einheiten', m.title, raceName(this.player), terrain.size, units));
   }
 
   private resize(): void {
@@ -582,7 +585,7 @@ class Game implements HudHost {
       while (this.acc >= TICK_MS) {
         if (this.lockstep) {
           if (!this.lockstep.step()) { this.acc = Math.min(this.acc, TICK_MS); break; } // waiting for others
-          if (this.lockstep.desync) status(`Achtung: Spielstände weichen ab (Tick ${this.lockstep.desync.tick})`);
+          if (this.lockstep.desync) status(desyncText(this.lockstep.desync.tick));
         } else {
           w.step();
         }
@@ -638,7 +641,7 @@ class Game implements HudHost {
       const own = w.economy.towns.filter(x => x.race === this.player && x.alive);
       if (own.length > this.ownTowns) this.currentTown = own[own.length - 1].id;
       this.ownTowns = own.length;
-      this.overlay.draw(w, this.player, this.placing >= 0 || this.founding !== null, this.patrol ? 'Linksklick: Wegpunkt (Strg: weitere) · Rechtsklick: fertig' : '');
+      this.overlay.draw(w, this.player, this.placing >= 0 || this.founding !== null, this.patrol ? patrolHint() : '');
     }
     this.frames++;
     if (t - this.fpsT > 1000) {
@@ -1026,9 +1029,9 @@ class Game implements HudHost {
 
   async loadSave(save: SaveGame): Promise<void> {
     const c = ALL_CAMPAIGNS.find(x => x.id === save.mission.campaign) ?? [FREEPLAY_CAMPAIGN, FREEPLAY_AO].find(x => x.id === save.mission.campaign);
-    if (!c) throw new Error('Unbekannte Kampagne im Spielstand');
+    if (!c) throw new Error(t('Unbekannte Kampagne im Spielstand'));
     await this.loadMission(c, save.mission.index, save.player, save.snapshot, undefined, save.missionData);
-    status(`Spielstand „${save.name}“ geladen`);
+    status(t('Spielstand „{0}“ geladen', save.name));
   }
 
   get multiplayer(): boolean { return this.lockstep !== null; }
@@ -1086,7 +1089,7 @@ class Game implements HudHost {
     }
     this.lockstep = new Lockstep(this.world!, you, players, msg => net.send(msg), races);
     for (const m of early) this.lockstep.receive(m);
-    status(`Mehrspieler: ${players} Spieler, du bist Spieler ${you + 1} (${RACE_NAMES[this.player]})`);
+    status(t('Mehrspieler: {0} Spieler, du bist Spieler {1} ({2})', players, you + 1, raceName(this.player)));
   }
 
   /** start a lockstep game from a finished free-play record: the front end's lobby
@@ -1099,7 +1102,7 @@ class Game implements HudHost {
     await this.loadMission(c, 0, slotRaces[you], undefined, slotRaces, m);
     this.lockstep = new Lockstep(this.world!, you, slotRaces.length, msg => net.send(msg), slotRaces);
     for (const msg of early) this.lockstep.receive(msg);
-    status(`Mehrspieler: ${slotRaces.length} Spieler, du bist Spieler ${you + 1} (${RACE_NAMES[this.player]})`);
+    status(t('Mehrspieler: {0} Spieler, du bist Spieler {1} ({2})', slotRaces.length, you + 1, raceName(this.player)));
   }
 
   /** test hook: select all own units and order them to a cell */
@@ -1113,15 +1116,51 @@ class Game implements HudHost {
 }
 
 
+/** our texts in the static page (index.html, German in the file) in the current language */
+function localizePage(first = false): void {
+  document.documentElement.lang = lang();
+  const el = (id: string) => document.getElementById(id);
+  const attr = (id: string, name: string, text: string) => el(id)?.setAttribute(name, text);
+  const text = (id: string, s: string) => { const e = el(id); if (e) e.textContent = s; };
+  /** the text in front of an input inside a label */
+  const lead = (inputId: string, s: string) => { const n = el(inputId)?.parentElement?.firstChild; if (n && n.nodeType === Node.TEXT_NODE) n.textContent = s; };
+  if (first) text('status', t('Starte …'));
+  attr('campaign', 'aria-label', t('Kampagne'));
+  attr('mission', 'aria-label', t('Mission'));
+  attr('uiscale', 'aria-label', t('Größe der Bedienleiste'));
+  attr('uiscale', 'title', t('Größe der Bedienleiste'));
+  const auto = el('uiscale')?.querySelector('option[value="0"]');
+  if (auto) auto.textContent = t('UI: automatisch');
+  attr('musicbtn', 'title', t('Musik an/aus'));
+  text('savebtn', t('Spielstände'));
+  text('mp', t('Mehrspieler'));
+  attr('savename', 'placeholder', t('Name des Spielstands'));
+  text('dosave', t('Speichern'));
+  lead('importfile', t('Spielstand-Datei importieren: '));
+  lead('pname', t('Name '));
+  attr('pname', 'placeholder', t('Spieler'));
+  text('create', t('Spiel mit dieser Mission eröffnen'));
+  text('refresh', t('Aktualisieren'));
+  text('help', t('Links: auswählen (ziehen = Rahmen) · Rechts: bewegen · Mitteltaste ziehen / Pfeiltasten / WASD: scrollen · Mausrad: zoomen'));
+}
+
+/** the language of the player's game data (DV.tdb string 81, "off"; i18n.ts detectLang) */
+async function useGameLanguage(): Promise<void> {
+  try { setLang(detectLang(parseTdb(await fetchBytes('Data/DV.tdb')).get(81))); } catch { /* keep the browser language */ }
+  localizePage();
+}
+
 async function main(): Promise<void> {
+  localizePage(true);   // browser language until the game data is known
   const info = await (await fetch('/api/info')).json() as { gameData: boolean; version?: string; exes?: string[] };
   // the game's own mouse cursors, from its executable (docs/ui/cursors.md 7); CSS keywords until then
   void loadCursors(info.exes ?? EXE_CANDIDATES);
   if (!info.gameData) {
     $('bar').hidden = false;
-    status('Keine Spieldaten gefunden. Bitte den Alien-Nations-Ordner (mit Data/ und Bin/) im Spiele-Verzeichnis des Servers ablegen.');
+    status(t('Keine Spieldaten gefunden. Bitte den Alien-Nations-Ordner (mit Data/ und Bin/) im Spiele-Verzeichnis des Servers ablegen.'));
     return;
   }
+  await useGameLanguage();
   const params = new URLSearchParams(location.search);
   const win = window as unknown as { anReady: boolean; anGame: Game; anMenu: unknown };
   const data = new GameData();
@@ -1148,7 +1187,7 @@ async function main(): Promise<void> {
   game.onRename = openRenameDialog;
 
   const campSel = $<HTMLSelectElement>('campaign'), missSel = $<HTMLSelectElement>('mission');
-  for (const c of ALL_CAMPAIGNS) campSel.add(new Option(c.label, c.id));
+  for (const c of ALL_CAMPAIGNS) campSel.add(new Option(t(c.label), c.id)); // labels are i18n keys
   const fillMissions = async () => {
     const c = ALL_CAMPAIGNS.find(x => x.id === campSel.value)!;
     missSel.innerHTML = '';
@@ -1165,8 +1204,8 @@ async function main(): Promise<void> {
   const music = new Music();
   fetchBytes('Data/CDAudio.ini').then(b => music.configure(new TextDecoder('latin1').decode(b))).catch(() => {});
   const mb = $('musicbtn');
-  mb.textContent = music.on ? '♪ an' : '♪ aus';
-  mb.onclick = () => { mb.textContent = music.toggle() ? '♪ an' : '♪ aus'; };
+  mb.textContent = music.on ? t('♪ an') : t('♪ aus');
+  mb.onclick = () => { mb.textContent = music.toggle() ? t('♪ an') : t('♪ aus'); };
 
   campSel.value = params.get('c') ?? 'pimmons';
   await fillMissions();
@@ -1181,20 +1220,20 @@ async function main(): Promise<void> {
 
 function setupSaves(game: Game): void {
   const panel = $('saves'), list = $('savelist');
-  const fmt = (t: number) => new Date(t).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  const fmt = (t: number) => new Date(t).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' });
   const refresh = async () => {
     list.innerHTML = '';
     const all = await saves.list();
-    if (!all.length) list.innerHTML = '<div class="dim">Noch keine Spielstände.</div>';
+    if (!all.length) list.innerHTML = `<div class="dim">${t('Noch keine Spielstände.')}</div>`;
     for (const info of all) {
       const row = document.createElement('div'); row.className = 'row';
       const label = document.createElement('span'); label.className = 'grow';
       label.textContent = `${info.name} · ${fmt(info.savedAt)}`;
-      const load = document.createElement('button'); load.textContent = 'Laden';
+      const load = document.createElement('button'); load.textContent = t('Laden');
       load.onclick = async () => { const s = await saves.get(info.id); if (s) { panel.hidden = true; await game.loadSave(s); } };
-      const exp = document.createElement('button'); exp.textContent = 'Exportieren'; exp.title = 'Als Datei herunterladen';
+      const exp = document.createElement('button'); exp.textContent = t('Exportieren'); exp.title = t('Als Datei herunterladen');
       exp.onclick = async () => { const s = await saves.get(info.id); if (s) await saves.exportFile(s); };
-      const del = document.createElement('button'); del.textContent = '✕'; del.title = 'Löschen';
+      const del = document.createElement('button'); del.textContent = '✕'; del.title = t('Löschen');
       del.onclick = async () => { await saves.remove(info.id); await refresh(); };
       row.append(label, load, exp, del);
       list.append(row);
@@ -1205,24 +1244,24 @@ function setupSaves(game: Game): void {
     if (!panel.hidden) await refresh();
   };
   $('dosave').onclick = async () => {
-    if (game.multiplayer) { status('Speichern im Mehrspielermodus kommt später.'); return; }
-    const name = ($<HTMLInputElement>('savename').value.trim()) || `Spielstand ${new Date().toLocaleString('de-DE')}`;
+    if (game.multiplayer) { status(t('Speichern im Mehrspielermodus kommt später.')); return; }
+    const name = ($<HTMLInputElement>('savename').value.trim()) || t('Spielstand {0}', new Date().toLocaleString(locale()));
     try {
       const s = game.makeSave(name);
       if (!s) return;
       await requestPersistence();
       await saves.put(s);
-      status(`Gespeichert: ${name}`);
+      status(t('Gespeichert: {0}', name));
       await refresh();
     } catch (err) {
       console.error('Speichern fehlgeschlagen', err);
-      status(`Speichern fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`);
+      status(t('Speichern fehlgeschlagen: {0}', err instanceof Error ? err.message : String(err)));
     }
   };
   $<HTMLInputElement>('importfile').onchange = async ev => {
     const f = (ev.target as HTMLInputElement).files?.[0];
     if (!f) return;
-    try { await saves.importFile(f); await refresh(); status('Spielstand importiert'); }
+    try { await saves.importFile(f); await refresh(); status(t('Spielstand importiert')); }
     catch (err) { status(String(err instanceof Error ? err.message : err)); }
     (ev.target as HTMLInputElement).value = '';
   };
@@ -1237,24 +1276,24 @@ function setupLobby(game: Game, campSel: HTMLSelectElement, missSel: HTMLSelectE
     if (inRoom) {
       roomBox.innerHTML = '';
       const h = document.createElement('div');
-      h.textContent = `Raum „${inRoom.name}“ – ${inRoom.players.length}/${inRoom.maxPlayers} Spieler`;
+      h.textContent = t('Raum „{0}“ – {1}/{2} Spieler', inRoom.name, inRoom.players.length, inRoom.maxPlayers);
       roomBox.append(h);
       for (const p of inRoom.players) {
         const d = document.createElement('div');
-        d.textContent = `${p.slot + 1}. ${p.name}${p.slot === you ? ' (du)' : ''}`;
+        d.textContent = `${p.slot + 1}. ${p.name}${p.slot === you ? t(' (du)') : ''}`;
         roomBox.append(d);
       }
       const start = document.createElement('button');
-      start.textContent = 'Spiel starten';
+      start.textContent = t('Spiel starten');
       start.disabled = you !== 0;
       start.onclick = () => net.send({ t: 'start' });
       const leave = document.createElement('button');
-      leave.textContent = 'Verlassen';
+      leave.textContent = t('Verlassen');
       leave.onclick = () => net.send({ t: 'leave' });
       roomBox.append(start, leave);
     } else roomBox.innerHTML = '';
     if (rooms) {
-      list.innerHTML = rooms.length ? '' : '<div class="dim">Keine offenen Spiele.</div>';
+      list.innerHTML = rooms.length ? '' : `<div class="dim">${t('Keine offenen Spiele.')}</div>`;
       for (const r of rooms) {
         const b = document.createElement('button');
         b.textContent = `${r.name} (${r.players.length}/${r.maxPlayers}) – ${r.host}`;
@@ -1267,14 +1306,14 @@ function setupLobby(game: Game, campSel: HTMLSelectElement, missSel: HTMLSelectE
     if (m.t === 'rooms') render(m.rooms);
     else if (m.t === 'room') { inRoom = m.room; you = m.you; render(null); }
     else if (m.t === 'left') { inRoom = null; render(null); net.send({ t: 'list' }); }
-    else if (m.t === 'error') status(m.message);
+    else if (m.t === 'error') status(t(m.message)); // the lobby's German texts are i18n keys
     else if (m.t === 'start') {
       panel.hidden = true;
       game.startMultiplayer(m.setup, m.players, m.you, net).catch(err => status(String(err)));
     }
   });
   const connect = async () => {
-    const name = nameIn.value.trim() || 'Spieler';
+    const name = nameIn.value.trim() || t('Spieler');
     try { localStorage.setItem('an.name', name); } catch { /* storage unavailable */ }
     await net.connect(name);
   };
@@ -1286,10 +1325,10 @@ function setupLobby(game: Game, campSel: HTMLSelectElement, missSel: HTMLSelectE
   $('create').onclick = async () => {
     await connect();
     net.send({
-      t: 'create', name: `${nameIn.value.trim() || 'Spieler'}s Spiel`, maxPlayers: 4,
+      t: 'create', name: t('{0}s Spiel', nameIn.value.trim() || t('Spieler')), maxPlayers: 4,
       setup: { mode: 'mission', campaign: campSel.value, mission: Number(missSel.value) },
     });
   };
 }
 
-main().catch(err => { console.error(err); status(`Fehler: ${err instanceof Error ? err.message : err}`); });
+main().catch(err => { console.error(err); status(t('Fehler: {0}', err instanceof Error ? err.message : String(err))); });

@@ -16,9 +16,16 @@ Back to the [README](../README.md).
 | `--setup` or `--reset` | | choose the game folder again |
 | `--no-browser` | | do not open the browser automatically |
 | `--open` | | open the browser (a plain `node dist/server.mjs` run does not by default) |
-| `--lang de` / `--lang en` (or `--lang=de`) | `AN_LANG` | language of the console and dialogs (default: the system language) |
+| `--lang de` / `--lang en` / `--lang fr` (or `--lang=de`) | `AN_LANG` | language of the console and dialogs: `de`, `en` or `fr` (default: the system language; German for a German locale, French for a French one, else English). The in-game texts follow your game files instead, see [Language of the game](#language-of-the-game) |
 | `--version` (or `-v`) | | print the version |
 | `--help` (or `-h`) | | list all options |
+
+## Language of the game
+
+The game's own texts come from your game files, so they are in the language of your copy. The
+few texts OpenAlienNations adds (for example the "Enhanced" settings, the mission goals under the
+briefing, save import/export) follow the same language: German, English or French, recognised
+from your game data (another language gets English). `--lang` does not change them.
 
 ## When the browser opens
 

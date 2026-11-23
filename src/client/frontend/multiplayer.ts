@@ -17,19 +17,9 @@ import { FREEPLAY_AO, type Campaign } from '../data.ts';
 import { C, Label, ListBox, R, SpriteButton, TextEdit, type ListLine, type Widget } from './widgets.ts';
 import { mpDefaults, mpMission, randomSeed, slotRaces, SIZE_BITS, FREEPLAY_CAMPAIGN, type FreePlayParams } from './freeplay.ts';
 import { errText, type FrontEndApp, type GameHost } from './app.ts';
+import { t } from '../i18n.ts';
 
 type View = 'name' | 'sessions' | 'join-password' | 'new' | 'new-password' | 'race' | 'chat' | null;
-
-/** texts without a DV.tdb string (our additions) */
-const T = {
-  password: 'Passwort',
-  passwordOptional: 'Passwort (optional)',
-  passwordHint: 'Leer lassen für ein offenes Spiel',
-  passwordWrong: 'Falsches Passwort!',
-  locked: 'Passwort',
-  computer: 'Computer',
-  empty: 'Leer',
-};
 
 export class Multiplayer {
   private app: FrontEndApp;
@@ -129,7 +119,7 @@ export class Multiplayer {
     const app = this.app;
     const list = new ListBox(R(250, 320, 550, 400), { color: C.black, onPick: i => this.join(i) }).layout(app.a);
     // protected sessions are marked (our addition)
-    list.setLines(this.rooms.map((r, i) => ({ text: `${r.name} (${r.players.length}/${r.maxPlayers})${r.locked ? ` - ${T.locked}` : ''}`, value: i })));
+    list.setLines(this.rooms.map((r, i) => ({ text: `${r.name} (${r.players.length}/${r.maxPlayers})${r.locked ? ` - ${t('Passwort')}` : ''}`, value: i })));
     const back = () => this.nameScreen();
     app.show([
       app.title(this.s(100)),
@@ -156,7 +146,7 @@ export class Multiplayer {
     edit.mask = true;
     const back = () => this.sessions();
     app.show([
-      app.title(T.password),
+      app.title(t('Passwort')),
       app.label(R(220, 305, 580, 335), r.name, 'C'),
       edit,
       app.back(R(260, 420, 370, 470), back),
@@ -196,8 +186,8 @@ export class Multiplayer {
     edit.mask = true;
     const back = () => { this.password = edit.value; this.newSession(); };
     app.show([
-      app.title(T.passwordOptional),
-      app.label(R(220, 305, 580, 335), T.passwordHint, 'C'),
+      app.title(t('Passwort (optional)')),
+      app.label(R(220, 305, 580, 335), t('Leer lassen für ein offenes Spiel'), 'C'),
       edit,
       app.back(R(260, 420, 370, 470), back),
       app.button(R(410, 420, 550, 470), this.s(92), go),
@@ -240,8 +230,8 @@ export class Multiplayer {
     log.setLines(lines);
     log.scrollTo(log.maxTop);
     const send = () => {
-      const t = edit.value.trim();
-      if (t) this.net?.send({ t: 'chat', text: t });
+      const line = edit.value.trim();
+      if (line) this.net?.send({ t: 'chat', text: line });
       this.draft = edit.value = '';
       app.fe.redraw();
     };
@@ -266,7 +256,7 @@ export class Multiplayer {
     for (let race = 0; race < RACES; race++) {
       const y = 360 + race * 20, p = room.players.find(q => q.race === race);
       rows.push(app.label(R(250, y, 400, y + 20), this.s(116 + race), 'L', 'dv14pt'));
-      const text = p ? p.name : room.computer[race] ? T.computer : T.empty;
+      const text = p ? p.name : room.computer[race] ? t('Computer') : t('Leer');
       if (!p && this.isHost) {
         rows.push(app.value(R(400, y, 550, y + 20), text, () => {
           const computer = [...room.computer];
@@ -338,10 +328,10 @@ export class Multiplayer {
         break;
       case 'error':
         if (!this.view) break;
-        if (m.code === 'password') this.app.fe.message(T.passwordWrong);
+        if (m.code === 'password') this.app.fe.message(t('Falsches Passwort!'));
         else if (m.code === 'room' || m.code === 'full') this.app.fe.message(this.s(103), () => this.sessions());
         else if (m.code === 'race') { if (this.view === 'race') this.raceScreen(); this.app.fe.message(this.s(114)); }
-        else this.app.fe.message(m.message || this.s(103));
+        else this.app.fe.message(m.message ? t(m.message) : this.s(103)); // the lobby's German texts (lobby.ts) are keys
         break;
       case 'start':
         this.startGame(m.setup, m.players, m.you, m.seats ?? []);
@@ -390,7 +380,7 @@ export class Multiplayer {
     };
     const go = (g: GameHost) => run(g)
       .then(() => app.enterMultiplayerGame(random ? c : undefined))
-      .catch(err => { stopEarly(); console.error(err); app.fe.message(`Fehler: ${errText(err)}`, () => app.mainMenu()); });
+      .catch(err => { stopEarly(); console.error(err); app.fe.message(t('Fehler: {0}', errText(err)), () => app.mainMenu()); });
     const now = app.hostNow();
     if (now) { now.endGame(); now.hidden = true; void go(now); } else void app.game().then(g => go(g));
   }

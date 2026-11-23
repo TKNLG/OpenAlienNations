@@ -10,6 +10,7 @@ import { parseIdb, type Invention } from '../formats/idb.ts';
 import { parseWdb, type Weapon } from '../formats/wdb.ts';
 import { loadRulesAsync, type Rules } from '../formats/addon.ts';
 import { parseDvmFile, dvmLayout, type DvmFile } from '../formats/mission.ts';
+import { t } from './i18n.ts';
 
 export async function fetchBytes(path: string, start?: number, end?: number): Promise<Uint8Array> {
   const headers: Record<string, string> = {};
@@ -115,19 +116,19 @@ export class GameData {
   weapons: Weapon[] = [];
 
   async load(onProgress: (msg: string) => void): Promise<void> {
-    onProgress('Lade Gelände …');
+    onProgress(t('Lade Gelände …'));
     const names = ['wiese', 'gelbgras', 'schnee', 'rock', 'waldboden', 'gruenwald', 'weg',
                    'wasser1', 'wasser2', 'wasser3', 'wasser4',
                    'transition1', 'transition2', 'transition3', 'transition4'];
     await Promise.all(names.map(async n => {
       this.terrainSets.set(n, parseOs(await fetchBytes(`Data/${n}.os`)));
     }));
-    onProgress('Lade Objekte …');
+    onProgress(t('Lade Objekte …'));
     this.objects = parseOd(await fetchBytes('Data/dv.OD'));
     this.rules = parseOdb(await fetchBytes('Data/dv.odb'));
     this.weapons = parseWdb(await fetchBytes('Data/dv.wdb'));
     this.inventions = await Promise.all(['AMAZONS', 'PIMONS', 'SAJIKI'].map(async d => parseIdb(await fetchBytes(`Data/${d}/DV.idb`))));
-    onProgress('Lade Grafik-Index …');
+    onProgress(t('Lade Grafik-Index …'));
     this.sprites = await SpriteArchive.open('Data/dv.gd');
   }
 

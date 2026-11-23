@@ -3,6 +3,7 @@
 
 import type { WorldSnapshot } from '../engine/world.ts';
 import type { Mission } from '../formats/mission.ts';
+import { t } from './i18n.ts';
 
 export interface SaveGame {
   id: string;
@@ -36,18 +37,18 @@ export function newSaveId(): string {
 /** an error with the underlying cause's name and message (DOMException names such as
  *  QuotaExceededError or DataCloneError say more than the message alone) */
 function storageError(what: string, cause: unknown): Error {
-  const detail = cause instanceof DOMException ? `${cause.name}: ${cause.message}` : cause instanceof Error ? cause.message : String(cause ?? 'unbekannter Fehler');
-  return new Error(`${what}: ${detail}`, { cause });
+  const detail = cause instanceof DOMException ? `${cause.name}: ${cause.message}` : cause instanceof Error ? cause.message : String(cause ?? t('unbekannter Fehler'));
+  return new Error(t('{0}: {1}', what, detail), { cause });
 }
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') { reject(new Error('IndexedDB nicht verfügbar (privates Fenster oder blockierter Websitespeicher?)')); return; }
+    if (typeof indexedDB === 'undefined') { reject(new Error(t('IndexedDB nicht verfügbar (privates Fenster oder blockierter Websitespeicher?)'))); return; }
     const req = indexedDB.open(DB, 1);
     req.onupgradeneeded = () => { req.result.createObjectStore(STORE, { keyPath: 'id' }); };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(storageError('IndexedDB nicht verfügbar', req.error));
-    req.onblocked = () => reject(new Error('IndexedDB blockiert (Spiel in einem anderen Tab geöffnet?)'));
+    req.onerror = () => reject(storageError(t('IndexedDB nicht verfügbar'), req.error));
+    req.onblocked = () => reject(new Error(t('IndexedDB blockiert (Spiel in einem anderen Tab geöffnet?)')));
   });
 }
 
@@ -58,7 +59,7 @@ function open(): Promise<IDBDatabase> {
 function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return open().then(db => new Promise<T>((resolve, reject) => {
     let result: T;
-    const fail = (err: unknown) => { db.close(); reject(storageError(mode === 'readwrite' ? 'Speichern fehlgeschlagen' : 'Lesen fehlgeschlagen', err)); };
+    const fail = (err: unknown) => { db.close(); reject(storageError(mode === 'readwrite' ? t('Speichern fehlgeschlagen') : t('Lesen fehlgeschlagen'), err)); };
     let tx: IDBTransaction;
     try {
       tx = db.transaction(STORE, mode);
@@ -103,7 +104,7 @@ export const saves = {
   async importFile(file: File): Promise<SaveGame> {
     const text = await new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
     const data = JSON.parse(text) as { magic?: string; save?: SaveGame };
-    if (data.magic !== FILE_MAGIC || !data.save) throw new Error('Keine gültige Spielstand-Datei');
+    if (data.magic !== FILE_MAGIC || !data.save) throw new Error(t('Keine gültige Spielstand-Datei'));
     const save = { ...data.save, id: newSaveId() };
     await this.put(save);
     return save;

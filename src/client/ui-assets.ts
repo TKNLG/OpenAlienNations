@@ -333,8 +333,19 @@ export class BitmapFont {
 export const FONT_FILES = ['8x8', 'dv7pts', 'dv7pts2', 'dv8pt', 'dv8pta', 'dv8ptc', 'dv10pt', 'dv10pta', 'dv14pt', 'dv18pt'] as const;
 export type FontName = typeof FONT_FILES[number];
 
+/** fonts some releases do not ship (the French GOG data has no 8x8.dvf and dv7pts.dvf): the
+ *  font that stands in for them */
+const FONT_STAND_IN: Partial<Record<FontName, FontName>> = { '8x8': 'dv8pt', dv7pts: 'dv7pts2' };
+
 export async function loadFonts(): Promise<Map<FontName, BitmapFont>> {
   const out = new Map<FontName, BitmapFont>();
-  await Promise.all(FONT_FILES.map(async n => { out.set(n, new BitmapFont(parseDvf(await fetchBytes(`Data/${n}.dvf`)))); }));
+  await Promise.all(FONT_FILES.map(async n => {
+    try { out.set(n, new BitmapFont(parseDvf(await fetchBytes(`Data/${n}.dvf`)))); }
+    catch (err) { if (!FONT_STAND_IN[n]) throw err; }
+  }));
+  for (const n of FONT_FILES) {
+    const sub = FONT_STAND_IN[n];
+    if (!out.has(n) && sub && out.has(sub)) out.set(n, out.get(sub)!);
+  }
   return out;
 }
