@@ -23,6 +23,10 @@ differently from the original game? Please
   `Bin`, not a folder inside it.
 - **Wrong game folder remembered:** start once with `--setup` to choose again
   (see [install.md](install.md#changing-the-game-folder)).
+- **Sounds or texts from another install (for example English speech with German texts):** start
+  with `--verbose`; the console shows the folder in use and the full path of every file the game
+  loads. Versions before 0.5.2 let the browser keep game files for a day, so after switching
+  installs it could still play the old ones: reload with Ctrl+F5 or clear the browser cache once.
 - **Saves are gone:** check that you opened the same address and port as before (see
   [Saves](#saves)).
 - **The browser did not open:** open the address shown in the console yourself. It does not

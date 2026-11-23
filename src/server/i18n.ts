@@ -111,8 +111,14 @@ const en = {
   --no-browser       do not open the browser
   --open             open the browser (plain node runs do not by default)
   --lang de|en|fr    language of these texts, default: the system language (env AN_LANG)
+  --verbose          list the folders in use and every game file the browser loads, with its full path (env AN_VERBOSE=1)
   --version          print the version
 `,
+  verboseConfig: (file: string) => `config file: ${file}`,
+  verboseConfigSkipped: (file: string) => `config file: ${file} (not used: folder given on the command line or in AN_GAME)`,
+  verboseFolders: (game: string, music: string) => `game folder: ${game}\nmusic folder: ${music || '-'}`,
+  verboseFile: (url: string, file: string) => `  ${url} -> ${file}`,
+  verboseMissing: (url: string) => `  ${url} -> not found`,
   unknownOption: (a: string) => `! unknown option ${a} (--help lists them)`,
   badPort: '! bad port, using 8080',
   badLang: (v: string) => `! unknown language "${v}", use de, en or fr`,
@@ -176,8 +182,14 @@ const de: Strings = {
   --no-browser       den Browser nicht öffnen
   --open             den Browser öffnen (ein einfacher node-Start tut das sonst nicht)
   --lang de|en|fr    Sprache dieser Texte, Standard: die Systemsprache (env AN_LANG)
+  --verbose          die benutzten Ordner und jede Spieldatei, die der Browser lädt, mit vollem Pfad anzeigen (env AN_VERBOSE=1)
   --version          die Version anzeigen
 `,
+  verboseConfig: (file: string) => `Einstellungsdatei: ${file}`,
+  verboseConfigSkipped: (file: string) => `Einstellungsdatei: ${file} (nicht benutzt: Ordner per Befehlszeile oder AN_GAME angegeben)`,
+  verboseFolders: (game: string, music: string) => `Spielordner: ${game}\nMusikordner: ${music || '-'}`,
+  verboseFile: (url: string, file: string) => `  ${url} -> ${file}`,
+  verboseMissing: (url: string) => `  ${url} -> nicht gefunden`,
   unknownOption: (a: string) => `! Unbekannte Option ${a} (--help zeigt alle)`,
   badPort: '! Ungültiger Port, verwende 8080',
   badLang: (v: string) => `! Unbekannte Sprache „${v}“, möglich sind de, en und fr`,
@@ -237,8 +249,14 @@ const fr: Strings = {
   --no-browser       ne pas ouvrir le navigateur
   --open             ouvrir le navigateur (un simple lancement avec node ne le fait pas)
   --lang de|en|fr    langue de ces textes, par défaut : la langue du système (env AN_LANG)
+  --verbose          afficher les dossiers utilisés et chaque fichier du jeu chargé par le navigateur, avec son chemin complet (env AN_VERBOSE=1)
   --version          afficher la version
 `,
+  verboseConfig: (file: string) => `fichier de configuration : ${file}`,
+  verboseConfigSkipped: (file: string) => `fichier de configuration : ${file} (non utilisé : dossier donné en ligne de commande ou dans AN_GAME)`,
+  verboseFolders: (game: string, music: string) => `dossier du jeu : ${game}\ndossier de musique : ${music || '-'}`,
+  verboseFile: (url: string, file: string) => `  ${url} -> ${file}`,
+  verboseMissing: (url: string) => `  ${url} -> introuvable`,
   unknownOption: (a: string) => `! option inconnue ${a} (--help les liste toutes)`,
   badPort: '! port non valide, utilisation de 8080',
   badLang: (v: string) => `! langue inconnue « ${v} », choix possibles : de, en ou fr`,

@@ -32,6 +32,8 @@ interface Options {
   /** given on the command line or in the environment (not a default) */
   gameGiven: boolean; portGiven: boolean; hostGiven: boolean;
   setup: boolean; browser: 'auto' | 'yes' | 'no';
+  /** log the folders in use and every game file served, with its full path */
+  verbose: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -43,7 +45,7 @@ function parseArgs(argv: string[]): Options {
     port: Number(env.AN_PORT ?? 8080),
     host: env.AN_HOST ?? '0.0.0.0',
     gameGiven: env.AN_GAME !== undefined, portGiven: env.AN_PORT !== undefined, hostGiven: env.AN_HOST !== undefined,
-    setup: false, browser: 'auto',
+    setup: false, browser: 'auto', verbose: env.AN_VERBOSE === '1',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = argv[i + 1];
@@ -54,6 +56,7 @@ function parseArgs(argv: string[]): Options {
     else if (a === '--host') { opt.host = v; opt.hostGiven = true; i++; }
     else if (a === '--setup' || a === '--reset') opt.setup = true;
     else if (a === '--no-browser') opt.browser = 'no';
+    else if (a === '--verbose') opt.verbose = true;
     else if (a === '--open') opt.browser = 'yes';
     else if (a === '--lang') i++; // read before (i18n.ts langArg)
     else if (a.startsWith('--lang=')) { /* likewise */ }
@@ -113,6 +116,13 @@ function indexMusic(root: string): Map<number, string> {
   return map;
 }
 
+/** short FNV-1a tag of a path (part of a file's ETag) */
+function pathTag(p: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < p.length; i++) { h ^= p.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16);
+}
+
 /** a static file: on disk, or bytes embedded in the single executable */
 type Asset = { file: string } | { data: Uint8Array };
 
@@ -121,7 +131,9 @@ function sendFile(req: IncomingMessage, res: ServerResponse, asset: Asset, mime:
   if ('file' in asset) {
     const st = statSync(asset.file);
     size = st.size;
-    etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    // the path is part of the tag: a file of another install (switched game folder) never
+    // matches a copy the browser still has
+    etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}-${pathTag(asset.file)}"`;
   } else {
     size = asset.data.length;
     etag = `"${size.toString(16)}-${VERSION}"`; // embedded files only change with the executable
@@ -215,6 +227,10 @@ async function main(): Promise<void> {
   if (hdFile('manifest.json')) console.log(tr().hdPack(hdRoot || tr().builtIn));
   const hasData = () => game.has('data/dv.gd');
 
+  if (opt.verbose) {
+    console.log(launcher && !opt.gameGiven ? tr().verboseConfig(configPath()) : tr().verboseConfigSkipped(configPath()));
+    console.log(tr().verboseFolders(gameRoot, opt.music ? resolve(opt.music) : ''));
+  }
   if (!hasData()) {
     console.warn(tr().noData(gameRoot));
   } else {
@@ -249,9 +265,11 @@ async function main(): Promise<void> {
         // music: the game folder's own Bin/music first, then the --music folder (any extension)
         const track = /^bin\/music\/track(\d+)\.ogg$/.exec(key);
         if (!file && track) file = music.get(Number(track[1]));
+        if (opt.verbose) console.log(file ? tr().verboseFile(path, file) : tr().verboseMissing(path));
         if (!file) { res.writeHead(404); res.end('not found'); return; }
-        sendFile(req, res, { file }, MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-                 'public, max-age=86400');
+        // no-cache: the browser asks every time (a cheap 304 when unchanged), so after switching
+        // to another install it never plays the old one's files from its cache
+        sendFile(req, res, { file }, MIME[extname(file).toLowerCase()] ?? 'application/octet-stream', 'no-cache');
         return;
       }
 

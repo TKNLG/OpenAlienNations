@@ -17,6 +17,7 @@ Back to the [README](../README.md).
 | `--no-browser` | | do not open the browser automatically |
 | `--open` | | open the browser (a plain `node dist/server.mjs` run does not by default) |
 | `--lang de` / `--lang en` / `--lang fr` (or `--lang=de`) | `AN_LANG` | language of the console and dialogs: `de`, `en` or `fr` (default: the system language; German for a German locale, French for a French one, else English). The in-game texts follow your game files instead, see [Language of the game](#language-of-the-game) |
+| `--verbose` | `AN_VERBOSE=1` | troubleshooting: print the settings file, the game and music folders in use, and every game file the browser loads with its full path on disk (or "not found") |
 | `--version` (or `-v`) | | print the version |
 | `--help` (or `-h`) | | list all options |
 
