@@ -55,7 +55,7 @@ the German install:
 
 | file(s) | English | French |
 |---|---|---|
-| `Bin/AN.exe` | **identical** to the German exe (Aug 2000 build): every spec here applies | **a different, later build** (Dec 2001; `.text` 8 KB smaller). Matched against the German exe: about 1,840 functions identical, about 220 changed, about 400 per side unpaired (among them AI tactics such as `HuntsmenRush`, `SmallAttacks`, `TacticSix` and `FloodMap`). Its behaviour is **not analysed**; it may contain fixes or changes |
+| `Bin/AN.exe` | **identical** to the German exe (Aug 2000 build): every spec here applies | **a different, later build** (Dec 2001; `.text` 8 KB smaller). Matched against the German exe: about 1,840 functions identical, about 220 changed, about 400 per side unpaired (among them AI tactics such as `HuntsmenRush`, `SmallAttacks`, `TacticSix` and `FloodMap`). Analysed: a **recompile of the same source**, with **no gameplay, AI, UI or save-format difference** found and no quirk fixed; every spec here applies (details below) |
 | `dv.odb` | object **names** only; every rule field identical | the same |
 | mission files (`*.mdb`) | **title and briefing** only; maps, goals, setup identical | the same |
 | `DV.tdb`, `Mentor.tdb`, race `DV.idb` | translated texts | translated texts |
@@ -72,6 +72,27 @@ frame and stored length): the 14 dressed Amazon portraits and the English lollip
 same stored length as their German counterparts, so the pack's German images (topless portraits,
 cigar) would replace the player's own pictures. The menu pictures with text differ in length and
 are not affected.
+
+### French executable (Dec 2001 build)
+
+Compared function by function with the German/English exe (instruction level, with the
+unpaired functions paired up by hand through vtables and call graphs; the AI tactics all have a
+French twin). Result:
+
+- **Gameplay and simulation: no difference found.** Economy, jobs, combat target choice, AI
+  strategies and officers, territory, pathfinding helpers and goals use the same conditions,
+  constants and `rand()` draws in the same order. `rand()` itself is identical.
+- **Quirks: none fixed.** Every function cited next to a documented quirk or original bug in
+  these specs is identical or behaves identically in the French build.
+- **UI and input: no difference found** (cursor rule, side-panel buttons, map clicks).
+- **Saves:** the save code writes the same byte stream.
+- **What does differ:** the settings file is `AlienNations_fra.ini` instead of
+  `AlienNations_usa.ini` (same keys, in the Windows folder); a different compiler/runtime setup
+  (identical template code merged, different inlining and code layout, an older C-runtime heap
+  set-up). None of this is visible in play.
+
+The rebuild therefore needs no French-exe mode; the French install differs only in its data
+files (table above).
 
 ## Consequences for the rebuild
 
