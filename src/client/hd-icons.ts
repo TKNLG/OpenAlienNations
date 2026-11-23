@@ -13,6 +13,7 @@
 //   opaque box (boxFit), so a few look slightly different from the original picture;
 // - in both, a picture whose original could not be loaded is generated from the world sprite;
 // - "off": the originals.
+// Unit portraits are separate small drawings: every level shows the player's own picture, smoothed.
 
 import { hdEnabled, hdListeners, linkLooseHd, linkRenderedHd, requestPackHd } from './ui-assets.ts';
 import type { GameData } from './data.ts';
@@ -47,13 +48,18 @@ hdListeners.add(() => {
 const packPending: (() => void)[] = [];
 
 /**
- * Give the panel portrait of object type (race, type) (dv.OD group race + 3) an HD image: rendered
- * from the world sprite for buildings and ships, else (and until then) the pack's upscaled portrait
+ * Give the panel portrait of a building or ship (race, type) (dv.OD group race + 3) an HD image:
+ * rendered from the world sprite, else (and until then) the pack's upscaled portrait
  * (tools/hdpack, archives "dv.gd" / "addon.gd"), used only if `hash` (the player's decoded
  * picture, pixelHash) is the one the pack image was made from. `deviceScale`: device pixels per
  * panel pixel.
  */
 export function requestHdPortrait(data: GameData, race: number, type: number, icon: HTMLCanvasElement, deviceScale: () => number, hash?: string): void {
+  const src = iconSource(race, type);
+  const slot = src?.slot ?? worldSlot(type);
+  // unit portraits keep the player's own picture, drawn smoothed: the pack's xBR versions of these
+  // small separate drawings looked worse (maintainer decision 2026-11-23, side-panel.md 10)
+  if (slot === undefined) return;
   const name = data.objects.get((((race + 3) << 16) | type) >>> 0)?.slots.find(s => s);
   const arc = data.sprites;
   const e = name ? arc.entry(name) : undefined;
@@ -64,9 +70,7 @@ export function requestHdPortrait(data: GameData, race: number, type: number, ic
     const go = () => requestPackHd(icon, key, name, 0, e.dataLength, Math.max(1, Math.min(4, deviceScale())), hash);
     if (hdEnabled()) go(); else packPending.push(go);
   }
-  const src = iconSource(race, type);
-  const slot = src?.slot ?? worldSlot(type);
-  if (slot !== undefined) enqueue({ data, oid: ((race << 16) | type) >>> 0, src, slot, icon, scale: deviceScale, building: true });
+  enqueue({ data, oid: ((race << 16) | type) >>> 0, src, slot, icon, scale: deviceScale, building: true });
 }
 
 /**
