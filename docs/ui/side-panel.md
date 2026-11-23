@@ -644,6 +644,21 @@ one: `+` one step closer (value − 1, not below 16), `-` one step farther (valu
 They work in network games too and are never part of a cheat word (`fog-of-war.md` 8). The
 slider follows.
 
+### 4.2a Edge scrolling (C, mouse tracker `0x4867e0`, read November 2026)
+
+The game runs full screen, so the cursor cannot leave it. On every mouse move the tracker sets the
+scroll speed per axis: cursor x < 2 → scroll left, x ≥ screen width − 2 → right (the right edge is
+over the side panel), y < 2 → up, y ≥ screen height − 2 → down, at the arrow keys' speed
+(`0x4AFC08` / `0x4AFC0C`); otherwise that axis stops. Exception: with the cursor on the **bottom
+edge over the side panel** (x right of the panel's left border and x < screen width − 10) both
+axes stop, unless the "menu scrolling" option is on (`0x4AF87C`, front-end.md 3.9). Nothing
+scrolls while a menu is open (`0x4B393E`).
+
+*Our build:* the same rule, measured against the browser window, but **only while the page is
+full screen** (the settings switch or the browser's own full-screen mode, F11). In a window the
+screen edge is not the window edge (several monitors, the window in the middle), so edge
+scrolling there would run whenever the mouse passes over the border. Leaving the window stops it.
+
 ### 4.3 Tooltips
 
 `004149f0` (attach), `004143f0` (draw).

@@ -56,6 +56,10 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const status = (msg: string) => { $('status').textContent = msg; };
 /** texts used in Game.frame(), whose parameter is named t */
 const patrolHint = () => t('Linksklick: Wegpunkt (Strg: weitere) · Rechtsklick: fertig');
+/** the page fills the screen: the Fullscreen API (the settings switch) or the browser's own full
+ *  screen (F11), which only shows as the display mode or as a window as large as the screen */
+const fullScreen = () => !!document.fullscreenElement || matchMedia('(display-mode: fullscreen)').matches
+  || (window.innerWidth >= screen.width && window.innerHeight >= screen.height);
 const desyncText = (tick: number) => t('Achtung: Spielstände weichen ab (Tick {0})', tick);
 
 
@@ -98,6 +102,8 @@ class Game implements HudHost {
   private frames = 0;
   private fpsT = performance.now();
   private mouse = { x: -1, y: -1, inside: false };
+  /** the pointer anywhere in the window (CSS px), for edge scrolling; `in` false once it left the window */
+  private edge = { x: -1, y: -1, in: false };
   private box: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private canvas: HTMLCanvasElement;
   readonly data: GameData;
@@ -372,6 +378,11 @@ class Game implements HudHost {
     });
     // the mouse enters the world view: the cursor rule runs (cursors.md 4.1); leaving it shows the
     // panel's arrow (the side panel and minimap have their own CSS cursors, 5.2)
+    // edge scrolling (side-panel.md 4.2a): the pointer over the whole window, side panel included;
+    // leaving the window (another monitor, another program) stops it
+    window.addEventListener('pointermove', e => { this.edge = { x: e.clientX, y: e.clientY, in: true }; });
+    document.documentElement.addEventListener('pointerleave', () => { this.edge.in = false; });
+    window.addEventListener('blur', () => { this.edge.in = false; });
     this.canvas.addEventListener('pointerenter', () => this.recomputeCursor());
     this.canvas.addEventListener('pointerleave', () => { this.mouse.inside = false; });
     this.canvas.addEventListener('wheel', e => {
@@ -732,15 +743,22 @@ class Game implements HudHost {
 
   private scroll(): void {
     const step = 14 * (window.devicePixelRatio || 1);
-    const k = this.keys, m = this.mouse, edge = 4;
+    const k = this.keys;
     let dx = 0, dy = 0;
     if (k.has('ArrowLeft') || k.has('a')) dx -= step;
     if (k.has('ArrowRight') || k.has('d')) dx += step;
     if (k.has('ArrowUp') || k.has('w')) dy -= step;
     if (k.has('ArrowDown') || k.has('s')) dy += step;
-    if (m.inside && document.fullscreenElement) {
-      if (m.x < edge) dx -= step; if (m.x > this.cam.viewW - edge) dx += step;
-      if (m.y < edge) dy -= step; if (m.y > this.cam.viewH - edge) dy += step;
+    // the original's edge scrolling (side-panel.md 4.2a), only while the page is full screen
+    const e = this.edge;
+    if (e.in && fullScreen()) {
+      const W = window.innerWidth, H = window.innerHeight, panelX = W - $('hud').getBoundingClientRect().width;
+      let ex = 0, ey = 0;
+      if (e.x < 2) ex = -step; else if (e.x >= W - 2) ex = step;
+      if (e.y < 2) ey = -step; else if (e.y >= H - 2) ey = step;
+      // the bottom edge over the side panel (but its last 10 px) scrolls nothing
+      if (e.y >= H - 2 && e.x > panelX && e.x < W - 10) ex = ey = 0;
+      dx += ex; dy += ey;
     }
     if (dx || dy) this.cam.pan(dx, dy);
   }
