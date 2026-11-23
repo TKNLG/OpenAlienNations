@@ -2,6 +2,35 @@
 
 What changed for players in each release. Older releases: see the GitHub release pages.
 
+## 0.5.2
+
+Game speed, cheats, edge scrolling and units that react to a lost target like in the original, plus fixes for the launcher on Windows. Saves from earlier versions keep loading.
+
+### Closer to the original
+
+**Units stop when their target is gone**
+- When the building or unit a unit is heading for is destroyed, the unit now stops where it is (it finishes the step it is taking) instead of walking on to an empty spot. This covers builders, porters and deliveries, workers and trainees, town founders, farmers, police and escorts, units boarding a ship, diplomats, merchants, and units you sent somewhere with a right-click.
+- A destroyed or demolished construction site sends its builders away within a few ticks (at the site's next 10-tick check, as in the original), and no new builder is called to it.
+
+**Game speed**
+- The original's three game speeds are back: **1** = normal, **2** = double, **3** = four times as fast. The original used F5 to F7, but browsers reserve those keys (F5 reloads the page). As in the original, nothing on screen shows the speed.
+- In a multiplayer game only the host can change the speed, for everyone. A loaded game starts at normal speed.
+
+**Zoom keys**
+- **+** and **−** zoom in or out one step, and **Page Up** / **Page Down** jump to the closest or farthest zoom, as in the original. The mouse wheel still zooms too.
+
+**Cheats**
+- All twelve cheat words of the original work. Type them during the game: CASHCOW (+5000 money), RAIN, LUMBERJACK, STONEMASON, IRONMAN, IAMHUNGRY, WARTIME, CHOCO, JUICE, LOLLY (50 of the matching good each into your current town), MAGICEYE (fog of war off and back on) and WINNER (win the mission; not in free play).
+- As in the original, cheats only work in single player.
+
+**Edge scrolling**
+- Moving the mouse to the edge of the screen scrolls the map, as in the original. This only happens while the game is full screen (the setting or the browser's F11), so the map does not run away while you move the mouse to another monitor in a window. As in the original, the bottom edge does not scroll over the side panel.
+
+### Launcher and server
+- **No administrator rights needed.** A game folder with entries your Windows user is not allowed to read (for example folders created by an installer running as administrator, broken shortcuts or junctions, or files locked by antivirus) used to stop the server, so it only worked when run as administrator. Such entries are now skipped and listed in the console with the reason, and a file that cannot be opened fails only that one request. The program writes only its own settings file in your user profile (`%APPDATA%\OpenAlienNations` on Windows).
+- **Switching between installs:** after pointing the program at another install (for example from an English to a German one), the browser could keep playing cached files of the old one, such as English advisor speech with German texts. Game files are now always checked against the current install.
+- **New start option `--verbose`** (or `AN_VERBOSE=1`): prints the settings file, the game and music folders and every game file the browser loads, with its full path. Useful when the wrong files seem to be used.
+
 ## 0.5.1
 
 A small follow-up to 0.5.0.
