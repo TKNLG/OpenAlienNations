@@ -472,7 +472,11 @@ export class UnitDisplay {
       } else this.step.begin(0, 0, o.wall, 0);
     }
     // action animation (3)
-    const anim = u.action === ACT_STRIKE ? { a: ACT_STRIKE, cycles: 1 }
+    // a strike plays row 1 (ST) where the sprite set has one, otherwise the work row (WO), as the
+    // original's per-race, per-type sprite table chooses (combat.md 4.1 step 6): the add-on fishing
+    // boats have no ST row and strike with their fishing animation
+    const strikeRow = row(ACT_STRIKE, this.dir) || row(ACT_STRIKE, 0);
+    const anim = u.action === ACT_STRIKE ? { a: strikeRow ? ACT_STRIKE : ACT_WORK, cycles: 1 }
       : u.action === ACT_WORK ? { a: ACT_WORK, cycles: o.workCycles ?? Infinity }
       : u.action === ACT_IDLE && u.idleTick >= 0 && u.idleTick === u.actionTick ? { a: ACT_IDLE, cycles: u.idleLoops + 1 }
       : null;

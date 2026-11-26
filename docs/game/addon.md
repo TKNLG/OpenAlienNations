@@ -567,8 +567,19 @@ that delivered in a row stand on neighbouring shore cells, one per cell, in spir
 | priest | damaged unit | not if the target is a ship |
 | everything else | | base rules |
 
-Fishing boats are armed (weapon 27). They may attack foreign units and buildings, and they join
-fights through the help rule (`combat.md` 7.1) *(by reading)*.
+Fishing boats are armed (weapon 27, "Angel": melee, 20 damage, 100 %), the same for **all three
+races** (`Addon.odb` +0x144 = 27 for Amazon, Pimmon and Sajiki type 64). They may attack foreign
+units and buildings: `DVUnit::CanAttack` (`0046b9a0`) has no race or type test for 64 against
+another race (only priests 0x16, saboteurs 0x1A and criminals 0x0C are special there), and the
+right-click handler (`004567a0`) gives any armed unit an attack job (0x08) on a foreign target
+after that test (C). They join fights through the help rule (`combat.md` 7.1) *(by reading)*.
+
+**Strike animation.** No fishing boat has a strike row: all three descriptors (`Addon.od`) have
+only the walk row (MG) and the work row (WO, the fishing animation). A strike therefore plays the
+**WO row** (`combat.md` 4.1 step 6: ST where the sprite set has it, otherwise WO), so a fishing
+boat attacks with its fishing animation. The Sajiki "Fischer" is a creature whose fishing
+animation reads as an attack; the Amazon and Pimmon boats look as if they were fishing, but they
+deal the same damage.
 
 ### 4.3 Ship HP is never restored (C, checked at instruction level, October 2026)
 

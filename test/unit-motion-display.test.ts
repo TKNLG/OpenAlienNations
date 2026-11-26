@@ -171,6 +171,19 @@ test('UnitDisplay: a strike plays once, then the standing pose at frame 0; sound
   assert.equal(d.busy, false);
 });
 
+test('UnitDisplay: a sprite set without a strike row strikes with its work row, once (combat.md 4.1 step 6; add-on fishing boats)', {}, () => {
+  const boat = (a: number, dir: number): MotionRow | null => (a === 0 ? { frames: 12, fps: 7 } : a === 2 ? { frames: 8, fps: 7 } : (void dir, null));
+  const d = new UnitDisplay();
+  const u = unit({ action: 0, actionTick: 0 });
+  d.update(u, boat, opts(0, 0));
+  const s = { ...u, action: 1, actionTick: 10 };
+  const seen = new Set<number>();
+  for (let t = 10; t < 40; t += 0.25) { d.update(s, boat, opts(t, t * 100, { soundAction: 2 })); if (d.busy) seen.add(d.action); }
+  assert.deepEqual([...seen], [2], 'the work row plays');
+  assert.equal(d.action, 0, 'played once, then back to the base row');
+  assert.equal(d.busy, false);
+});
+
 test('UnitDisplay: an action cut before the sound frame stays silent; a new strike restarts (3)', {}, () => {
   const d = new UnitDisplay();
   const u = unit({ action: 1, actionTick: 0 });
